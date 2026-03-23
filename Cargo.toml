@@ -13,6 +13,22 @@ rust-version = "1.91.0"
 # rather than here, so test code can still use .unwrap() for brevity.
 # See crates/*/src/lib.rs and crates/*/src/main.rs for the denials.
 
+# Make Impossible States Impossible — force explicit variant names, no glob imports
+enum_glob_use = "deny"
+wildcard_imports = "deny"
+
+# Parse Don't Validate — cleaner early returns at boundaries
+manual_let_else = "warn"
+
+# Algebraic Data Types — catch enums with huge size disparity between variants
+large_enum_variant = "warn"
+
+# Clarity — make clones and copies visible and intentional
+implicit_clone = "warn"
+cloned_instead_of_copied = "warn"
+redundant_closure_for_method_calls = "warn"
+needless_pass_by_value = "warn"
+
 [profile.dev]
 # Disabling debug info speeds up builds.
 debug = 0

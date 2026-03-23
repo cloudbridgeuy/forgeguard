@@ -5,3 +5,13 @@
 # Default is 7, but we enforce 5 for better code quality.
 # Functions with more than 5 arguments should use config/options structs.
 too-many-arguments-threshold = 5
+
+# Maximum number of bool parameters in a function signature.
+# More than 1 bool param means you should use an enum or options struct.
+# Maps to: Make Impossible States Impossible.
+max-fn-params-bools = 1
+
+# Maximum cognitive complexity of a function.
+# Default is 25, we lower to 15 to encourage smaller, testable functions.
+# Maps to: Functional Core (pure functions stay simple).
+cognitive-complexity-threshold = 15
