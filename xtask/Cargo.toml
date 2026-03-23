@@ -1,0 +1,21 @@
+[package]
+name = "xtask"
+version = "0.1.0"
+publish = false
+license = "MIT"
+edition = "2021"
+
+[[bin]]
+name = "xtask"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true }
+color-eyre = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+anstream = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+glob = "0.3"

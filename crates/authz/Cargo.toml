@@ -1,0 +1,27 @@
+[package]
+name = "forgegate_authz"
+version = "0.0.0"
+homepage = "https://github.com/cloudbridgeuy/forgegate"
+description = "Authorization I/O — Verified Permissions client, Cedar policy sync, caching"
+autobins = false
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "forgegate_authz"
+path = "src/lib.rs"
+
+[dependencies]
+forgegate_core = { workspace = true }
+forgegate_authz_core = { workspace = true }
+forgegate_audit_core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,23 @@
+[package]
+name = "forgegate_authz_core"
+version = "0.0.0"
+homepage = "https://github.com/cloudbridgeuy/forgegate"
+description = "Authorization domain types, Cedar policy types, and permission definitions (pure)"
+autobins = false
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "forgegate_authz_core"
+path = "src/lib.rs"
+
+[dependencies]
+forgegate_core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

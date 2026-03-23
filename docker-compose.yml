@@ -1,0 +1,15 @@
+services:
+  localstack:
+    image: localstack/localstack:latest
+    ports:
+      - "4566:4566"       # LocalStack gateway
+      - "4510-4559:4510-4559"  # External service ports
+    environment:
+      - SERVICES=dynamodb,s3,ses,sns,cognito-idp,verifiedpermissions,lambda,events
+      - DEBUG=0
+      - PERSISTENCE=1
+    volumes:
+      - localstack_data:/var/lib/localstack
+
+volumes:
+  localstack_data:

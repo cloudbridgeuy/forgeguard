@@ -1,0 +1,192 @@
+name: Release
+
+permissions:
+  contents: read
+  packages: write
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}/forgegate
+
+jobs:
+  build-binaries:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          # macOS x86_64 (Intel)
+          - target: x86_64-apple-darwin
+            os: macos-15
+            binary_suffix: Darwin-x86_64
+
+          # macOS aarch64 (Apple Silicon)
+          - target: aarch64-apple-darwin
+            os: macos-15
+            binary_suffix: Darwin-arm64
+
+          # Linux x86_64
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            binary_suffix: Linux-x86_64
+
+          # Linux aarch64
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            binary_suffix: Linux-arm64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools (Linux ARM)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Cache cargo registry and index
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-cargo-
+
+      - name: Cache target directory
+        uses: actions/cache@v4
+        with:
+          path: target/
+          key: ${{ runner.os }}-${{ matrix.target }}-target-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-target-
+
+      - name: Build binaries
+        run: |
+          for bin in forgegate forgegate-control-plane forgegate-agent forgegate-proxy forgegate-back-office; do
+            cargo build --release --target ${{ matrix.target }} --bin "$bin"
+            cp "target/${{ matrix.target }}/release/$bin" "${bin}-${{ matrix.binary_suffix }}" 2>/dev/null || true
+          done
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.binary_suffix }}
+          path: |
+            forgegate-*-${{ matrix.binary_suffix }}
+          if-no-files-found: error
+
+  build-docker:
+    name: Build Docker Images
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        image:
+          - name: control-plane
+            binary: forgegate-control-plane
+          - name: agent
+            binary: forgegate-agent
+          - name: proxy
+            binary: forgegate-proxy
+          - name: back-office
+            binary: forgegate-back-office
+          - name: cli
+            binary: forgegate
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/${{ matrix.image.name }}.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}-${{ matrix.image.name }}:${{ steps.version.outputs.version }}
+            ${{ env.IMAGE_PREFIX }}-${{ matrix.image.name }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  release:
+    name: Create Release
+    needs: [build-binaries]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v5
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release-assets
+          find artifacts -name "forgegate-*" -type f -exec cp {} release-assets/ \;
+          ls -la release-assets/
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Install git-cliff
+        uses: kenji-miyake/setup-git-cliff@v2
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          git cliff --latest --strip header > RELEASE_CHANGELOG.md
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: Release ${{ steps.version.outputs.version }}
+          body_path: RELEASE_CHANGELOG.md
+          files: release-assets/*
+          draft: false
+          prerelease: false
+          generate_release_notes: false

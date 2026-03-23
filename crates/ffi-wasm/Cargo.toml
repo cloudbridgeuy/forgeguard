@@ -1,0 +1,25 @@
+[package]
+name = "forgegate_ffi_wasm"
+version = "0.0.0"
+homepage = "https://github.com/cloudbridgeuy/forgegate"
+description = "ForgeGate TypeScript SDK — WASM bindings"
+autobins = false
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "forgegate_ffi_wasm"
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+forgegate_core = { workspace = true }
+forgegate_sdk = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

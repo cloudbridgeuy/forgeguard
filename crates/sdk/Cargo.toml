@@ -1,0 +1,25 @@
+[package]
+name = "forgegate_sdk"
+version = "0.0.0"
+homepage = "https://github.com/cloudbridgeuy/forgegate"
+description = "ForgeGate SDK core — Guard, WebhookHandler, feature flags (pure, WASM-compatible)"
+autobins = false
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "forgegate_sdk"
+path = "src/lib.rs"
+
+[dependencies]
+forgegate_core = { workspace = true }
+forgegate_authn_core = { workspace = true }
+forgegate_authz_core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,17 @@
+targets = ["x86_64-apple-darwin", "aarch64-apple-darwin"]
+
+[unify]
+detect_unused = true
+remove_unused = false  # Report only; manual removal
+prune_dead_features = true
+msrv = true
+msrv_source = "max"
+pin_transitives = false
+
+[change-detection]
+infrastructure = [
+    ".github/**",
+    "Cargo.lock",
+    "rust-toolchain.toml",
+    "xtask/**",
+]
