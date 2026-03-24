@@ -6,7 +6,7 @@ COPY Cargo.toml Cargo.toml
 COPY Cargo.lock Cargo.lock
 COPY crates/ crates/
 COPY xtask/ xtask/
-RUN cargo chef prepare --recipe-path recipe.json --bin forgegate-proxy
+RUN cargo chef prepare --recipe-path recipe.json --bin forgeguard-proxy
 
 FROM chef AS builder
 COPY --from=planner /app/recipe.json recipe.json
@@ -17,9 +17,9 @@ COPY Cargo.lock Cargo.lock
 COPY crates/ crates/
 COPY xtask/ xtask/
 
-RUN cargo build --release --bin forgegate-proxy
+RUN cargo build --release --bin forgeguard-proxy
 
 FROM debian:bookworm-slim AS runtime
 WORKDIR /app
-COPY --from=builder /app/target/release/forgegate-proxy /usr/local/bin
-ENTRYPOINT ["/usr/local/bin/forgegate-proxy"]
+COPY --from=builder /app/target/release/forgeguard-proxy /usr/local/bin
+ENTRYPOINT ["/usr/local/bin/forgeguard-proxy"]

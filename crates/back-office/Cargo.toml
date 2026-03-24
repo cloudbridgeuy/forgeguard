@@ -1,8 +1,8 @@
 [package]
-name = "forgegate_back_office"
+name = "forgeguard_back_office"
 version = "0.0.0"
-homepage = "https://github.com/cloudbridgeuy/forgegate"
-description = "ForgeGate internal operations API — customer management, analytics, support"
+homepage = "https://github.com/cloudbridgeuy/forgeguard"
+description = "ForgeGuard internal operations API — customer management, analytics, support"
 autobins = false
 
 authors.workspace = true
@@ -10,17 +10,17 @@ edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "forgegate-back-office"
+name = "forgeguard-back-office"
 path = "src/main.rs"
 
 [dependencies]
-forgegate_core = { workspace = true }
-forgegate_authn_core = { workspace = true }
-forgegate_authz_core = { workspace = true }
-forgegate_audit_core = { workspace = true }
-forgegate_authn = { workspace = true }
-forgegate_authz = { workspace = true }
-forgegate_audit = { workspace = true }
+forgeguard_core = { workspace = true }
+forgeguard_authn_core = { workspace = true }
+forgeguard_authz_core = { workspace = true }
+forgeguard_audit_core = { workspace = true }
+forgeguard_authn = { workspace = true }
+forgeguard_authz = { workspace = true }
+forgeguard_audit = { workspace = true }
 axum = { workspace = true }
 tower-http = { workspace = true }
 color-eyre = { workspace = true }

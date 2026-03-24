@@ -1,8 +1,8 @@
 [package]
-name = "forgegate_core"
+name = "forgeguard_core"
 version = "0.0.0"
-homepage = "https://github.com/cloudbridgeuy/forgegate"
-description = "Shared primitives, traits, and error types for ForgeGate"
+homepage = "https://github.com/cloudbridgeuy/forgeguard"
+description = "Shared primitives, traits, and error types for ForgeGuard"
 autobins = false
 
 authors.workspace = true
@@ -10,7 +10,7 @@ edition.workspace = true
 license.workspace = true
 
 [lib]
-name = "forgegate_core"
+name = "forgeguard_core"
 path = "src/lib.rs"
 
 [dependencies]

@@ -1,6 +1,6 @@
-# ForgeGate — GitHub Issues: Target B Milestone
+# ForgeGuard — GitHub Issues: Target B Milestone
 
-> **Goal:** A developer runs the ForgeGate proxy in front of their app. The proxy resolves identity, checks authorization, injects identity headers, and proxies the request upstream. The policy domain (identity resolution + authorization decisions) is protocol-agnostic — the HTTP proxy is one adapter consuming it. No Smithy, no dashboard, no SDK generation — just auth enforcement on a real app.
+> **Goal:** A developer runs the ForgeGuard proxy in front of their app. The proxy resolves identity, checks authorization, injects identity headers, and proxies the request upstream. The policy domain (identity resolution + authorization decisions) is protocol-agnostic — the HTTP proxy is one adapter consuming it. No Smithy, no dashboard, no SDK generation — just auth enforcement on a real app.
 
 ---
 
@@ -14,14 +14,14 @@ The design enforces a clean separation between the **policy domain** (protocol-a
 POLICY DOMAIN (pure, no HTTP, no I/O)          POLICY I/O
 ────────────────────────────────────            ──────────
 
-forgegate_core                                  forgegate_authn
+forgeguard_core                                  forgeguard_authn
   UserId, TenantId, config types                  CognitoJwtResolver
                                                   (Credential → Identity)
-forgegate_authn_core
-  Credential, Identity,                         forgegate_authz
+forgeguard_authn_core
+  Credential, Identity,                         forgeguard_authz
   IdentityResolver trait, chain                   VpPolicyEngine
                                                   (PolicyQuery → PolicyDecision)
-forgegate_authz_core
+forgeguard_authz_core
   PolicyQuery, PolicyDecision,
   PolicyEngine trait
 
@@ -29,10 +29,10 @@ forgegate_authz_core
 HTTP ADAPTER (one protocol binding — lives entirely in the proxy crate)
 ───────────────────────────────────────────────────────────────────────
 
-forgegate_proxy
+forgeguard_proxy
   HTTP header → Credential extraction
   (method, path) → (action, resource) route matching
-  Identity → X-ForgeGate-* header injection
+  Identity → X-ForgeGuard-* header injection
   PolicyDecision → 401/403/200 response translation
   Reverse proxying, health check, config
 ```
@@ -43,7 +43,7 @@ Tomorrow a gRPC interceptor, a WebSocket middleware, an MCP tool gate, or a queu
 
 ```
                     ┌─────────────────────┐
-                    │  #1 forgegate_core   │
+                    │  #1 forgeguard_core   │
                     │  shared primitives   │
                     └──────┬──────────────┘
                            │
@@ -99,20 +99,269 @@ Note: The `http` crate is a dependency of the proxy binary only.
 
 ## Crate Ownership Map
 
-| Crate | Owns | Classification |
-|-------|------|----------------|
-| `forgegate_core` | `UserId`, `TenantId`, `Fgrn`, `Segment`, `QualifiedAction`, `FlagName`, `FlagValue`, `FlagConfig`, `ResolvedFlags` | Pure (no I/O) |
-| `forgegate_authn_core` | `Credential`, `Identity`, `IdentityResolver` trait, `IdentityResolverChain` | Pure (no I/O) |
-| `forgegate_authz_core` | `PolicyQuery`, `PolicyDecision`, `PolicyEngine` trait | Pure (no I/O) |
-| `forgegate_authn` | `CognitoJwtResolver`, `ApiKeyResolver`, JWKS fetching | I/O (`reqwest`) |
-| `forgegate_authz` | `VpPolicyEngine`, Verified Permissions API calls, decision cache | I/O (`aws-sdk`) |
-| `forgegate_proxy` | `ProxyConfig`, `AuthConfig`, `AuthzConfig`, `RouteMapping`, `RouteMatcher`, `PathPattern`, `HttpMethod`, `RequestCtx`, `IdentityProjection`, credential extraction from headers, header injection, HTTP status code translation, `forgegate.toml` loading | Binary (`http`, `pingora`) |
+| Crate                   | Owns                                                                                                                                                                                                                                                                                                                                              | Classification             |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- |
+| `forgeguard_core`       | `UserId`, `TenantId`, `GroupName`, `PolicyName`, `Fgrn`, `Segment`, `QualifiedAction`, `ActionPattern`, `Effect`, `PolicyStatement`, `Policy`, `ResourceConstraint`, `FlagName`, `FlagValue`, `FlagConfig`, `ResolvedFlags`                                                                                                                       | Pure (no I/O)              |
+| `forgeguard_authn_core` | `Credential`, `Identity`, `IdentityResolver` trait, `IdentityResolverChain`                                                                                                                                                                                                                                                                       | Pure (no I/O)              |
+| `forgeguard_authz_core` | `PolicyQuery`, `PolicyDecision`, `PolicyContext`, `PolicyEngine` trait                                                                                                                                                                                                                                                                            | Pure (no I/O)              |
+| `forgeguard_authn`      | `CognitoJwtResolver`, `ApiKeyResolver`, JWKS fetching                                                                                                                                                                                                                                                                                             | I/O (`reqwest`)            |
+| `forgeguard_authz`      | `VpPolicyEngine`, Verified Permissions API calls, decision cache                                                                                                                                                                                                                                                                                  | I/O (`aws-sdk`)            |
+| `forgeguard_proxy`      | `ProxyConfig`, `AuthConfig`, `AuthzConfig`, `MetricsConfig`, `RouteMapping`, `RouteMatcher`, `PublicRoute`, `PublicAuthMode`, `PublicMatch`, `PublicRouteMatcher`, `PathPattern`, `HttpMethod`, `RequestCtx`, `IdentityProjection`, credential extraction from headers, header injection, HTTP status code translation, `forgeguard.toml` loading | Binary (`http`, `pingora`) |
 
-**CI gate:** `cargo tree -p forgegate_authn_core | grep -E "^.* http "` must return nothing. Same for `core`, `authz_core`, `authn`, `authz`.
+**CI gate:** `cargo tree -p forgeguard_authn_core | grep -E "^.* http "` must return nothing. Same for `core`, `authz_core`, `authn`, `authz`.
 
 ---
 
-## Issue #1: `forgegate_core` — Shared primitives and config types
+## Permission Model
+
+ForgeGuard's authorization model uses four primitives: **Actions**, **Policies**, **Groups**, and **Users**. Everything is default-deny — access must be explicitly granted.
+
+### Actions
+
+The atomic unit. A fully qualified action is `namespace:verb:entity` (e.g., `todo:read:list`, `billing:refund:invoice`). Already modeled as `QualifiedAction` in `forgeguard_core`. Actions are what the system protects — every route maps to an action.
+
+### Policies
+
+A **Policy** is a named collection of **statements**. Each statement has an **effect** (Allow or Deny), a set of **actions**, and a **resource constraint**:
+
+```
+Policy "todo-viewer":
+  ALLOW [todo:read:list, todo:list:list, todo:read:item] on *
+
+Policy "todo-admin":
+  ALLOW [todo:*:*] on *
+
+Policy "top-secret-deny":
+  DENY [todo:*:*] on todo::list::top-secret
+    EXCEPT group:top-secret-readers
+```
+
+- **Allow** statements grant access to the specified actions on the specified resources.
+- **Deny** statements block access. Deny always wins over allow for the same action+resource — this is Cedar's evaluation model.
+- Deny statements may include an `except` clause listing groups that are excepted from the deny.
+- Policies are reusable documents — they are authored once and **attached** to Groups or Users.
+
+### Groups
+
+A **Group** is a collection of users with policies attached. Groups can also contain other groups, forming a hierarchy.
+
+A user's effective permissions are **additive**: the union of all policies from all groups the user belongs to (including ancestor groups), plus any policies attached directly to the user.
+
+```
+Group "admin":
+  policies: [todo-admin]
+
+Group "member":
+  policies: [todo-viewer, todo-editor]
+
+Group "engineering":
+  member_groups: [backend, frontend, devops]
+  policies: [infra-viewer]
+```
+
+A user in `backend` inherits policies from `backend` + `engineering` — all additive. Cedar resolves transitive group membership natively via its `in` operator on entity hierarchies.
+
+### Users
+
+Users belong to groups and may have policies attached directly. For target-b, group membership comes from two sources:
+
+- **JWT claims** — the `groups_claim` field (default: `cognito:groups`) maps Cognito group membership to ForgeGuard groups.
+- **Static API keys** — the `groups` field on each key entry in `forgeguard.toml`.
+
+### Evaluation (Cedar / Verified Permissions)
+
+ForgeGuard does **not** evaluate permissions locally. All authorization decisions go through AWS Verified Permissions (VP), which uses Cedar as its policy language.
+
+ForgeGuard's abstractions compile to Cedar primitives:
+
+| ForgeGuard                                | Cedar                                                          |
+| ----------------------------------------- | -------------------------------------------------------------- |
+| Policy statement with `effect: allow`     | `permit(...)`                                                  |
+| Policy statement with `effect: deny`      | `forbid(...)` with optional `unless` clause                    |
+| Policy statement with `except: [group-a]` | `forbid(...) unless { principal in iam::group::"...group-a" }` |
+| Group                                     | `iam::group` entity                                            |
+| Group in group (nesting)                  | `iam::group` entity with `parents: [iam::group]`               |
+| User in group                             | `iam::user` entity with `parents: [iam::group]`                |
+| Policy attached to group                  | Cedar `permit`/`forbid` with `principal in iam::group::...`    |
+| Project-wide deny policy                  | Cedar `forbid` with unconstrained `principal`                  |
+
+Cedar's evaluation order:
+
+1. If **any** `forbid` matches → **DENY** (explicit deny always wins)
+2. If **any** `permit` matches → **ALLOW**
+3. If **nothing** matches → **DENY** (default)
+
+A deny policy **always** overrides an allow policy for the same action+resource, unless the deny has an `except` clause that exempts the principal's group.
+
+### Resource-Level Access Control
+
+Action-level RBAC uses `on *` (all resources). For restricting access to specific resources, combine allow and deny policies:
+
+```
+Group "all-users":
+  policies: [todo-full-access, top-secret-deny]
+
+Group "top-secret-readers":
+  policies: [todo-viewer]
+
+Policy "todo-full-access":
+  ALLOW [todo:*:*] on *
+
+Policy "top-secret-deny":
+  DENY [todo:*:*] on todo::list::top-secret
+    EXCEPT group:top-secret-readers
+```
+
+Everyone in `all-users` can access all TODO resources. The deny blocks access to `top-secret` — but the `except` clause means users in `top-secret-readers` are not matched by the deny, so their allow policies apply normally.
+
+### Future: Roles (Assume-Role)
+
+Not in target-b scope. A **Role** is a standalone entity with permission policies and **trust policies** (who can assume it — individual users or entire groups). When a user assumes a role, their effective permissions are **replaced** by the role's policies — group and user-level policies are shed. Roles act as a privilege ceiling, not a privilege floor. The architecture accounts for this by keeping the principal in `PolicyQuery` swappable (user or role FGRN).
+
+---
+
+## Binary CLI Convention
+
+Every binary crate in ForgeGuard is exposed as a CLI application using `clap` with the derive API. This convention ensures consistency across `forgeguard_proxy`, `forgeguard_control_plane`, `forgeguard_agent`, `forgeguard_cli`, and `forgeguard_back_office`.
+
+### Structure
+
+```rust
+use clap::Parser;
+
+#[derive(Debug, Parser)]
+#[command(name = "forgeguard-proxy", version, about = "ForgeGuard auth-enforcing reverse proxy")]
+pub(crate) struct App {
+    #[command(subcommand)]
+    pub command: Commands,
+    #[clap(flatten)]
+    pub global: Global,
+}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct Global {
+    /// Enable verbose logging (debug level)
+    #[clap(long, short, env = "FORGEGUARD_VERBOSE", global = true)]
+    pub verbose: bool,
+}
+```
+
+Every binary has at minimum a `run` subcommand (start the service) and a `check` subcommand (validate config and exit). Additional utility subcommands are encouraged.
+
+### Configuration Loading Precedence
+
+Binary configuration follows a four-level precedence chain (highest wins):
+
+```
+CLI flags  →  env vars  →  config file  →  defaults
+```
+
+1. **CLI flags** (`--listen 0.0.0.0:9000`) — highest priority, explicit operator intent
+2. **Environment variables** (`FORGEGUARD_LISTEN=0.0.0.0:9000`) — 12-factor, container-friendly
+3. **Config file** (`forgeguard.toml`) — structured, version-controllable
+4. **Defaults** — sensible out-of-the-box behavior
+
+The config file is loaded first, then env vars override matching fields, then CLI flags override on top. `clap`'s `env` attribute handles the env-var-to-flag mapping. The binary's `run` subcommand merges the layers:
+
+```rust
+/// Merge CLI overrides on top of the config file.
+/// CLI flags > env vars > config file > defaults.
+fn apply_overrides(config: &mut ProxyConfig, opts: &RunOptions) {
+    if let Some(listen) = &opts.listen {
+        config.listen_addr = *listen;
+    }
+    if let Some(upstream) = &opts.upstream {
+        config.upstream_url = upstream.clone();
+    }
+    if let Some(policy) = &opts.default_policy {
+        config.default_policy = policy.clone();
+    }
+    // ... other overridable fields
+}
+```
+
+### Error Handling and Logging
+
+Every binary `main`:
+
+- Returns `color_eyre::Result<()>` — no `.unwrap()` calls (enforced by workspace clippy `deny(clippy::unwrap_used)`)
+- Calls `color_eyre::install()?` before anything else
+- Initializes `tracing-subscriber` with the `--verbose` / `RUST_LOG` env var for level control
+
+```rust
+fn main() -> color_eyre::Result<()> {
+    color_eyre::install()?;
+    let app = App::parse();
+    init_tracing(app.global.verbose);
+    // dispatch subcommand...
+}
+```
+
+### Standard Environment Variables
+
+| Variable                     | Overrides               | Default           |
+| ---------------------------- | ----------------------- | ----------------- |
+| `forgeguard_CONFIG`          | Config file path        | `forgeguard.toml` |
+| `forgeguard_VERBOSE`         | Verbose logging         | `false`           |
+| `FORGEGUARD_LISTEN`          | `proxy.listen`          | `0.0.0.0:8000`    |
+| `forgeguard_UPSTREAM`        | `proxy.upstream`        | (required)        |
+| `forgeguard_DEFAULT_POLICY`  | `proxy.default_policy`  | `passthrough`     |
+| `forgeguard_POLICY_STORE_ID` | `authz.policy_store_id` | (required)        |
+| `forgeguard_AWS_REGION`      | `authz.aws_region`      | `us-east-1`       |
+| `RUST_LOG`                   | Log level filter        | `info`            |
+
+---
+
+## Infrastructure Configuration Convention
+
+Every CDK stack reads its configuration from a `.env` file at the infrastructure root (`infra/dev/.env`). This file is **never tracked by git** — it contains account-specific values (AWS account ID, region, naming prefixes) that vary per developer.
+
+### Rules
+
+1. **`.env`** — lives at `infra/dev/.env`, listed in `.gitignore`. Contains all CDK stack inputs.
+2. **`.env.example`** — lives at `infra/dev/.env.example`, committed to git. Documents every variable the `.env` file expects, with sensible defaults or placeholder values. This is the canonical schema for infrastructure configuration.
+3. **CDK stacks** — read all configurable values from `process.env`, populated by dotenv loading of `infra/dev/.env`. No hardcoded account IDs, regions, or resource names in stack code.
+4. **`.gitignore`** — add `.env` (but not `.env.example`) to the repo root `.gitignore`:
+   ```gitignore
+   # Infrastructure secrets — never commit
+   .env
+   !.env.example
+   ```
+5. **`xtask dev-setup`** — on first run, if `infra/dev/.env` does not exist, copies `.env.example` → `.env` and prompts the developer to fill in account-specific values before proceeding.
+
+### `.env.example` shape (minimum)
+
+```env
+# AWS account and region for CDK deployment
+AWS_ACCOUNT_ID=123456789012
+AWS_REGION=us-east-1
+
+# Naming prefix to avoid resource collisions between developers
+FORGEGUARD_DEV_PREFIX=forgeguard-dev
+
+# Cognito (populated after xtask dev-setup --cognito)
+COGNITO_USER_POOL_ID=
+COGNITO_APP_CLIENT_ID=
+COGNITO_JWKS_URL=
+COGNITO_ISSUER=
+
+# Verified Permissions (populated after xtask dev-setup --vp)
+VP_POLICY_STORE_ID=
+```
+
+### Flow
+
+```
+.env.example  ──(copy on first run)──►  .env  ──(dotenv)──►  CDK stack
+                                          │
+                                          └──(xtask writes outputs)──►  forgeguard.dev.toml
+```
+
+CDK stack _outputs_ (pool IDs, JWKS URLs, policy store IDs) are written back to both `.env` (for subsequent CDK stacks that depend on them) and `forgeguard.dev.toml` (for the Rust binary at runtime).
+
+---
+
+## Issue #1: `forgeguard_core` — Shared primitives and config types
 
 **Crate:** `crates/core/` (pure, no I/O)
 **Labels:** `core`, `pure`, `layer-1`
@@ -121,15 +370,15 @@ Note: The `http` crate is a dependency of the proxy binary only.
 
 ### Description
 
-Define the foundational types that every other crate depends on. These are the typed IDs, error infrastructure, feature flag types and evaluation, and `ResolvedFlags`.
+Define the foundational types that every other crate depends on. These are the typed IDs, error infrastructure, permission model types (Policy, Group, Effect), feature flag types and evaluation, and `ResolvedFlags`.
 
 This crate has zero dependencies on `http`, `tokio`, AWS SDKs, or any I/O library. It compiles to `wasm32-unknown-unknown`.
 
 ### Acceptance Criteria
 
-**ForgeGate Resource Name (FGRN)** — the universal addressing scheme for every entity, modeled after AWS ARNs but organized by **namespace** (the customer's domain) rather than service (ForgeGate's internals).
+**ForgeGuard Resource Name (FGRN)** — the universal addressing scheme for every entity, modeled after AWS ARNs but organized by **namespace** (the customer's domain) rather than service (ForgeGuard's internals).
 
-All concrete segments use `Segment` — a validated kebab-case identifier that survives every environment ForgeGate touches without translation: URIs, Cedar entity IDs, S3 keys, HTTP headers, CloudWatch dimensions, structured logs. No case-sensitivity issues, no encoding needed.
+All concrete segments use `Segment` — a validated kebab-case identifier that survives every environment ForgeGuard touches without translation: URIs, Cedar entity IDs, S3 keys, HTTP headers, CloudWatch dimensions, structured logs. No case-sensitivity issues, no encoding needed.
 
 ```rust
 /// A validated identifier segment.
@@ -194,8 +443,8 @@ impl fmt::Display for Segment {
     }
 }
 
-/// ForgeGate Resource Name — a structured, validated identifier for any
-/// entity in the ForgeGate system.
+/// ForgeGuard Resource Name — a structured, validated identifier for any
+/// entity in the ForgeGuard system.
 ///
 /// Format: fgrn:<project>:<tenant>:<namespace>:<resource-type>:<resource-id>
 ///
@@ -216,11 +465,11 @@ impl fmt::Display for Segment {
 ///   fgrn:acme-app:acme-corp:iam:group:admin
 ///   fgrn:acme-app:acme-corp:iam:user:*             ← all users in tenant
 ///
-/// System resources (reserved "forgegate" namespace):
-///   fgrn:acme-app:-:forgegate:policy:pol-001       ← tenant is None (not tenant-scoped)
-///   fgrn:acme-app:-:forgegate:feature-flag:ai-suggestions
-///   fgrn:acme-app:-:forgegate:webhook:wh-001
-///   fgrn:-:-:forgegate:project:acme-app             ← project and tenant both None (back office)
+/// System resources (reserved "forgeguard" namespace):
+///   fgrn:acme-app:-:forgeguard:policy:pol-001       ← tenant is None (not tenant-scoped)
+///   fgrn:acme-app:-:forgeguard:feature-flag:ai-suggestions
+///   fgrn:acme-app:-:forgeguard:webhook:wh-001
+///   fgrn:-:-:forgeguard:project:acme-app             ← project and tenant both None (back office)
 ///
 /// Used as:
 ///   - Cedar/Verified Permissions entity IDs (single identifier everywhere — no mapping)
@@ -260,7 +509,7 @@ pub enum FgrnSegment {
 
 /// Reserved namespaces — customers cannot use these.
 const RESERVED_NS_IAM: &str = "iam";
-const RESERVED_NS_FORGEGATE: &str = "forgegate";
+const RESERVED_NS_forgeguard: &str = "forgeguard";
 
 impl Fgrn {
     /// Parse from canonical string form.
@@ -323,6 +572,16 @@ impl Fgrn {
             FgrnSegment::value(RESERVED_NS_IAM),
             FgrnSegment::value("group"),
             FgrnSegment::value(group_name),
+        )
+    }
+
+    pub fn policy(project: &ProjectId, policy_name: &str) -> Self {
+        Self::new(
+            Some(FgrnSegment::value(project.as_str())),
+            None,  // policies are not tenant-scoped
+            FgrnSegment::value(RESERVED_NS_forgeguard),
+            FgrnSegment::value("policy"),
+            FgrnSegment::value(policy_name),
         )
     }
 
@@ -457,6 +716,8 @@ See [FGRN Design Spike](spike-fgrn-design.md) for the full design rationale, Ced
 define_id!(UserId, "user-");      // validates prefix + kebab-case
 define_id!(TenantId, "tenant-");
 define_id!(ProjectId, "proj-");
+define_id!(GroupName);            // no prefix — "admin", "backend-team", "top-secret-readers"
+define_id!(PolicyName);           // no prefix — "todo-viewer", "todo-admin", "top-secret-deny"
 
 pub struct FlowId(Uuid);          // FlowId uses Uuid, not Segment
 ```
@@ -467,7 +728,7 @@ pub struct FlowId(Uuid);          // FlowId uses Uuid, not Segment
 
 **Action vocabulary types** — the core modeling for `namespace:action:entity`:
 
-ForgeGate actions follow the pattern `namespace:action:entity` (e.g., `todo:read:list`, `billing:refund:invoice`). This mirrors AWS IAM's `service:VerbNoun` (e.g., `s3:GetObject`), but with three explicit segments instead of two. The third segment eliminates parsing ambiguity — no guessing where the verb ends and the resource begins.
+ForgeGuard actions follow the pattern `namespace:action:entity` (e.g., `todo:read:list`, `billing:refund:invoice`). This mirrors AWS IAM's `service:VerbNoun` (e.g., `s3:GetObject`), but with three explicit segments instead of two. The third segment eliminates parsing ambiguity — no guessing where the verb ends and the resource begins.
 
 All three segments are validated `Segment` values (kebab-case). If you hold a `QualifiedAction`, every component is guaranteed valid. No downstream code ever re-validates.
 
@@ -477,7 +738,7 @@ All three segments are validated `Segment` values (kebab-case). If you hold a `Q
 ///
 /// Reserved namespaces:
 ///   "iam"       — user, group, role entities (identity primitives)
-///   "forgegate" — policy, feature-flag, webhook entities (system internals)
+///   "forgeguard" — policy, feature-flag, webhook entities (system internals)
 ///
 /// Customer namespaces must be valid Segment values and cannot use reserved names.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
@@ -489,7 +750,7 @@ enum NamespaceInner {
     Reserved(Segment),
 }
 
-const RESERVED_NAMESPACES: &[&str] = &["iam", "forgegate"];
+const RESERVED_NAMESPACES: &[&str] = &["iam", "forgeguard"];
 
 impl Namespace {
     /// Parse a user-provided namespace. Rejects reserved names.
@@ -499,7 +760,7 @@ impl Namespace {
             return Err(Error::Parse {
                 field: "namespace",
                 value: s,
-                reason: "reserved namespace — 'iam' and 'forgegate' cannot be used by customers",
+                reason: "reserved namespace — 'iam' and 'forgeguard' cannot be used by customers",
             });
         }
         Ok(Self(NamespaceInner::User(Segment::try_new(s)?)))
@@ -512,10 +773,10 @@ impl Namespace {
         ))
     }
 
-    /// The forgegate namespace where policy, feature-flag, webhook entities live.
-    pub fn forgegate() -> Self {
+    /// The forgeguard namespace where policy, feature-flag, webhook entities live.
+    pub fn forgeguard() -> Self {
         Self(NamespaceInner::Reserved(
-            Segment::try_new("forgegate").expect("forgegate is a valid segment")
+            Segment::try_new("forgeguard").expect("forgeguard is a valid segment")
         ))
     }
 
@@ -562,7 +823,7 @@ impl Entity {
 
 /// A fully qualified action: namespace:action:entity
 ///
-/// ForgeGate:     "todo:read:list"
+/// ForgeGuard:     "todo:read:list"
 /// AWS analog:    "s3:GetObject"
 /// Cedar maps:    namespace=todo, action="read-list", entity=todo::list
 ///
@@ -700,6 +961,148 @@ impl PrincipalRef {
 }
 ```
 
+**Permission model types** — Policies, Groups, and their Cedar compilation (pure, no I/O):
+
+```rust
+/// The effect of a policy statement.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Effect {
+    Allow,
+    Deny,
+}
+
+/// A pattern segment that matches either a specific value or any value (wildcard).
+/// Used in action patterns within policy statements.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub enum PatternSegment {
+    Exact(Segment),
+    Wildcard,
+}
+
+impl PatternSegment {
+    pub fn matches(&self, segment: &Segment) -> bool {
+        match self {
+            Self::Wildcard => true,
+            Self::Exact(s) => s == segment,
+        }
+    }
+}
+
+/// An action pattern used in policy statements. Supports wildcards in any position.
+///
+/// "todo:read:list"  → exact match on one action
+/// "todo:read:*"     → all read actions in the todo namespace
+/// "todo:*:*"        → all actions in the todo namespace
+/// "*:*:*"           → all actions (god mode)
+///
+/// Parsed from strings like "todo:read:list" or "todo:*:*".
+/// Wildcards in ForgeGuard are expanded to explicit Cedar action lists at compile time,
+/// or to unconstrained `action` in the Cedar statement when namespace:*:* is used.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct ActionPattern {
+    namespace: PatternSegment,
+    action: PatternSegment,
+    entity: PatternSegment,
+}
+
+impl ActionPattern {
+    pub fn parse(s: &str) -> Result<Self> {
+        let parts: Vec<&str> = s.splitn(3, ':').collect();
+        match parts.as_slice() {
+            [ns, action, entity] => Ok(Self {
+                namespace: parse_pattern_segment(ns)?,
+                action: parse_pattern_segment(action)?,
+                entity: parse_pattern_segment(entity)?,
+            }),
+            _ => Err(Error::Parse {
+                field: "action_pattern",
+                value: s.to_string(),
+                reason: "expected namespace:action:entity (e.g., 'todo:read:list' or 'todo:*:*')",
+            }),
+        }
+    }
+
+    /// Does this pattern match a specific qualified action?
+    pub fn matches(&self, action: &QualifiedAction) -> bool {
+        self.namespace.matches(action.namespace().as_segment())
+            && self.action.matches(action.action().as_segment())
+            && self.entity.matches(action.entity().as_segment())
+    }
+}
+
+fn parse_pattern_segment(s: &str) -> Result<PatternSegment> {
+    match s {
+        "*" => Ok(PatternSegment::Wildcard),
+        _ => Ok(PatternSegment::Exact(Segment::try_new(s)?)),
+    }
+}
+
+/// Resource constraint in a policy statement.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum ResourceConstraint {
+    /// All resources — default when omitted.
+    All,
+    /// Specific resources identified by Cedar entity reference.
+    /// Format: "namespace::entity::id" (e.g., "todo::list::top-secret").
+    Specific(Vec<String>),
+}
+
+impl Default for ResourceConstraint {
+    fn default() -> Self { Self::All }
+}
+
+/// A single statement within a policy.
+///
+/// Compiles to a Cedar `permit` (effect=Allow) or `forbid` (effect=Deny).
+/// The `except` field maps to Cedar's `unless` clause on forbid statements.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PolicyStatement {
+    pub effect: Effect,
+    pub actions: Vec<ActionPattern>,
+    #[serde(default)]
+    pub resources: ResourceConstraint,
+    /// Groups excepted from this deny statement.
+    /// Only meaningful when effect is Deny — ignored for Allow.
+    /// Compiles to Cedar: `forbid(...) unless { principal in iam::group::"..." }`
+    #[serde(default)]
+    pub except: Vec<GroupName>,
+}
+
+/// A named, reusable policy — a collection of allow/deny statements.
+///
+/// Policies are authored in `forgeguard.toml` and compiled to Cedar permit/forbid
+/// statements. They are attached to Groups (or Users) to grant/restrict access.
+///
+/// FGRN: fgrn:<project>:-:forgeguard:policy:<policy-name>
+#[derive(Debug, Clone, Deserialize)]
+pub struct Policy {
+    pub name: PolicyName,
+    #[serde(default)]
+    pub description: Option<String>,
+    pub statements: Vec<PolicyStatement>,
+}
+
+/// A group definition — a collection of users and/or other groups with policies attached.
+///
+/// Groups can nest: a group may contain other groups via `member_groups`.
+/// Cedar resolves transitive membership natively via entity parent edges.
+///
+/// FGRN: fgrn:<project>:<tenant>:iam:group:<group-name>
+#[derive(Debug, Clone, Deserialize)]
+pub struct GroupDefinition {
+    pub name: GroupName,
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Policies attached to this group.
+    pub policies: Vec<PolicyName>,
+    /// Child groups whose members inherit this group's policies.
+    #[serde(default)]
+    pub member_groups: Vec<GroupName>,
+}
+```
+
 **Error infrastructure:**
 
 ```rust
@@ -792,7 +1195,7 @@ pub enum FlagValue {
 }
 
 /// All flags resolved for a specific request context.
-/// Keys are the canonical FlagName display form: "MaintenanceMode" or "Todo:AiSuggestions".
+/// Keys are the canonical FlagName display form: "maintenance-mode" or "todo:ai-suggestions".
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ResolvedFlags {
     flags: HashMap<String, FlagValue>,
@@ -859,7 +1262,7 @@ pub fn evaluate_flags(
 ) -> ResolvedFlags {
     let mut flags = HashMap::new();
     for (name, def) in &config.flags {
-        let display_name = name.to_string(); // "MaintenanceMode" or "Todo:AiSuggestions"
+        let display_name = name.to_string(); // "maintenance-mode" or "todo:ai-suggestions"
         flags.insert(display_name.clone(), resolve_single_flag(&display_name, def, tenant_id, user_id));
     }
     ResolvedFlags { flags }
@@ -923,7 +1326,7 @@ fn deterministic_bucket(
 
 - ID validation: valid formats accepted, empty/malformed rejected
 - `Segment::try_new`: lowercase accepted, uppercase rejected, underscores rejected, empty rejected, leading/trailing hyphen rejected, consecutive hyphens rejected, starts-with-digit rejected
-- `Namespace::parse`: kebab-case accepted, `"iam"` rejected (reserved), `"forgegate"` rejected (reserved), empty rejected, uppercase rejected
+- `Namespace::parse`: kebab-case accepted, `"iam"` rejected (reserved), `"forgeguard"` rejected (reserved), empty rejected, uppercase rejected
 - `Namespace::iam()`: returns `iam`, `is_reserved()` is true
 - `Action::parse`: `"read"`, `"force-delete"`, `"bulk-export"` all valid; `"Read"`, `""`, `"force_delete"` rejected
 - `Entity::parse`: `"invoice"`, `"payment-tracker"`, `"shipping-label"` all valid; `"Invoice"` rejected
@@ -944,14 +1347,14 @@ fn deterministic_bucket(
 - **FGRN parsing:** `Fgrn::parse("fgrn:acme-app:acme-corp:iam:user:user-abc123")` → project=`acme-app`, tenant=`acme-corp`, namespace=`iam`, resource_type=`user`, resource_id=`user-abc123`
 - **FGRN parsing resources:** `Fgrn::parse("fgrn:acme-app:acme-corp:todo:list:list-123")` → namespace=`todo`, resource_type=`list`, resource_id=`list-123`
 - **FGRN wildcards:** `Fgrn::parse("fgrn:acme-app:*:todo:list:*")` → tenant=Wildcard, resource_id=Wildcard
-- **FGRN not-applicable:** `Fgrn::parse("fgrn:acme-app:-:forgegate:policy:pol-001")` → tenant=None (the `-` deserializes as `Option::None`, not as a `Segment`)
+- **FGRN not-applicable:** `Fgrn::parse("fgrn:acme-app:-:forgeguard:policy:pol-001")` → tenant=None (the `-` deserializes as `Option::None`, not as a `Segment`)
 - **FGRN matching:** specific FGRN matches wildcard pattern, doesn't match wrong namespace
 - **FGRN parse errors:** `Fgrn::parse("bad:format")` → error, `Fgrn::parse("fgrn:acme-app")` → error (too few segments), `Fgrn::parse("")` → error
 - **FGRN segment validation:** `Fgrn::parse("fgrn:AcmeApp:acme:todo:list:list-1")` → error (uppercase in project segment)
 - **FGRN construction:** `Fgrn::new()` → `Display` round-trips to identical string
 - **FGRN helpers:** `Fgrn::user()` produces `"fgrn:{project}:{tenant}:iam:user:{user_id}"`, `Fgrn::group()` produces `"fgrn:{project}:{tenant}:iam:group:{name}"`, `Fgrn::resource()` produces `"fgrn:{project}:{tenant}:{ns}:{entity}:{id}"`
 - **FGRN as Verified Permissions entity ID:** `Fgrn::as_vp_entity_id()` returns the same string as `Display` — single identifier everywhere
-- **FGRN namespace validation:** reserved namespaces `"iam"` and `"forgegate"` rejected for customer use via `Namespace::parse`, valid kebab-case accepted, empty rejected
+- **FGRN namespace validation:** reserved namespaces `"iam"` and `"forgeguard"` rejected for customer use via `Namespace::parse`, valid kebab-case accepted, empty rejected
 - **FGRN serde:** serialize as canonical string, deserialize via parse, round-trip preserves equality
 - Serde round-trip: `QualifiedAction` serializes as `"todo:read:list"` and deserializes back
 - TOML deserialization of `QualifiedAction` in a route config works via the Deserialize impl
@@ -972,10 +1375,28 @@ fn deterministic_bucket(
 - Override precedence: user > tenant > rollout > default
 - `ResolvedFlags` serialization: JSON round-trip
 - Error display: messages include field name, value, and reason
+- `GroupName` validation: `"admin"` valid, `"backend-team"` valid, `"Admin"` rejected, `""` rejected
+- `PolicyName` validation: `"todo-viewer"` valid, `"top-secret-deny"` valid, `"TODO_VIEWER"` rejected
+- `ActionPattern::parse("todo:read:list")` → all exact segments
+- `ActionPattern::parse("todo:*:*")` → namespace exact, action+entity wildcard
+- `ActionPattern::parse("*:*:*")` → all wildcard
+- `ActionPattern::parse("todo:read")` → error (only two segments)
+- `ActionPattern::matches`: `"todo:*:*"` matches `todo:read:list` and `todo:delete:item`, does not match `billing:read:invoice`
+- `ActionPattern::matches`: `"*:read:*"` matches `todo:read:list` and `billing:read:invoice`, does not match `todo:delete:item`
+- `Effect` serde: deserializes from `"allow"` and `"deny"`, rejects `"ALLOW"`, `"permit"`
+- `PolicyStatement` with `effect: deny` + `except: [top-secret-readers]` — round-trip TOML deserialization
+- `PolicyStatement` with `effect: allow` ignores `except` field
+- `Policy` with multiple statements: one allow + one deny → both present after deserialization
+- `GroupDefinition` with `member_groups`: nested groups deserialize correctly
+- `GroupDefinition` with `policies`: policy name references deserialize correctly
+- `ResourceConstraint::All` is the default when `resources` field is omitted
+- `ResourceConstraint::Specific` with `["todo::list::top-secret"]` parses correctly
+- `Fgrn::policy("acme-app", "todo-viewer")` → `"fgrn:acme-app:-:forgeguard:policy:todo-viewer"`
+- `Fgrn::group()` → `"fgrn:acme-app:acme-corp:iam:group:admin"` (unchanged, already tested)
 
 ---
 
-## Issue #2: `forgegate_authn_core` — Identity resolution trait, chain, and credential types
+## Issue #2: `forgeguard_authn_core` — Identity resolution trait, chain, and credential types
 
 **Crate:** `crates/authn-core/` (pure, no I/O, **no `http` dependency**)
 **Labels:** `authn`, `pure`, `layer-1`
@@ -992,7 +1413,7 @@ This crate has zero dependencies on `http`, `tokio`, AWS SDKs, or any I/O librar
 
 The AWS SDK uses a `DefaultCredentialsChain` that tries providers in order (env vars → shared credentials file → SSO → ECS metadata → EC2 IMDS). Each implements `ProvideCredentials`, and the chain returns the first success. The rest of the SDK never knows which provider resolved the credential.
 
-ForgeGate mirrors this exactly:
+ForgeGuard mirrors this exactly:
 
 ```
 Credential (extracted by the protocol adapter — not our concern)
@@ -1031,7 +1452,7 @@ pub enum Credential {
 }
 ```
 
-No mention of `Authorization: Bearer` or `X-API-Key` headers — those are HTTP concepts. This enum describes what the credential *is*, not where it came from.
+No mention of `Authorization: Bearer` or `X-API-Key` headers — those are HTTP concepts. This enum describes what the credential _is_, not where it came from.
 
 **Identity — the validated output:**
 
@@ -1039,11 +1460,11 @@ No mention of `Authorization: Bearer` or `X-API-Key` headers — those are HTTP 
 /// A resolved, trusted identity. Produced only by IdentityResolver implementations.
 /// Protocol adapters and the authz layer consume this without knowing how it was produced.
 ///
-/// This is ForgeGate's equivalent of aws_credential_types::Credentials.
+/// This is ForgeGuard's equivalent of aws_credential_types::Credentials.
 pub struct Identity {
     user_id: UserId,
     tenant_id: Option<TenantId>,
-    roles: Vec<String>,
+    groups: Vec<GroupName>,
     scopes: Vec<String>,
     expiry: Option<SystemTime>,
     /// Which resolver produced this — for logging/metrics, never for branching.
@@ -1095,7 +1516,7 @@ pub trait IdentityResolver: Send + Sync {
 ///
 /// Mirrors the AWS SDK's DefaultCredentialsChain pattern.
 ///
-/// The chain order (configured in forgegate.toml) is the tiebreaker for
+/// The chain order (configured in forgeguard.toml) is the tiebreaker for
 /// ambiguous credentials, e.g., a Bearer token that could be a JWT or
 /// an opaque token. Whichever resolver is first in the chain gets first crack.
 pub struct IdentityChain {
@@ -1132,14 +1553,14 @@ impl IdentityChain {
 /// In-memory API key resolver. Keys are loaded from config at startup.
 /// No I/O — the key map is passed in at construction time.
 pub struct StaticApiKeyResolver {
-    /// key string → (user_id, tenant_id, roles)
+    /// key string → (user_id, tenant_id, groups)
     keys: HashMap<String, ApiKeyEntry>,
 }
 
 struct ApiKeyEntry {
     user_id: UserId,
     tenant_id: Option<TenantId>,
-    roles: Vec<String>,
+    groups: Vec<GroupName>,
     description: String,
 }
 
@@ -1196,7 +1617,7 @@ pub struct IdentityBuilder { /* ... */ }
 impl IdentityBuilder {
     pub fn new(user_id: UserId) -> Self { /* ... */ }
     pub fn tenant(mut self, id: TenantId) -> Self { /* ... */ }
-    pub fn roles(mut self, roles: Vec<String>) -> Self { /* ... */ }
+    pub fn groups(mut self, groups: Vec<GroupName>) -> Self { /* ... */ }
     pub fn resolver(mut self, name: &'static str) -> Self { /* ... */ }
     pub fn build(self) -> Identity { /* ... */ }
 }
@@ -1225,6 +1646,7 @@ pub enum Error {
 ```
 
 **Tests:**
+
 - `IdentityChain` with JWT resolver + API key resolver: Bearer credential → JWT resolver handles it, ApiKey credential → API key resolver handles it
 - `IdentityChain`: resolver returns `can_resolve() == false` → skipped, next resolver tried
 - `IdentityChain`: resolver claims credential but fails to resolve → error returned (no fallthrough)
@@ -1233,11 +1655,11 @@ pub enum Error {
 - `StaticApiKeyResolver`: unknown key → `Error::InvalidCredential`
 - `Identity` cannot be constructed outside the crate (compile-time verification)
 - `test-support` feature enables the builder
-- **No `http` import anywhere in this crate** — verified by CI (`cargo tree -p forgegate_authn_core | grep -c "http"` == 0)
+- **No `http` import anywhere in this crate** — verified by CI (`cargo tree -p FORGEGUARD_authn_core | grep -c "http"` == 0)
 
 ---
 
-## Issue #3: `forgegate_authz_core` — Policy engine trait and authorization types
+## Issue #3: `forgeguard_authz_core` — Policy engine trait and authorization types
 
 **Crate:** `crates/authz-core/` (pure, no I/O, **no `http` dependency**)
 **Labels:** `authz`, `pure`, `layer-1`
@@ -1257,7 +1679,7 @@ This crate has zero dependencies on `http`, `tokio`, AWS SDKs, or any I/O librar
 **Policy query — the protocol-agnostic input:**
 
 ```rust
-use forgegate_core::{QualifiedAction, ResourceRef, PrincipalRef, TenantId};
+use forgeguard_core::{QualifiedAction, ResourceRef, PrincipalRef, TenantId};
 
 /// The question: "can this principal do this action on this resource?"
 /// No HTTP methods, no URL paths, no protocol-specific anything.
@@ -1268,10 +1690,12 @@ pub struct PolicyQuery {
     pub context: PolicyContext,
 }
 
-/// Additional context for policy evaluation
+/// Additional context for policy evaluation.
+/// Groups are passed as context for Verified Permissions to resolve
+/// group membership in Cedar entity hierarchy lookups.
 pub struct PolicyContext {
     pub tenant_id: Option<TenantId>,
-    pub roles: Vec<String>,
+    pub groups: Vec<GroupName>,
     pub ip_address: Option<IpAddr>,
     pub attributes: HashMap<String, serde_json::Value>,
 }
@@ -1312,7 +1736,7 @@ pub trait PolicyEngine: Send + Sync {
 **Helper to build a PolicyQuery from an Identity:**
 
 ```rust
-use forgegate_authn_core::Identity;
+use forgeguard_authn_core::Identity;
 
 /// Build a policy query from an identity and an action.
 /// This is a pure data transformation — no I/O, no HTTP.
@@ -1328,7 +1752,7 @@ pub fn build_query(
         resource,
         context: PolicyContext {
             tenant_id: identity.tenant_id().cloned(),
-            roles: identity.roles().to_vec(),
+            groups: identity.groups().to_vec(),
             ip_address: None,
             attributes: extra_context,
         },
@@ -1337,6 +1761,7 @@ pub fn build_query(
 ```
 
 **Tests:**
+
 - `PolicyQuery` construction from Identity + action + resource
 - `PolicyDecision` display: useful messages for each deny reason
 - `build_query` maps identity fields correctly
@@ -1345,7 +1770,7 @@ pub fn build_query(
 
 ---
 
-## Issue #4: `forgegate_authn` — Cognito JWT identity resolver
+## Issue #4: `forgeguard_authn` — Cognito JWT identity resolver
 
 **Crate:** `crates/authn/` (I/O crate, **no `http` dependency**)
 **Labels:** `authn`, `io`, `layer-2`
@@ -1359,7 +1784,7 @@ Implement `IdentityResolver` for Cognito JWTs. This resolver takes a `Credential
 
 The `CognitoJwtResolver` implements `IdentityResolver` from `authn_core`. It receives a `Credential::Bearer(token)` and returns an `Identity` by validating the JWT against Cognito's JWKS endpoint.
 
-Dependencies: `reqwest` (JWKS fetch), `jsonwebtoken` (JWT decode/verify), `forgegate_core`, `forgegate_authn_core`.
+Dependencies: `reqwest` (JWKS fetch), `jsonwebtoken` (JWT decode/verify), `forgeguard_core`, `forgeguard_authn_core`.
 
 ### Acceptance Criteria
 
@@ -1376,7 +1801,7 @@ pub struct JwtResolverConfig {
     pub issuer: String,
     pub audience: Option<String>,
     pub tenant_claim: String,   // e.g., "custom:org_id"
-    pub roles_claim: String,    // e.g., "cognito:groups"
+    pub groups_claim: String,   // e.g., "cognito:groups"
 }
 
 impl IdentityResolver for CognitoJwtResolver {
@@ -1394,7 +1819,7 @@ impl IdentityResolver for CognitoJwtResolver {
             let token = match credential {
                 Credential::Bearer(t) => t,
                 _ => return Err(Error::Core(
-                    forgegate_authn_core::Error::InvalidCredential(
+                    forgeguard_authn_core::Error::InvalidCredential(
                         "expected Bearer credential".into()
                     )
                 )),
@@ -1406,7 +1831,7 @@ impl IdentityResolver for CognitoJwtResolver {
             // 4. Deserialize claims into JwtClaims
             // 5. Validate: exp, iss, aud, token_use
             // 6. Extract user_id from sub, tenant_id from configured claim,
-            //    roles from configured claim
+            //    groups from configured claim
             // 7. Construct Identity with resolver = "cognito_jwt"
         })
     }
@@ -1426,7 +1851,7 @@ impl IdentityResolver for CognitoJwtResolver {
 - Use `jsonwebtoken` crate for decoding and signature verification
 - Support RS256 (Cognito default)
 - Extract `tenant_id` from the claim name configured in `tenant_claim` (default: `custom:org_id`)
-- Extract roles from the claim name configured in `roles_claim` (default: `cognito:groups`)
+- Extract groups from the claim name configured in `groups_claim` (default: `cognito:groups`)
 - Map `sub` claim to `UserId`
 
 **Errors:**
@@ -1435,7 +1860,7 @@ impl IdentityResolver for CognitoJwtResolver {
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error(transparent)]
-    Core(#[from] forgegate_authn_core::Error),
+    Core(#[from] forgeguard_authn_core::Error),
     #[error("JWKS fetch failed: {0}")]
     JwksFetch(String),
     #[error("key not found: kid={0}")]
@@ -1448,6 +1873,7 @@ pub enum Error {
 **Tests:**
 
 Unit tests (no network):
+
 - Generate an RSA key pair, sign a JWT, create a `CognitoJwtResolver` with a pre-loaded JWKS cache, call `resolve(Credential::Bearer(token))` → correct `Identity`
 - `can_resolve(Credential::Bearer(_))` → true
 - `can_resolve(Credential::ApiKey(_))` → false
@@ -1460,11 +1886,12 @@ Unit tests (no network):
 - **No `http` import in this crate** — verified by CI
 
 Integration test (gated by `#[cfg(feature = "integration")]` or `#[ignore]`):
+
 - Fetch real Cognito JWKS from a test user pool and validate structure
 
 ---
 
-## Issue #5: `forgegate_authz` — Verified Permissions client with caching
+## Issue #5: `forgeguard_authz` — Verified Permissions client with caching
 
 **Crate:** `crates/authz/` (I/O crate)
 **Labels:** `authz`, `io`, `layer-2`
@@ -1478,7 +1905,7 @@ Implement `PolicyEngine` for AWS Verified Permissions. Takes a `PolicyQuery` (fr
 
 The `VpPolicyEngine` implements `PolicyEngine` from `authz_core`. It receives a `PolicyQuery` and returns a `PolicyDecision` by calling Verified Permissions `IsAuthorized` API, with an LRU cache in front.
 
-Dependencies: `aws-sdk-verifiedpermissions`, `tokio`, `forgegate_core`, `forgegate_authz_core`.
+Dependencies: `aws-sdk-verifiedpermissions`, `tokio`, `forgeguard_core`, `forgeguard_authz_core`.
 
 ### Acceptance Criteria
 
@@ -1513,7 +1940,7 @@ impl PolicyEngine for VpPolicyEngine {
   - Principal → entity type `"iam::user"`, entity ID = `to_fgrn()` = `"fgrn:acme-app:acme-corp:iam:user:user-abc123"`
   - Action → `QualifiedAction::vp_action_type()` = `"todo::action"`, `.vp_action_id()` = `"read-list"`
   - Resource → entity type `"todo::list"`, entity ID = `to_fgrn()` = `"fgrn:acme-app:acme-corp:todo:list:list-123"`
-  - Context → Verified Permissions context map (roles, tenant_id, etc.)
+  - Context → Verified Permissions context map (groups, tenant_id, etc.)
 
 **Decision cache:**
 
@@ -1548,7 +1975,7 @@ struct CachedDecision {
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error(transparent)]
-    Core(#[from] forgegate_authz_core::Error),
+    Core(#[from] forgeguard_authz_core::Error),
     #[error("Verified Permissions error: {0}")]
     VerifiedPermissions(String),
     #[error("policy store not found: {0}")]
@@ -1557,6 +1984,7 @@ pub enum Error {
 ```
 
 **Tests:**
+
 - Unit tests with a trait-based mock: define `MockPolicyEngine` implementing `PolicyEngine` in `#[cfg(test)]` that returns preconfigured decisions
 - Cache hit: second `evaluate` call with same `PolicyQuery` doesn't call Verified Permissions
 - Cache miss: expired entry triggers new Verified Permissions call
@@ -1567,6 +1995,7 @@ pub enum Error {
 - **No `http` import in this crate** — verified by CI
 
 Integration test (gated, requires real AWS credentials + test policy store):
+
 - Create a simple policy in Verified Permissions, call `check`, verify ALLOW
 - Call `check` for unpermitted action, verify DENY
 
@@ -1584,22 +2013,22 @@ Integration test (gated, requires real AWS credentials + test policy store):
 The proxy needs two things:
 
 1. **Route matching** — translating `(method, path)` into `(action, resource)` for the policy engine. `RouteMapping`, `PathPattern`, `RouteMatcher`, `HttpMethod` live here.
-2. **Config file** — `forgegate.toml` defines the proxy configuration: listen address, upstream URL, route mappings, provider chain order, and feature flags.
+2. **Config file** — `forgeguard.toml` defines the proxy configuration: listen address, upstream URL, route mappings, provider chain order, and feature flags.
 
 Since we don't have Smithy parsing yet, routes are defined manually in the TOML. This is also the permanent format for prototyping and small projects that don't need the full model pipeline.
 
 ### Route Matching Types (in `crates/proxy/`)
 
 ```rust
-use forgegate_core::{QualifiedAction, ResourceRef, ResourceId};
-use forgegate_core::features::FlagName;
+use forgeguard_core::{QualifiedAction, ResourceRef, ResourceId};
+use forgeguard_core::features::FlagName;
 
 /// A single HTTP route → policy action mapping.
 /// This is HTTP-specific: method + path pattern → authorization query inputs.
 pub struct RouteMapping {
     pub method: HttpMethod,
     pub path_pattern: PathPattern,     // e.g., "/lists/{listId}"
-    pub action: QualifiedAction,       // e.g., "Todo:Read:List"
+    pub action: QualifiedAction,       // e.g., "todo:read:list"
     pub resource_param: Option<String>,// path param name for resource ID
     pub feature_gate: Option<FlagName>,
 }
@@ -1631,9 +2060,80 @@ pub struct MatchedRoute {
 - `PathPattern::matches("/lists/abc123")` returns `Some(params)` where `params["listId"] = "abc123"`
 - Path matching is case-sensitive, trailing-slash tolerant
 
+### Public Route Types (in `crates/proxy/`)
+
+Public routes are matched **before** the auth pipeline runs, following the same pattern as the built-in health check endpoint. They are never rejected — no 401, no 403 — and they never run authorization.
+
+This solves a fundamental gap: without public routes, `default_policy = "deny"` blocks all unauthenticated requests, while `default_policy = "passthrough"` lets all unmatched routes through after auth. There is no middle ground for endpoints that genuinely need no authentication (health checks, docs, incoming webhooks, OAuth callbacks, static assets).
+
+Public routes support two auth modes:
+
+- **Anonymous** (default): Skip auth entirely. No credential extraction, no identity resolution, no `X-ForgeGuard-*` identity headers. The upstream sees only `X-ForgeGuard-Client-Ip`.
+- **Opportunistic**: Try to resolve identity if credentials are present, but never reject. If a valid credential is found and identity resolves, inject `X-ForgeGuard-*` identity headers. If no credential or resolution fails, proxy without identity headers. The upstream checks for the presence of `X-ForgeGuard-User-Id` to decide whether to render an authenticated or anonymous experience.
+
+This models the common pattern where documentation pages, landing pages, or public API endpoints work for everyone but render differently when the user is logged in.
+
+```rust
+/// How a public route handles credentials.
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PublicAuthMode {
+    /// Skip auth entirely. No credential extraction, no identity resolution.
+    /// Upstream sees only X-ForgeGuard-Client-Ip.
+    #[default]
+    Anonymous,
+    /// Try to resolve identity if credentials are present, but never reject.
+    /// If identity resolves → inject X-ForgeGuard-* identity headers.
+    /// If no credential or resolution fails → proxy without identity headers.
+    /// No authorization check in either case.
+    Opportunistic,
+}
+
+/// A route that bypasses the auth pipeline's reject logic.
+/// Always proxied to upstream — never returns 401 or 403.
+/// Only method + path pattern — no action, no feature gate, no resource mapping.
+///
+/// Public routes are checked before the auth pipeline runs.
+pub struct PublicRoute {
+    pub method: HttpMethod,
+    pub path_pattern: PathPattern,
+    #[serde(default)]
+    pub auth_mode: PublicAuthMode,
+}
+
+/// Result of matching a request against public routes.
+pub enum PublicMatch {
+    /// Not a public route — continue to the auth pipeline.
+    NotPublic,
+    /// Anonymous public route — skip auth entirely, proxy with only Client-Ip.
+    Anonymous,
+    /// Opportunistic — try auth, never reject. Proxy regardless of outcome.
+    Opportunistic,
+}
+
+pub struct PublicRouteMatcher {
+    routes: Vec<PublicRoute>,
+}
+
+impl PublicRouteMatcher {
+    pub fn from_routes(routes: Vec<PublicRoute>) -> Self { /* ... */ }
+
+    /// Check if this (method, path) matches a public route.
+    /// Returns the match kind so the caller knows whether to attempt auth.
+    pub fn check(&self, method: &http::Method, path: &str) -> PublicMatch { /* ... */ }
+}
+```
+
+- Reuses `HttpMethod` and `PathPattern` from the auth route types
+- No `action` field — public routes don't produce policy queries
+- No `feature_gate` — anonymous mode has no tenant/user context; opportunistic mode could evaluate flags if identity resolves, but this is deferred (not needed for Target B)
+- `check()` returns `PublicMatch` instead of `bool` — the caller branches on anonymous vs opportunistic
+- `auth_mode` defaults to `Anonymous` via `#[serde(default)]` — fully backward compatible, existing configs work unchanged
+- Opportunistic mode reuses the same `extract_credential` + `IdentityChain.resolve` functions from the protected pipeline, but wraps them in a try-and-ignore flow (errors become "no identity" rather than 401)
+
 ### Configuration Struct Definitions (in `crates/proxy/`)
 
-These types are the Rust-side representation of `forgegate.toml`.
+These types are the Rust-side representation of `forgeguard.toml`.
 
 ```rust
 pub struct ProxyConfig {
@@ -1641,10 +2141,38 @@ pub struct ProxyConfig {
     pub listen_addr: SocketAddr,
     pub upstream_url: Url,
     pub default_policy: DefaultPolicy,
+    pub client_ip_source: ClientIpSource,
     pub auth: AuthConfig,
     pub authz: AuthzConfig,
     pub features: FeaturesConfig,
     pub routes: Vec<RouteMapping>,
+    #[serde(default)]
+    pub public_routes: Vec<PublicRoute>,
+    #[serde(default)]
+    pub metrics: MetricsConfig,
+}
+
+/// Prometheus metrics endpoint configuration.
+/// Disabled by default — the proxy runs with zero overhead unless opted in.
+#[derive(Debug, Clone, Deserialize)]
+pub struct MetricsConfig {
+    #[serde(default)]
+    pub enabled: bool,                          // default: false
+    #[serde(default = "default_metrics_ip")]
+    pub ip: IpAddr,                             // default: 127.0.0.1
+    #[serde(default = "default_metrics_port")]
+    pub port: u16,                              // default: 9090
+}
+
+/// How to determine the client's real IP address.
+#[serde(rename_all = "kebab-case")]
+pub enum ClientIpSource {
+    /// Use the TCP connection's peer address. Default.
+    Peer,
+    /// Use the leftmost IP in the X-Forwarded-For header (behind LB/CDN).
+    XForwardedFor,
+    /// Use Cloudflare's CF-Connecting-IP header.
+    CfConnectingIp,
 }
 
 pub enum DefaultPolicy {
@@ -1665,7 +2193,7 @@ pub struct JwtProviderConfig {
     pub issuer: String,
     pub audience: Option<String>,
     pub tenant_claim: String,      // default: "custom:org_id"
-    pub roles_claim: String,       // default: "cognito:groups"
+    pub groups_claim: String,      // default: "cognito:groups"
 }
 
 pub struct ApiKeyProviderConfig {
@@ -1680,7 +2208,7 @@ pub struct StaticApiKey {
     pub key: String,
     pub user_id: String,
     pub tenant_id: Option<String>,
-    pub roles: Vec<String>,
+    pub groups: Vec<String>,
     pub description: Option<String>,
 }
 
@@ -1689,6 +2217,16 @@ pub struct AuthzConfig {
     pub aws_region: String,
     pub cache_ttl_seconds: u64,
     pub cache_max_entries: usize,
+}
+
+pub struct PoliciesConfig {
+    #[serde(default)]
+    pub policies: HashMap<PolicyName, Policy>,
+}
+
+pub struct GroupsConfig {
+    #[serde(default)]
+    pub groups: HashMap<GroupName, GroupDefinition>,
 }
 
 pub struct FeaturesConfig {
@@ -1702,43 +2240,71 @@ All derive `Deserialize` + `Debug`. `FeaturesConfig.flags` uses `FlagName` as ke
 
 ### Header Injection (in `crates/proxy/`)
 
-The proxy builds an `IdentityProjection` from the resolved `Identity` and translates it into HTTP headers:
+The proxy builds an `IdentityProjection` from the resolved `Identity` and translates it into HTTP headers. It also injects the client's origin IP on **all** proxied requests (including anonymous and opportunistic public routes), since the upstream app loses visibility of the real client IP when traffic flows through the proxy.
+
+For opportunistic public routes, the `upstream_request_filter` phase already handles this correctly: identity headers are only injected when `ctx.identity` is `Some`. If the opportunistic resolution succeeded, headers are injected; if it failed or no credential was present, only `X-ForgeGuard-Client-Ip` is injected — no code changes needed in this phase.
 
 ```rust
 /// Per-request identity data projected into key-value pairs for upstream injection.
 pub struct IdentityProjection {
     pub user_id: String,
     pub tenant_id: Option<String>,
-    pub roles: Vec<String>,
+    pub groups: Vec<String>,
     pub auth_provider: String,
     pub principal_fgrn: String,
     pub features: HashMap<String, serde_json::Value>,
 }
 
-fn inject_headers(projection: &IdentityProjection, headers: &mut http::HeaderMap) {
-    headers.insert("X-ForgeGate-User-Id", projection.user_id.parse().unwrap());
+fn inject_headers(
+    projection: &IdentityProjection,
+    client_ip: &str,
+    headers: &mut http::HeaderMap,
+) {
+    // Origin IP — injected on ALL requests (including public routes)
+    headers.insert("X-ForgeGuard-Client-Ip", client_ip.parse().unwrap());
+
+    // Identity headers — only injected on authenticated requests
+    headers.insert("X-ForgeGuard-User-Id", projection.user_id.parse().unwrap());
     if let Some(tenant) = &projection.tenant_id {
-        headers.insert("X-ForgeGate-Tenant-Id", tenant.parse().unwrap());
+        headers.insert("X-ForgeGuard-Tenant-Id", tenant.parse().unwrap());
     }
-    headers.insert("X-ForgeGate-Roles", projection.roles.join(",").parse().unwrap());
-    headers.insert("X-ForgeGate-Auth-Provider", projection.auth_provider.parse().unwrap());
-    headers.insert("X-ForgeGate-Principal", projection.principal_fgrn.parse().unwrap());
+    headers.insert("X-ForgeGuard-Groups", projection.groups.join(",").parse().unwrap());
+    headers.insert("X-ForgeGuard-Auth-Provider", projection.auth_provider.parse().unwrap());
+    headers.insert("X-ForgeGuard-Principal", projection.principal_fgrn.parse().unwrap());
     // features as JSON header
+}
+
+/// Inject only the origin IP header (for anonymous public routes, or opportunistic
+/// public routes where identity resolution failed or no credential was present).
+fn inject_client_ip(client_ip: &str, headers: &mut http::HeaderMap) {
+    headers.insert("X-ForgeGuard-Client-Ip", client_ip.parse().unwrap());
 }
 ```
 
-| Header | Source | Example |
-|--------|--------|---------|
-| `X-ForgeGate-User-Id` | `identity.user_id` | `user-abc123` |
-| `X-ForgeGate-Tenant-Id` | `identity.tenant_id` | `acme-corp` |
-| `X-ForgeGate-Roles` | `identity.roles` | `admin,member` |
-| `X-ForgeGate-Auth-Provider` | `identity.provider` | `cognito_jwt` |
-| `X-ForgeGate-Principal` | `identity.to_fgrn()` | `fgrn:acme-app:acme-corp:iam:user:user-abc123` |
-| `X-ForgeGate-Features` | `features` (JSON) | `{"Todo:AiSuggestions":true,"Todo:MaxUploadMb":100}` |
+The client IP is extracted from the connection's peer address (`session.client_addr()`). When the proxy itself sits behind a load balancer or CDN, it reads the standard `X-Forwarded-For` header instead (first untrusted hop). This is configurable:
+
+```toml
+[proxy]
+# How to determine the client's real IP.
+# "peer" (default) — use the TCP connection's peer address.
+# "x-forwarded-for" — use the leftmost IP in X-Forwarded-For (when behind a LB/CDN).
+# "cf-connecting-ip" — use Cloudflare's CF-Connecting-IP header.
+client_ip_source = "peer"
+```
+
+| Header                       | Source                              | Injected on                     | Example                                                 |
+| ---------------------------- | ----------------------------------- | ------------------------------- | ------------------------------------------------------- |
+| `X-ForgeGuard-Client-Ip`     | connection peer / `X-Forwarded-For` | All requests (including public) | `203.0.113.42`                                          |
+| `X-ForgeGuard-User-Id`       | `identity.user_id`                  | Authenticated only              | `user-abc123`                                           |
+| `X-ForgeGuard-Tenant-Id`     | `identity.tenant_id`                | Authenticated only              | `acme-corp`                                             |
+| `X-ForgeGuard-Groups`        | `identity.groups`                   | Authenticated only              | `admin,member`                                          |
+| `X-ForgeGuard-Auth-Provider` | `identity.provider`                 | Authenticated only              | `cognito_jwt`                                           |
+| `X-ForgeGuard-Principal`     | `identity.to_fgrn()`                | Authenticated only              | `fgrn:acme-app:acme-corp:iam:user:user-abc123`          |
+| `X-ForgeGuard-Features`      | `features` (JSON)                   | Authenticated only              | `{"todo:ai-suggestions":true,"todo:max-upload-mb":100}` |
 
 ### Acceptance Criteria
 
-**Config file format** (`forgegate.toml`):
+**Config file format** (`forgeguard.toml`):
 
 ```toml
 project_id = "acme-app"   # Used in FGRNs — every entity ID includes this
@@ -1747,6 +2313,14 @@ project_id = "acme-app"   # Used in FGRNs — every entity ID includes this
 listen = "0.0.0.0:8000"
 upstream = "http://127.0.0.1:3000"
 default_policy = "passthrough"   # "passthrough" or "deny" for unmatched routes
+# client_ip_source = "peer"      # "peer" (default), "x-forwarded-for", or "cf-connecting-ip"
+
+# ── Metrics ──
+# Prometheus metrics endpoint on a separate port. Disabled by default.
+# [metrics]
+# enabled = true
+# ip = "127.0.0.1"
+# port = 9090
 
 [auth]
 # No providers list needed. Sections present + enabled = providers active.
@@ -1764,29 +2338,29 @@ prefix = "sk-test-"
 [[auth.api_key.keys]]
 key = "sk-test-alice-admin"
 user_id = "alice"
-tenant_id = "acme-org"
-roles = ["admin"]
-description = "Alice — admin role, full access"
+tenant_id = "acme-corp"
+groups = ["admin", "top-secret-readers"]
+description = "Alice — admin + top-secret access"
 
 [[auth.api_key.keys]]
 key = "sk-test-bob-member"
 user_id = "bob"
-tenant_id = "acme-org"
-roles = ["member"]
-description = "Bob — member role, read + write items"
+tenant_id = "acme-corp"
+groups = ["member", "top-secret-readers"]
+description = "Bob — member + top-secret access"
 
 [[auth.api_key.keys]]
 key = "sk-test-charlie-viewer"
 user_id = "charlie"
-tenant_id = "acme-org"
-roles = ["viewer"]
-description = "Charlie — viewer role, read only"
+tenant_id = "acme-corp"
+groups = ["viewer"]
+description = "Charlie — viewer, no top-secret access"
 
 [[auth.api_key.keys]]
 key = "sk-test-eve-other-tenant"
 user_id = "eve"
 tenant_id = "globex-inc"
-roles = ["admin"]
+groups = ["admin"]
 description = "Eve — admin of a DIFFERENT tenant (for isolation tests)"
 
 # ── JWT Provider (Cognito) ──
@@ -1795,7 +2369,7 @@ jwks_url = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_abc123/.well-k
 issuer = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_abc123"
 audience = "your-app-client-id"
 tenant_claim = "custom:org_id"
-roles_claim = "cognito:groups"
+groups_claim = "cognito:groups"
 
 [authz]
 policy_store_id = "ps-abc123"
@@ -1803,36 +2377,111 @@ aws_region = "us-east-1"
 cache_ttl_seconds = 60
 cache_max_entries = 10000
 
+# ── Policies ──
+# Named permission bundles. Each statement is ALLOW or DENY.
+# Attached to groups below.
+
+[policies.todo-viewer]
+description = "Read-only access to TODO lists and items"
+[[policies.todo-viewer.statements]]
+effect = "allow"
+actions = ["todo:read:list", "todo:list:list", "todo:read:item"]
+
+[policies.todo-editor]
+description = "Create, update, delete TODO items and lists"
+[[policies.todo-editor.statements]]
+effect = "allow"
+actions = ["todo:create:list", "todo:create:item", "todo:update:item", "todo:delete:item", "todo:complete:item"]
+
+[policies.todo-admin]
+description = "Full access to all TODO resources"
+[[policies.todo-admin.statements]]
+effect = "allow"
+actions = ["todo:*:*"]
+
+[policies.top-secret-deny]
+description = "Block access to the top-secret list except for top-secret-readers"
+[[policies.top-secret-deny.statements]]
+effect = "deny"
+actions = ["todo:*:*"]
+resources = ["todo::list::top-secret"]
+except = ["top-secret-readers"]
+
+# ── Groups ──
+# Collections of users with policies attached. Groups can nest.
+
+[groups.admin]
+description = "Full access administrators"
+policies = ["todo-admin"]
+
+[groups.member]
+description = "Can read and write TODO items"
+policies = ["todo-viewer", "todo-editor"]
+
+[groups.viewer]
+description = "Read-only access"
+policies = ["todo-viewer"]
+
+[groups.top-secret-readers]
+description = "Can access the top-secret list"
+policies = ["todo-viewer"]
+
 # ── Feature Flags ──
 # Inline flag definitions. This is a permanent feature, not a stopgap.
 # Even with a control plane, inline flags are always evaluated.
 # Inline flags take precedence over remote flags (local override).
 
-[features.flags."Todo:AiSuggestions"]
+[features.flags."todo:ai-suggestions"]
 type = "boolean"
 default = false
 overrides = [
     { tenant = "acme-corp", value = true },
 ]
 
-[features.flags."Todo:CheckoutFlow"]
+[features.flags."todo:checkout-flow"]
 type = "string"
 default = "multi_step"
 overrides = [
     { tenant = "acme-corp", value = "single_page" },
 ]
 
-[features.flags."Todo:MaxUploadMb"]
+[features.flags."todo:max-upload-mb"]
 type = "number"
 default = 50
 overrides = [
     { tenant = "acme-corp", value = 100 },
 ]
 
-[features.flags."Todo:PremiumAi"]
+[features.flags."todo:premium-ai"]
 type = "boolean"
 default = false
 rollout_percentage = 25   # deterministic hash of (flag, tenant, user)
+
+# ── Public Routes ──
+# Matched BEFORE authentication. Never rejected (no 401/403).
+# Reuses the same path pattern syntax as auth routes ({param} captures).
+#
+# auth_mode (optional, default "anonymous"):
+#   "anonymous"     — skip auth entirely, no identity headers
+#   "opportunistic" — try auth if credentials present, inject identity headers
+#                     on success, proxy without them on failure. Never rejects.
+
+[[public_routes]]
+method = "GET"
+path = "/health"
+# auth_mode defaults to "anonymous" — no auth attempted
+
+[[public_routes]]
+method = "GET"
+path = "/docs/{page}"
+auth_mode = "opportunistic"
+# Docs work for everyone. Authenticated users see personalized UI
+# (bookmarks, edit buttons). Upstream checks X-ForgeGuard-User-Id presence.
+
+[[public_routes]]
+method = "ANY"
+path = "/webhooks/{provider}"
+# auth_mode defaults to "anonymous" — incoming webhooks have no user
 
 # ── Routes ──
 # Actions use three-part format: namespace:action:entity
@@ -1886,34 +2535,97 @@ feature_gate = "todo:ai-suggestions"
 **Config loader** (in the proxy binary):
 
 ```rust
+/// Load config from TOML file, validate, and return.
+/// This handles step 1 (config file) of the precedence chain.
+/// CLI flag / env var overrides are applied separately by the caller.
 pub fn load_config(path: &Path) -> Result<ProxyConfig> {
-    let content = std::fs::read_to_string(path)?;
-    let config: ProxyConfig = toml::from_str(&content)?;
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| Error::Config(format!("failed to read {}: {e}", path.display())))?;
+    let config: ProxyConfig = toml::from_str(&content)
+        .map_err(|e| Error::Config(format!("invalid TOML in {}: {e}", path.display())))?;
     config.validate()?;
     Ok(config)
 }
+
+/// Merge CLI/env overrides on top of the parsed config file.
+/// Follows the Binary CLI Convention precedence:
+///   CLI flags > env vars > config file > defaults
+///
+/// clap's `env` attribute means env vars are already merged into
+/// the RunOptions by the time we get here — so this function just
+/// applies any `Some` overrides from RunOptions onto the config.
+pub fn apply_overrides(config: &mut ProxyConfig, opts: &RunOptions) {
+    if let Some(listen) = &opts.listen {
+        config.listen_addr = *listen;
+    }
+    if let Some(upstream) = &opts.upstream {
+        config.upstream_url = upstream.clone();
+    }
+    if let Some(policy) = &opts.default_policy {
+        config.default_policy = policy.clone();
+    }
+    if let Some(store_id) = &opts.policy_store_id {
+        config.authz.policy_store_id = store_id.clone();
+    }
+    if let Some(region) = &opts.aws_region {
+        config.authz.aws_region = region.clone();
+    }
+}
 ```
 
-- Validation: no duplicate routes, all actions are three-part `Namespace:Action:Entity` (enforced by `QualifiedAction::Deserialize`), paths start with `/`
-- Validation: `feature_gate` references must match a defined flag name in `[features.flags.*]`
-- Validation: `rollout_percentage` must be 0..=100
+**Configuration precedence chain:**
+
+The proxy loads config in layers. `clap`'s `env` attribute on `RunOptions` fields means environment variables are automatically merged into the CLI options — if a CLI flag is absent, `clap` checks the env var before falling back to `None`. The flow is:
+
+1. Parse CLI args (including env var fallbacks) via `App::parse()`
+2. Load and validate `forgeguard.toml` via `load_config()`
+3. Apply `RunOptions` overrides via `apply_overrides()`
+
+This means a single field like `listen_addr` resolves as: `--listen` flag (if provided) → `FORGEGUARD_LISTEN` env var (if set) → `proxy.listen` in TOML → default `0.0.0.0:8000`.
+
+**Validation rules:**
+
+- No duplicate routes (same method + path pattern)
+- All actions are three-part `Namespace:Action:Entity` (enforced by `QualifiedAction::Deserialize`), paths start with `/`
+- `feature_gate` references must match a defined flag name in `[features.flags.*]`
+- `rollout_percentage` must be 0..=100
+- No duplicate public routes (same method + path pattern)
+- Public route path overlapping an auth route → startup **warning** (not error), public wins at runtime
+- Public route paths must start with `/`
+- `auth_mode` must be `"anonymous"` or `"opportunistic"` (or omitted for default `anonymous`)
 - Missing `resource_param` is allowed (for collection endpoints like `GET /lists`)
-- Environment variable overrides: `FORGEGATE_LISTEN`, `FORGEGATE_UPSTREAM`, `FORGEGATE_POLICY_STORE_ID`, etc.
-- Env vars override file values (12-factor style)
+- Missing `[[public_routes]]` section is valid (no public routes configured, `#[serde(default)]`)
 
 **Tests:**
-- Valid config parses correctly, including feature flags and feature-gated routes
+
+- Valid config parses correctly, including policies, groups, feature flags, feature-gated routes, anonymous public routes, and opportunistic public routes
 - Missing required fields → clear error message
 - Duplicate routes detected
+- Duplicate public routes detected
 - `feature_gate` referencing undefined flag → validation error
 - `rollout_percentage` > 100 → validation error
-- Env var overrides work
+- Policy with invalid action pattern → validation error
+- Policy referenced by group but not defined → validation error
+- Group referenced in `except` but not defined → validation error
+- Group with `member_groups` referencing undefined group → validation error
+- Circular group nesting detected → validation error
+- Empty `[policies]` section is valid (no policies configured)
+- Empty `[groups]` section is valid (no groups configured)
+- `apply_overrides` with `listen = Some(...)` overrides the TOML `proxy.listen` value
+- `apply_overrides` with all `None` fields leaves config unchanged
+- CLI flag `--listen` overrides `FORGEGUARD_LISTEN` env var (verified via clap precedence)
+- `FORGEGUARD_LISTEN` env var overrides TOML `proxy.listen` (verified via `apply_overrides`)
+- `load_config` error messages include the file path and parse location
 - Empty `[features]` section is valid (no flags configured)
-- Example `forgegate.toml` committed to `examples/todo-app/`
+- Empty or absent `[[public_routes]]` is valid (no public routes)
+- Public route with `method = "ANY"` matches all HTTP methods
+- Public route with `{param}` captures parses correctly (reuses `PathPattern`)
+- Overlapping public + auth route → parses with warning, no error
+- Example `forgeguard.toml` committed to `examples/todo-app/`
 
 ---
 
-## Issue #7: `forgegate_proxy` — Reverse proxy with auth enforcement (Pingora)
+## Issue #7: `forgeguard_proxy` — Reverse proxy with auth enforcement (Pingora)
 
 **Crate:** `crates/proxy/` (binary, Linux-only)
 **Labels:** `proxy`, `binary`, `layer-3`, `pingora`
@@ -1925,16 +2637,16 @@ pub fn load_config(path: &Path) -> Result<ProxyConfig> {
 The HTTP adapter. This is where all protocol-specific translation happens:
 
 - **Credential extraction:** `Authorization: Bearer <token>` → `Credential::Bearer(token)`. `X-API-Key: sk-...` → `Credential::ApiKey(key)`.
-- **Route matching:** `(GET, /lists/{id})` → `(action: Todo:Read:List, resource: list_123)` using `RouteMatcher`, `PathPattern`, and `HttpMethod`.
+- **Route matching:** `(GET, /lists/{id})` → `(action: todo:read:list, resource: list_123)` using `RouteMatcher`, `PathPattern`, and `HttpMethod`.
 - **Policy query construction:** combines the `Identity` from the resolver chain with the `(action, resource)` from route matching to build a `PolicyQuery` for the engine.
 - **Response translation:** `PolicyDecision::Deny` → `403 Forbidden`. `NoCredential` → `401 Unauthorized`. Feature gate disabled → `404 Not Found`.
-- **Header injection:** `IdentityProjection` → `X-ForgeGate-*` headers on the upstream request.
+- **Header injection:** `IdentityProjection` → `X-ForgeGuard-*` headers on the upstream request.
 
 The pure domain crates (`authn_core`, `authz_core`) know nothing about HTTP. A gRPC interceptor or WebSocket middleware would be a different adapter using the same `IdentityChain` and `PolicyEngine`.
 
-This crate handles all HTTP-to-domain translations: `http::HeaderMap` → `Credential` (authentication), `(Method, Path)` → `(QualifiedAction, ResourceRef)` (authorization), `Identity` → `X-ForgeGate-*` headers (upstream injection), and `PolicyDecision` → HTTP status codes (response).
+This crate handles all HTTP-to-domain translations: `http::HeaderMap` → `Credential` (authentication), `(Method, Path)` → `(QualifiedAction, ResourceRef)` (authorization), `Identity` → `X-ForgeGuard-*` headers (upstream injection), client IP → `X-ForgeGuard-Client-Ip` (on all requests including public), and `PolicyDecision` → HTTP status codes (response).
 
-Dependencies: `http`, `hyper`, `pingora`, `forgegate_core`, `forgegate_authn_core`, `forgegate_authz_core`, `forgegate_authn`, `forgegate_authz`.
+Dependencies: `http`, `hyper`, `pingora`, `forgeguard_core`, `forgeguard_authn_core`, `forgeguard_authz_core`, `forgeguard_authn`, `forgeguard_authz`.
 
 Built on Cloudflare's Pingora framework (`pingora 0.8`, `pingora-proxy 0.8`). Pingora gives us connection pooling to upstream, HTTP/1.1 + HTTP/2 + gRPC + WebSocket proxying, zero-downtime graceful restarts, and a work-stealing async scheduler — all battle-tested at 40M+ requests/second at Cloudflare.
 
@@ -1949,27 +2661,42 @@ Client → Proxy(:8000)
   │
   ├─ request_filter (Pingora phase)
   │   │
-  │   ├─ 1. Extract Credential from HTTP headers
+  │   ├─ 0. Health check (/.well-known/forgeguard/health)
+  │   │     └─ Match? → 200 JSON, return Ok(true)
+  │   │
+  │   ├─ 1. Match public routes (PublicRouteMatcher::check)
+  │   │     └─ Anonymous?      → return Ok(false) — skip auth, proxy directly
+  │   │        No X-ForgeGuard-* identity headers. No credential needed.
+  │   │        Logged with user="-", action="-", public=true.
+  │   │     └─ Opportunistic?  → try extract credential
+  │   │        └─ No credential?      → return Ok(false), no identity headers
+  │   │        └─ Credential found?   → try IdentityChain.resolve()
+  │   │           └─ Resolved?        → store Identity in CTX (headers injected later)
+  │   │           └─ Failed?          → ignore error, return Ok(false), no identity headers
+  │   │        Never returns 401/403. Always proxied.
+  │   │        Logged with user=<id|"-">, action="-", public=true, opportunistic=true.
+  │   │
+  │   ├─ 2. Extract Credential from HTTP headers
   │   │     Authorization: Bearer <token> → Credential::Bearer(token)
   │   │     X-API-Key: sk-... → Credential::ApiKey(key)
   │   │     └─ No recognized header? → 401, return Ok(true)
   │   │
-  │   ├─ 2. IdentityChain.resolve(credential)   [domain — no HTTP]
+  │   ├─ 3. IdentityChain.resolve(credential)   [domain — no HTTP]
   │   │     First resolver that can_resolve() owns the outcome.
   │   │     └─ Resolver failed? → 401, return Ok(true)
   │   │     └─ Resolved? → Identity stored in CTX
   │   │
-  │   ├─ 3. Evaluate feature flags (pure, no I/O)
+  │   ├─ 4. Evaluate feature flags (pure, no I/O)
   │   │     evaluate_flags(config, tenant_id, user_id) → ResolvedFlags
   │   │
-  │   ├─ 4. Match route (RouteMatcher)
+  │   ├─ 5. Match auth route (RouteMatcher)
   │   │     (method, path) → (action, resource)
   │   │     └─ No match? → depends on default_policy (passthrough or deny)
   │   │
-  │   ├─ 5. Check feature gate (if route has feature_gate)
+  │   ├─ 6. Check feature gate (if route has feature_gate)
   │   │     └─ Flag disabled? → 404, return Ok(true)
   │   │
-  │   └─ 6. Build PolicyQuery + call PolicyEngine.evaluate()  [domain — no HTTP]
+  │   └─ 7. Build PolicyQuery + call PolicyEngine.evaluate()  [domain — no HTTP]
   │         └─ PolicyDecision::Deny → 403, return Ok(true)
   │         └─ PolicyDecision::Allow → return Ok(false) [continue to upstream]
   │
@@ -1977,17 +2704,23 @@ Client → Proxy(:8000)
   │   └─ Return HttpPeer pointing to configured upstream
   │
   ├─ upstream_request_filter (Pingora phase)
-  │   └─ Build IdentityProjection from Identity
-  │   └─ Inject as HTTP headers:
-  │      X-ForgeGate-User-Id: user-abc123
-  │      X-ForgeGate-Tenant-Id: acme-corp
-  │      X-ForgeGate-Roles: admin,member
-  │      X-ForgeGate-Auth-Provider: static_api_key
-  │      X-ForgeGate-Principal: fgrn:acme-app:acme-corp:iam:user:user-abc123
-  │      X-ForgeGate-Features: {"Todo:AiSuggestions":true,"Todo:MaxUploadMb":100}
+  │   └─ Always inject origin IP:
+  │      X-ForgeGuard-Client-Ip: 203.0.113.42
+  │   └─ If identity present: Build IdentityProjection from Identity
+  │   └─ Inject identity + feature headers (authenticated requests only):
+  │      X-ForgeGuard-User-Id: user-abc123
+  │      X-ForgeGuard-Tenant-Id: acme-corp
+  │      X-ForgeGuard-Groups: admin,member
+  │      X-ForgeGuard-Auth-Provider: static_api_key
+  │      X-ForgeGuard-Principal: fgrn:acme-app:acme-corp:iam:user:user-abc123
+  │      X-ForgeGuard-Features: {"todo:ai-suggestions":true,"todo:max-upload-mb":100}
+  │   └─ Anonymous public routes: only X-ForgeGuard-Client-Ip, no identity headers
+  │   └─ Opportunistic public routes: X-ForgeGuard-Client-Ip always; identity headers if resolved
   │
   └─ logging (Pingora phase)
       └─ Structured tracing with status, user, action, latency
+         Anonymous public routes logged with user="-", action="-", public=true
+         Opportunistic public routes logged with user=<id|"-">, action="-", public=true, opportunistic=true
 ```
 
 Note: `request_filter` returning `Ok(true)` means "I already sent a response, don't proxy." This is Pingora's mechanism for short-circuiting — perfect for 401/403/404 rejections.
@@ -2010,19 +2743,21 @@ pub struct RequestCtx {
     pub path: String,
 }
 
-/// The ForgeGate proxy — implements Pingora's ProxyHttp trait.
+/// The ForgeGuard proxy — implements Pingora's ProxyHttp trait.
 /// This is the HTTP adapter: it translates between HTTP and the policy domain.
-pub struct ForgeGateProxy {
+pub struct ForgeGuardProxy {
     identity_chain: IdentityChain,        // domain: Credential → Identity
     policy_engine: Arc<dyn PolicyEngine>,  // domain: PolicyQuery → PolicyDecision
     route_matcher: RouteMatcher,           // adapter: (method, path) → (action, resource)
+    public_matcher: PublicRouteMatcher,    // adapter: public routes bypass auth
     flag_config: FlagConfig,
     upstream: HttpPeer,
     default_policy: DefaultPolicy,
+    client_ip_source: ClientIpSource,
 }
 
 #[async_trait]
-impl ProxyHttp for ForgeGateProxy {
+impl ProxyHttp for ForgeGuardProxy {
     type CTX = RequestCtx;
 
     fn new_ctx(&self) -> Self::CTX {
@@ -2053,6 +2788,63 @@ impl ProxyHttp for ForgeGateProxy {
             let body = self.health_check_json();
             session.respond_json(200, &body).await?;
             return Ok(true);
+        }
+
+        // ── ADAPTER: Match public routes — never reject ──
+        match self.public_matcher.check(&req.method, &ctx.path) {
+            PublicMatch::Anonymous => {
+                tracing::info!(
+                    method = %ctx.method,
+                    path = %ctx.path,
+                    public = true,
+                    "public route (anonymous) — skipping auth pipeline"
+                );
+                return Ok(false);
+            }
+            PublicMatch::Opportunistic => {
+                // Try to resolve identity, but never reject.
+                // Reuses the same credential extraction + identity resolution
+                // as the protected pipeline, but errors are swallowed.
+                if let Some(credential) = extract_credential(&req.headers) {
+                    match self.identity_chain.resolve(&credential).await {
+                        Ok(identity) => {
+                            tracing::info!(
+                                method = %ctx.method,
+                                path = %ctx.path,
+                                user = %identity.user_id,
+                                public = true,
+                                opportunistic = true,
+                                "public route (opportunistic) — identity resolved"
+                            );
+                            ctx.identity = Some(identity);
+                        }
+                        Err(e) => {
+                            tracing::debug!(
+                                method = %ctx.method,
+                                path = %ctx.path,
+                                error = %e,
+                                public = true,
+                                opportunistic = true,
+                                "public route (opportunistic) — identity resolution failed, continuing anonymous"
+                            );
+                        }
+                    }
+                } else {
+                    tracing::info!(
+                        method = %ctx.method,
+                        path = %ctx.path,
+                        public = true,
+                        opportunistic = true,
+                        "public route (opportunistic) — no credential, continuing anonymous"
+                    );
+                }
+                // Always proxy — identity headers injected in upstream_request_filter
+                // only if ctx.identity is Some.
+                return Ok(false);
+            }
+            PublicMatch::NotPublic => {
+                // Fall through to the protected auth pipeline below.
+            }
         }
 
         // ── ADAPTER: Extract Credential from HTTP headers ──
@@ -2140,20 +2932,26 @@ impl ProxyHttp for ForgeGateProxy {
         Ok(Box::new(self.upstream.clone()))
     }
 
-    /// Phase 3: Inject identity + feature flag headers before sending to upstream.
-    /// IdentityProjection → HTTP headers.
+    /// Phase 3: Inject identity + feature flag + client IP headers before sending to upstream.
+    /// Client IP is injected on ALL requests (including public routes).
+    /// Identity and feature headers are only injected on authenticated requests.
     async fn upstream_request_filter(
         &self,
-        _session: &mut Session,
+        session: &mut Session,
         upstream_request: &mut RequestHeader,
         ctx: &mut Self::CTX,
     ) -> Result<()> {
+        // ADAPTER: Always inject client IP (including public routes)
+        let client_ip = resolve_client_ip(session, &self.client_ip_source);
+        inject_client_ip(&client_ip, &mut upstream_request.headers);
+
+        // ADAPTER: Inject identity + feature headers (authenticated requests only)
         if let Some(ref identity) = ctx.identity {
             // DOMAIN: Build projection (pure data transformation)
             let projection = IdentityProjection::from_identity(identity);
 
             // ADAPTER: Inject into HTTP headers
-            inject_headers(&projection, &mut upstream_request.headers);
+            inject_headers(&projection, &client_ip, &mut upstream_request.headers);
         }
         if let Some(ref flags) = ctx.flags {
             inject_feature_headers(flags, &mut upstream_request.headers);
@@ -2185,62 +2983,260 @@ impl ProxyHttp for ForgeGateProxy {
     }
 }
 
-fn main() {
-    // Pingora server setup
-    let mut server = Server::new(None).unwrap();
+// ── CLI definition (follows Binary CLI Convention) ──
+
+use clap::Parser;
+
+#[derive(Debug, Parser)]
+#[command(
+    name = "forgeguard-proxy",
+    version,
+    about = "ForgeGuard auth-enforcing reverse proxy (Pingora)"
+)]
+pub(crate) struct App {
+    #[command(subcommand)]
+    pub command: Commands,
+    #[clap(flatten)]
+    pub global: Global,
+}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct Global {
+    /// Enable verbose logging (debug level)
+    #[clap(long, short, env = "FORGEGUARD_VERBOSE", global = true)]
+    pub verbose: bool,
+}
+
+#[derive(Debug, clap::Subcommand)]
+pub(crate) enum Commands {
+    /// Start the proxy server
+    Run(RunOptions),
+    /// Validate configuration and exit
+    Check(CheckOptions),
+    /// Print the fully-resolved configuration (after env/CLI overrides)
+    Config(ConfigOptions),
+    /// Print the resolved route table
+    Routes(RoutesOptions),
+}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct RunOptions {
+    /// Path to configuration file
+    #[clap(short, long, default_value = "forgeguard.toml", env = "forgeguard_CONFIG")]
+    pub config: PathBuf,
+
+    /// Listen address (overrides config file)
+    #[clap(long, env = "FORGEGUARD_LISTEN")]
+    pub listen: Option<SocketAddr>,
+
+    /// Upstream URL (overrides config file)
+    #[clap(long, env = "forgeguard_UPSTREAM")]
+    pub upstream: Option<Url>,
+
+    /// Default policy for unmatched routes: "passthrough" or "deny"
+    #[clap(long, env = "forgeguard_DEFAULT_POLICY")]
+    pub default_policy: Option<DefaultPolicy>,
+
+    /// Verified Permissions policy store ID (overrides config file)
+    #[clap(long, env = "forgeguard_POLICY_STORE_ID")]
+    pub policy_store_id: Option<String>,
+
+    /// AWS region (overrides config file)
+    #[clap(long, env = "forgeguard_AWS_REGION")]
+    pub aws_region: Option<String>,
+}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct CheckOptions {
+    /// Path to configuration file
+    #[clap(short, long, default_value = "forgeguard.toml", env = "forgeguard_CONFIG")]
+    pub config: PathBuf,
+}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct ConfigOptions {
+    /// Path to configuration file
+    #[clap(short, long, default_value = "forgeguard.toml", env = "forgeguard_CONFIG")]
+    pub config: PathBuf,
+
+    /// Output format
+    #[clap(long, default_value = "toml")]
+    pub format: OutputFormat,
+}
+
+#[derive(Debug, Clone, clap::ValueEnum)]
+pub(crate) enum OutputFormat {
+    Toml,
+    Json,
+}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct RoutesOptions {
+    /// Path to configuration file
+    #[clap(short, long, default_value = "forgeguard.toml", env = "forgeguard_CONFIG")]
+    pub config: PathBuf,
+}
+
+// ── Subcommand implementations ──
+
+/// `forgeguard-proxy check` — validate config and exit.
+/// Fast feedback loop, especially useful on macOS where the proxy
+/// itself only runs via Docker (Pingora is Linux-only).
+fn cmd_check(opts: CheckOptions) -> color_eyre::Result<()> {
+    let config = load_config(&opts.config)?;
+    let route_count = config.routes.len();
+    let public_count = config.public_routes.len();
+    let flag_count = config.features.flags.len();
+    eprintln!(
+        "✓ {} is valid ({} routes, {} public routes, {} flags)",
+        opts.config.display(), route_count, public_count, flag_count,
+    );
+    Ok(())
+}
+
+/// `forgeguard-proxy config` — dump fully-resolved config.
+/// Useful for debugging: "what does the proxy actually see after
+/// TOML + env vars + CLI flags are merged?"
+fn cmd_config(opts: ConfigOptions, run_opts: Option<&RunOptions>) -> color_eyre::Result<()> {
+    let mut config = load_config(&opts.config)?;
+    if let Some(run) = run_opts {
+        apply_overrides(&mut config, run);
+    }
+    match opts.format {
+        OutputFormat::Toml => println!("{}", toml::to_string_pretty(&config)?),
+        OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&config)?),
+    }
+    Ok(())
+}
+
+/// `forgeguard-proxy routes` — print the resolved route table.
+/// Shows auth routes, public routes, feature gates, and actions
+/// in a human-readable table.
+fn cmd_routes(opts: RoutesOptions) -> color_eyre::Result<()> {
+    let config = load_config(&opts.config)?;
+
+    if !config.public_routes.is_empty() {
+        eprintln!("Public routes (no auth):");
+        for r in &config.public_routes {
+            eprintln!(
+                "  {:6} {:<40} auth_mode={}",
+                r.method, r.path_pattern, r.auth_mode,
+            );
+        }
+        eprintln!();
+    }
+
+    eprintln!("Auth routes:");
+    for r in &config.routes {
+        let gate = r.feature_gate.as_ref()
+            .map(|g| format!(" [gate: {}]", g))
+            .unwrap_or_default();
+        eprintln!(
+            "  {:6} {:<40} → {:<30} resource_param={:<12}{}",
+            r.method,
+            r.path_pattern,
+            r.action,
+            r.resource_param.as_deref().unwrap_or("-"),
+            gate,
+        );
+    }
+    Ok(())
+}
+
+/// `forgeguard-proxy run` — start the proxy server.
+fn cmd_run(opts: RunOptions, global: Global) -> color_eyre::Result<()> {
+    let mut config = load_config(&opts.config)?;
+    apply_overrides(&mut config, &opts);
+
+    let mut server = Server::new(None)?;
     server.bootstrap();
 
-    let config = load_config(&args.config_path).unwrap();
-    let identity_chain = build_identity_chain(&config.auth).unwrap();
+    let identity_chain = build_identity_chain(&config.auth)?;
     let policy_engine: Arc<dyn PolicyEngine> = Arc::new(
-        VpPolicyEngine::new(&config.authz).unwrap()
+        VpPolicyEngine::new(&config.authz)?
     );
     let route_matcher = RouteMatcher::from_mappings(config.routes.clone());
+    let public_matcher = PublicRouteMatcher::from_routes(config.public_routes.clone());
     let flag_config = FlagConfig { flags: config.features.flags.clone() };
 
     let upstream = HttpPeer::new(
-        config.proxy.upstream.as_str(),
+        config.upstream_url.as_str(),
         false,  // no TLS to upstream (local dev)
         String::new(),
     );
 
-    let proxy = ForgeGateProxy {
+    let proxy = ForgeGuardProxy {
         identity_chain,
         policy_engine,
         route_matcher,
+        public_matcher,
         flag_config,
         upstream,
-        default_policy: config.proxy.default_policy,
+        default_policy: config.default_policy,
+        client_ip_source: config.client_ip_source,
     };
 
     let mut proxy_service = http_proxy_service(&server.configuration, proxy);
-    proxy_service.add_tcp(&config.proxy.listen);
+    proxy_service.add_tcp(&config.listen_addr.to_string());
 
-    // Optional: Prometheus metrics on a separate port
-    let mut prometheus = Service::prometheus_http_service();
-    prometheus.add_tcp("127.0.0.1:9090");
+    // Prometheus metrics — only when opted in via [metrics] config
+    if config.metrics.enabled {
+        let mut prometheus = Service::prometheus_http_service();
+        let addr = format!("{}:{}", config.metrics.ip, config.metrics.port);
+        prometheus.add_tcp(&addr);
+        server.add_service(prometheus);
+        tracing::info!(metrics_listen = %addr, "Prometheus metrics enabled");
+    }
 
     server.add_service(proxy_service);
-    server.add_service(prometheus);
 
     tracing::info!(
-        listen = %config.proxy.listen,
-        upstream = %config.proxy.upstream,
+        listen = %config.listen_addr,
+        upstream = %config.upstream_url,
         routes = config.routes.len(),
+        public_routes = config.public_routes.len(),
         flags = flag_config.flags.len(),
-        "ForgeGate proxy started (Pingora)"
+        "ForgeGuard proxy started (Pingora)"
     );
 
     server.run_forever();
 }
+
+fn main() -> color_eyre::Result<()> {
+    color_eyre::install()?;
+    let app = App::parse();
+    init_tracing(app.global.verbose);
+
+    match app.command {
+        Commands::Run(opts) => cmd_run(opts, app.global),
+        Commands::Check(opts) => cmd_check(opts),
+        Commands::Config(opts) => cmd_config(opts, None),
+        Commands::Routes(opts) => cmd_routes(opts),
+    }
+}
+
+/// Initialize tracing-subscriber with level from --verbose flag or RUST_LOG env.
+fn init_tracing(verbose: bool) {
+    use tracing_subscriber::EnvFilter;
+    let filter = if verbose {
+        EnvFilter::new("debug,forgeguard=trace")
+    } else {
+        EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| EnvFilter::new("info,forgeguard=debug"))
+    };
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .init();
+}
 ```
 
 **What Pingora gives us for free:**
+
 - Connection pooling to upstream (reuses connections)
 - HTTP/1.1 + HTTP/2 end-to-end, gRPC, WebSocket proxying
 - Zero-downtime graceful restarts (`SIGQUIT` → drain connections → replace binary)
 - Work-stealing async scheduler
-- Built-in Prometheus metrics endpoint (on separate port)
+- Built-in Prometheus metrics endpoint (on separate port, opt-in via `[metrics]` config)
 - Rate limiting via `pingora-limits` (future use)
 - `request_filter` returning `true` short-circuits without touching upstream
 
@@ -2254,7 +3250,8 @@ fn main() {
   "jwks_cached": true,
   "authz_cache_entries": 42,
   "authz_cache_hit_rate": 0.87,
-  "feature_flags": 4
+  "feature_flags": 4,
+  "public_routes": 3
 }
 ```
 
@@ -2269,29 +3266,32 @@ fn main() {
 **Structured logging:**
 
 ```
-INFO  forgegate_proxy: started listen=0.0.0.0:8000 upstream=http://127.0.0.1:3000 routes=12 flags=4 runtime=pingora
-INFO  forgegate_proxy: request method=GET path=/lists status=200 user=user-abc123 tenant=acme-corp action=Todo:Read:List provider=CognitoJwt latency_ms=4
-INFO  forgegate_proxy: request method=GET path=/lists/abc/suggestions status=200 user=user-abc123 tenant=acme-corp action=Todo:Read:List provider=CognitoJwt gate=Todo:AiSuggestions latency_ms=6
-WARN  forgegate_proxy: request method=GET path=/lists/abc/suggestions status=404 user=user_xyz789 tenant=tenant_other gate=Todo:AiSuggestions latency_ms=1
-WARN  forgegate_proxy: request method=POST path=/lists status=403 user=user_xyz789 tenant=acme-corp action=Todo:Create:List provider=CognitoJwt latency_ms=3
-WARN  forgegate_proxy: request method=GET path=/lists status=401 user=- error="token expired" latency_ms=2
-ERROR forgegate_proxy: request method=GET path=/lists status=502 error="connection refused" latency_ms=1
+INFO  forgeguard_proxy: started listen=0.0.0.0:8000 upstream=http://127.0.0.1:3000 routes=12 public_routes=3 flags=4 runtime=pingora
+INFO  forgeguard_proxy: request method=GET path=/lists status=200 user=user-abc123 tenant=acme-corp action=todo:read:list provider=CognitoJwt latency_ms=4
+INFO  forgeguard_proxy: request method=GET path=/health status=200 user=- action=- public=true latency_ms=1
+INFO  forgeguard_proxy: request method=GET path=/docs/getting-started status=200 user=user-abc123 action=- public=true opportunistic=true latency_ms=3
+INFO  forgeguard_proxy: request method=GET path=/docs/getting-started status=200 user=- action=- public=true opportunistic=true latency_ms=2
+INFO  forgeguard_proxy: request method=GET path=/lists/abc/suggestions status=200 user=user-abc123 tenant=acme-corp action=todo:read:list provider=CognitoJwt gate=todo:ai-suggestions latency_ms=6
+WARN  forgeguard_proxy: request method=GET path=/lists/abc/suggestions status=404 user=user_xyz789 tenant=tenant_other gate=todo:ai-suggestions latency_ms=1
+WARN  forgeguard_proxy: request method=POST path=/lists status=403 user=user_xyz789 tenant=acme-corp action=todo:create:list provider=CognitoJwt latency_ms=3
+WARN  forgeguard_proxy: request method=GET path=/lists status=401 user=- error="token expired" latency_ms=2
+ERROR forgeguard_proxy: request method=GET path=/lists status=502 error="connection refused" latency_ms=1
 ```
 
 **Docker for local dev on macOS:**
 
 ```dockerfile
 # Dockerfile.proxy (in crates/proxy/)
-FROM rust:1.84-slim AS builder
+FROM rust:1.91-slim AS builder
 RUN apt-get update && apt-get install -y cmake clang libssl-dev pkg-config
 WORKDIR /app
 COPY . .
-RUN cargo build --release -p forgegate_proxy
+RUN cargo build --release -p forgeguard_proxy
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /app/target/release/forgegate_proxy /usr/local/bin/
-ENTRYPOINT ["forgegate_proxy"]
+COPY --from=builder /app/target/release/forgeguard_proxy /usr/local/bin/
+ENTRYPOINT ["forgeguard_proxy"]
 ```
 
 ```yaml
@@ -2303,32 +3303,34 @@ services:
       dockerfile: crates/proxy/Dockerfile.proxy
     ports:
       - "8000:8000"
-      - "9090:9090"   # Prometheus metrics
+      - "9090:9090" # Prometheus metrics (requires [metrics] enabled = true)
     volumes:
-      - ./forgegate.toml:/etc/forgegate/forgegate.toml:ro
-    command: ["--config", "/etc/forgegate/forgegate.toml"]
+      - ./forgeguard.toml:/etc/forgeguard/forgeguard.toml:ro
+    command: ["run", "--config", "/etc/forgeguard/forgeguard.toml"]
     environment:
       - AWS_REGION=us-east-1
       - AWS_ACCESS_KEY_ID
       - AWS_SECRET_ACCESS_KEY
-      - RUST_LOG=info,forgegate=debug
+      - RUST_LOG=info,forgeguard=debug
 ```
 
 **Dependencies for `crates/proxy/Cargo.toml`:**
 
 ```toml
 [dependencies]
-forgegate_core = { path = "../core" }
-forgegate_authn_core = { path = "../authn-core" }
-forgegate_authn = { path = "../authn" }
-forgegate_authz_core = { path = "../authz-core" }
-forgegate_authz = { path = "../authz" }
+FORGEGUARD_core = { path = "../core" }
+FORGEGUARD_authn_core = { path = "../authn-core" }
+FORGEGUARD_authn = { path = "../authn" }
+FORGEGUARD_authz_core = { path = "../authz-core" }
+FORGEGUARD_authz = { path = "../authz" }
 
 pingora = { version = "0.8", features = ["proxy"] }
 pingora-core = "0.8"
 pingora-proxy = "0.8"
 pingora-http = "0.8"
 async-trait = "0.1"
+clap = { workspace = true }
+toml = { workspace = true }
 
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -2340,8 +3342,9 @@ color-eyre = { workspace = true }
 Pingora owns the HTTP layer entirely — no separate HTTP client or tower middleware needed.
 
 **Tests:**
-- Unit tests for the `ForgeGateProxy` with mocked `IdentityChain` and mocked `PolicyEngine` — Pingora provides `Session` test utilities
-- Valid credential + allowed action → upstream receives request with all 6 injected headers (`User-Id`, `Tenant-Id`, `Roles`, `Auth-Provider`, `Principal` FGRN, `Features` JSON)
+
+- Unit tests for the `ForgeGuardProxy` with mocked `IdentityChain` and mocked `PolicyEngine` — Pingora provides `Session` test utilities
+- Valid credential + allowed action → upstream receives request with all 7 injected headers (`Client-Ip`, `User-Id`, `Tenant-Id`, `Groups`, `Auth-Provider`, `Principal` FGRN, `Features` JSON)
 - Valid credential + denied action → 403 JSON response
 - No credential extracted by any provider → 401
 - Provider extracts but fails to resolve (expired token) → 401 (chain stops)
@@ -2349,10 +3352,45 @@ Pingora owns the HTTP layer entirely — no separate HTTP client or tower middle
 - Unmatched route + `default_policy = "deny"` → 403
 - Feature-gated route + flag enabled → 200 (proceeds to authz)
 - Feature-gated route + flag disabled → 404 (never reaches authz)
-- Non-gated route still has `X-ForgeGate-Features` header with all resolved flags
+- Non-gated route still has `X-ForgeGuard-Features` header with all resolved flags
 - Health check at `/.well-known/forgeguard/health` returns 200 before auth (no token needed)
-- Prometheus metrics endpoint on separate port
+- Anonymous public route + no credential → proxied to upstream (200), only `X-ForgeGuard-Client-Ip` header (no identity headers)
+- Anonymous public route + valid credential → proxied to upstream (200), credential ignored, only `X-ForgeGuard-Client-Ip` header
+- Opportunistic public route + no credential → proxied to upstream (200), only `X-ForgeGuard-Client-Ip` header (no identity headers)
+- Opportunistic public route + valid credential → proxied to upstream (200), all `X-ForgeGuard-*` identity headers injected
+- Opportunistic public route + expired/invalid credential → proxied to upstream (200), no identity headers (resolution failure swallowed, NOT 401)
+- Non-public route + no credential → 401 (unchanged — public routes don't affect non-public routes)
+- `X-ForgeGuard-Client-Ip` is present on all proxied requests (authenticated, anonymous public, and opportunistic public)
+- Public route + `default_policy = "deny"` → still proxied (public overrides default policy)
+- Public route with `{param}` pattern matches correctly
+- Public route with `method = "ANY"` matches GET, POST, PUT, DELETE, PATCH
+- Path matching both public and auth route → public wins, auth pipeline never runs
+- Anonymous public route logged with `user="-"`, `action="-"`, `public=true`
+- Opportunistic public route + identity resolved → logged with `user=<id>`, `action="-"`, `public=true`, `opportunistic=true`
+- Opportunistic public route + no identity → logged with `user="-"`, `action="-"`, `public=true`, `opportunistic=true`
+- Config with `auth_mode = "opportunistic"` parses correctly
+- Config with no `auth_mode` defaults to anonymous (backward compatible)
+- Prometheus metrics endpoint on separate port, controlled by `[metrics]` config (disabled by default)
 - Docker build succeeds and proxy starts in container
+
+CLI subcommands:
+
+- `forgeguard-proxy run --config forgeguard.toml` starts the proxy
+- `forgeguard-proxy run --config forgeguard.toml --listen 0.0.0.0:9000` overrides the listen address
+- `forgeguard-proxy run` with `FORGEGUARD_LISTEN=0.0.0.0:9000` env var overrides the listen address
+- CLI flag `--listen` takes precedence over `FORGEGUARD_LISTEN` env var
+- `forgeguard-proxy check --config forgeguard.toml` validates config and exits 0 on success
+- `forgeguard-proxy check --config bad.toml` exits non-zero with a clear error message
+- `forgeguard-proxy config --config forgeguard.toml` prints the fully-resolved config as TOML
+- `forgeguard-proxy config --config forgeguard.toml --format json` prints as JSON
+- `forgeguard-proxy routes --config forgeguard.toml` prints the route table (public + auth)
+- `forgeguard-proxy --help` prints usage with all subcommands
+- `forgeguard-proxy run --help` prints run-specific options with env var hints
+- `forgeguard-proxy --version` prints version
+- `forgeguard-proxy -v run --config forgeguard.toml` enables verbose/debug logging
+- `FORGEGUARD_VERBOSE=true forgeguard-proxy run` enables verbose logging via env var
+- No subcommand → clap prints help and exits non-zero (no implicit `run`)
+- `main()` returns `color_eyre::Result<()>` — no `.unwrap()` calls anywhere in the binary
 
 ---
 
@@ -2366,17 +3404,10 @@ Pingora owns the HTTP layer entirely — no separate HTTP client or tower middle
 
 Provision the minimal Cognito infrastructure needed to issue real JWTs for development and testing. This is intentionally scoped to identity only — no Verified Permissions, no Cedar, no authorization. It unblocks Issue #4's integration tests and lets developers get real tokens flowing through the proxy early.
 
-**Why real Cognito, not LocalStack:**
-
-- LocalStack's Cognito support requires a Pro license (paid)
-- Verified Permissions isn't supported by LocalStack at all, so we'd need real AWS anyway for #5
-- Two infrastructure paths (LocalStack + real AWS) doubles the maintenance surface
-- Unit tests in #4 already work without any infrastructure (self-signed JWTs with in-process JWKS)
-- The only thing that needs real Cognito is integration tests and the e2e demo
-
 ### Acceptance Criteria
 
 **Cognito User Pool:**
+
 - Email-based sign-up
 - App client with SRP auth enabled
 - Custom attribute: `org_id` (string)
@@ -2384,24 +3415,32 @@ Provision the minimal Cognito infrastructure needed to issue real JWTs for devel
 
 **Two test tenants with users:**
 
-Tenant `acme-org`:
+Tenant `acme-corp`:
+
 - `alice` — `admin` group, `custom:org_id = "acme-corp"`
 - `bob` — `member` group, `custom:org_id = "acme-corp"`
 - `charlie` — `viewer` group, `custom:org_id = "acme-corp"`
 
 Tenant `initech`:
+
 - `dave` — `admin` group, `custom:org_id = "tenant_initech"`
 - `eve` — `member` group, `custom:org_id = "tenant_initech"`
 
 Two tenants are required to test tenant isolation and feature flag scoping later.
 
 **Delivery format:**
-- CDK stack in `infra/dev/cognito/`
+
+- CDK stack in `infra/dev/cognito/` — reads all inputs from `infra/dev/.env` (see Infrastructure Configuration Convention)
+- `infra/dev/.env.example` committed to git with sensible defaults (creates or extends if already present)
+- `infra/dev/.env` added to `.gitignore`
 - A `README.md` with manual setup instructions as fallback
 - Script to create test users: `xtask dev-setup --cognito`
+  - On first run: copies `.env.example` → `.env` if missing, prompts for account-specific values
+  - After deploy: writes Cognito outputs (`COGNITO_USER_POOL_ID`, `COGNITO_APP_CLIENT_ID`, `COGNITO_JWKS_URL`, `COGNITO_ISSUER`) back to `.env` and to `forgeguard.dev.toml`
 
 **Output:**
-- Populated values in `forgegate.dev.toml` (JWKS URL, issuer, app client ID)
+
+- Populated values in both `infra/dev/.env` (for downstream CDK stacks) and `forgeguard.dev.toml` (for the Rust binary)
 - A helper command to get a test JWT: `xtask dev-token --user alice`
 - A helper to list all test users and their tenants: `xtask dev-users`
 
@@ -2430,11 +3469,12 @@ This is everything Issue #4 needs for its integration tests. Verified Permission
 
 Provision the Verified Permissions policy store with the Cedar schema and policies for the TODO app example. This is the authorization infrastructure — separated from Cognito (#8a) so that identity and authorization can be developed and tested independently.
 
-Cedar actions use the three-part `Namespace:Action:Entity` format (e.g., `Todo:Read:List`, `Todo:Complete:Item`). Policies reference these actions directly.
+Cedar actions use the three-part `Namespace:Action:Entity` format (e.g., `todo:read:list`, `todo:complete:item`). Policies reference these actions directly.
 
 ### Acceptance Criteria
 
 **Verified Permissions Policy Store:**
+
 - Cedar schema using `Iam` for principals and `Todo` namespace for resources.
   Entity IDs are FGRNs — the same string that appears in headers, logs, and API responses:
 
@@ -2462,15 +3502,14 @@ namespace Todo {
 }
 ```
 
-Note: Cedar action IDs are `Action+Entity` concatenated (e.g., `"read-list"`, `"complete-item"`) — this is the output of `QualifiedAction::vp_action_id()`. The three-part `Namespace:Action:Entity` format is ForgeGate's canonical format; Cedar sees the concatenated form.
+Note: Cedar action IDs are `Action+Entity` concatenated (e.g., `"read-list"`, `"complete-item"`) — this is the output of `QualifiedAction::vp_action_id()`. The three-part `Namespace:Action:Entity` format is ForgeGuard's canonical format; Cedar sees the concatenated form.
 
-- Cedar policies matching the TODO app role matrix:
-  - `viewer`: `read-list`, `list-list`, `read-item`
-  - `member`: viewer permissions + `create-list`, `create-item`, `update-item`, `delete-item`, `complete-item`
-  - `admin`: all actions
+- Cedar policies compiled from the ForgeGuard policy/group definitions in `forgeguard.toml`. Each ForgeGuard policy statement becomes a Cedar `permit` or `forbid`:
+
+**Allow policies → Cedar `permit` statements (one per group attachment):**
 
 ```cedar
-// viewer — FGRN entity IDs: iam::group::"fgrn:acme-app:acme-corp:iam:group:viewer"
+// From Policy "todo-viewer" attached to Group "viewer"
 permit(
     principal in iam::group::"fgrn:acme-app:acme-corp:iam:group:viewer",
     action in [
@@ -2481,14 +3520,14 @@ permit(
     resource
 );
 
-// member
+// From Policy "todo-viewer" + "todo-editor" attached to Group "member"
 permit(
     principal in iam::group::"fgrn:acme-app:acme-corp:iam:group:member",
     action in [
         todo::action::"read-list",
         todo::action::"list-list",
-        todo::action::"create-list",
         todo::action::"read-item",
+        todo::action::"create-list",
         todo::action::"create-item",
         todo::action::"update-item",
         todo::action::"delete-item",
@@ -2497,56 +3536,117 @@ permit(
     resource
 );
 
-// admin
+// From Policy "todo-admin" attached to Group "admin"
 permit(
     principal in iam::group::"fgrn:acme-app:acme-corp:iam:group:admin",
     action,
     resource
 );
+
+// From Policy "todo-viewer" attached to Group "top-secret-readers"
+permit(
+    principal in iam::group::"fgrn:acme-app:acme-corp:iam:group:top-secret-readers",
+    action in [
+        todo::action::"read-list",
+        todo::action::"list-list",
+        todo::action::"read-item"
+    ],
+    resource
+);
+```
+
+**Deny policies → Cedar `forbid` statements with `unless` for `except` groups:**
+
+```cedar
+// From Policy "top-secret-deny" (project-wide deny with except)
+// Blocks ALL principals from the top-secret list,
+// UNLESS they are in the top-secret-readers group.
+forbid(
+    principal,
+    action,
+    resource == todo::list::"fgrn:acme-app:acme-corp:todo:list:top-secret"
+) unless {
+    principal in iam::group::"fgrn:acme-app:acme-corp:iam:group:top-secret-readers"
+};
 ```
 
 **Verified Permissions entity registration** — entities must be registered in the policy store with FGRN entity IDs:
 
 ```
-# Roles (groups)
+# Groups
 iam::group  "fgrn:acme-app:acme-corp:iam:group:admin"
 iam::group  "fgrn:acme-app:acme-corp:iam:group:member"
 iam::group  "fgrn:acme-app:acme-corp:iam:group:viewer"
+iam::group  "fgrn:acme-app:acme-corp:iam:group:top-secret-readers"
 
-# Users (members of roles)
-iam::user  "fgrn:acme-app:acme-corp:iam:user:alice"    parents: [iam::group::"fgrn:acme-app:acme-corp:iam:group:admin"]
-iam::user  "fgrn:acme-app:acme-corp:iam:user:bob"      parents: [iam::group::"fgrn:acme-app:acme-corp:iam:group:member"]
-iam::user  "fgrn:acme-app:acme-corp:iam:user:charlie"   parents: [iam::group::"fgrn:acme-app:acme-corp:iam:group:viewer"]
-iam::user  "fgrn:acme-app:acme-corp:iam:user:dave"      parents: [iam::group::"fgrn:acme-app:acme-corp:iam:group:admin"]
-iam::user  "fgrn:acme-app:acme-corp:iam:user:eve"       parents: [iam::group::"fgrn:acme-app:acme-corp:iam:group:member"]
+# Users (members of groups — may belong to multiple groups)
+iam::user  "fgrn:acme-app:acme-corp:iam:user:alice"    parents: [iam::group::"...:admin", iam::group::"...:top-secret-readers"]
+iam::user  "fgrn:acme-app:acme-corp:iam:user:bob"      parents: [iam::group::"...:member", iam::group::"...:top-secret-readers"]
+iam::user  "fgrn:acme-app:acme-corp:iam:user:charlie"   parents: [iam::group::"...:viewer"]
+iam::user  "fgrn:acme-app:acme-corp:iam:user:dave"      parents: [iam::group::"...:admin"]  # different tenant (globex-inc)
+iam::user  "fgrn:acme-app:acme-corp:iam:user:eve"       parents: [iam::group::"...:member"]  # different tenant (globex-inc)
+
+# Resources (for resource-level authorization)
+todo::list  "fgrn:acme-app:acme-corp:todo:list:top-secret"
 ```
 
-The proxy constructs these same FGRNs at runtime from `project_id` + JWT claims. The Verified Permissions entity IDs match exactly — no mapping, no translation.
+The proxy constructs these same FGRNs at runtime from `project_id` + identity claims. The Verified Permissions entity IDs match exactly — no mapping, no translation.
+
+**Verification scenarios after `xtask dev-setup --vp`:**
+
+- Alice (admin + top-secret-readers) → `delete-list` on any list → ALLOW
+- Alice → `read-list` on top-secret → ALLOW (excepted from forbid, has permit via admin)
+- Charlie (viewer) → `read-list` on regular list → ALLOW
+- Charlie → `read-list` on top-secret → DENY (forbid matches, charlie not in top-secret-readers)
+- Charlie → `create-list` → DENY (viewer has no create permit)
+- Bob (member + top-secret-readers) → `create-item` → ALLOW
+- Bob → `read-list` on top-secret → ALLOW (excepted from forbid)
 
 **Delivery format:**
-- CDK stack in `infra/dev/verified-permissions/`
-- Script: `xtask dev-setup --vp` (assumes Cognito from #8a already exists)
-- `xtask dev-setup --all` runs both #8a and #8b together
+
+- CDK stack in `infra/dev/verified-permissions/` — reads all inputs (including Cognito outputs from #8a) from `infra/dev/.env` (see Infrastructure Configuration Convention)
+- Script: `xtask dev-setup --vp` (reads `COGNITO_USER_POOL_ID` from `.env`; fails with a clear error if Cognito outputs are missing)
+  - After deploy: writes VP outputs (`VP_POLICY_STORE_ID`) back to `.env` and to `forgeguard.dev.toml`
+- `xtask dev-setup --all` runs both #8a and #8b together, chaining outputs
 
 **Verification:** After running `xtask dev-setup --vp`:
 
 ```bash
-# Check that Verified Permissions evaluates correctly via CLI (or a test script)
+# Alice (admin) can delete any list
 aws verifiedpermissions is-authorized \
   --policy-store-id $POLICY_STORE_ID \
   --principal '{"entityType":"iam::user","entityId":"fgrn:acme-app:acme-corp:iam:user:alice"}' \
   --action '{"actionType":"todo::action","actionId":"delete-list"}' \
   --resource '{"entityType":"todo::list","entityId":"any"}' \
   --entities '...'
-# → ALLOW (alice is admin)
+# → ALLOW (alice is in admin group)
 
+# Charlie (viewer) cannot delete lists
 aws verifiedpermissions is-authorized \
   --policy-store-id $POLICY_STORE_ID \
   --principal '{"entityType":"iam::user","entityId":"fgrn:acme-app:acme-corp:iam:user:charlie"}' \
   --action '{"actionType":"todo::action","actionId":"delete-list"}' \
   --resource '{"entityType":"todo::list","entityId":"any"}' \
   --entities '...'
-# → DENY (charlie is viewer)
+# → DENY (charlie is in viewer group — no delete permit)
+
+# Alice can read the top-secret list (excepted from forbid via top-secret-readers)
+aws verifiedpermissions is-authorized \
+  --policy-store-id $POLICY_STORE_ID \
+  --principal '{"entityType":"iam::user","entityId":"fgrn:acme-app:acme-corp:iam:user:alice"}' \
+  --action '{"actionType":"todo::action","actionId":"read-list"}' \
+  --resource '{"entityType":"todo::list","entityId":"fgrn:acme-app:acme-corp:todo:list:top-secret"}' \
+  --entities '...'
+# → ALLOW (alice is in top-secret-readers — forbid's unless exempts her)
+
+# Charlie cannot read the top-secret list (forbid matches, not in top-secret-readers)
+aws verifiedpermissions is-authorized \
+  --policy-store-id $POLICY_STORE_ID \
+  --principal '{"entityType":"iam::user","entityId":"fgrn:acme-app:acme-corp:iam:user:charlie"}' \
+  --action '{"actionType":"todo::action","actionId":"read-list"}' \
+  --resource '{"entityType":"todo::list","entityId":"fgrn:acme-app:acme-corp:todo:list:top-secret"}' \
+  --entities '...'
+# → DENY (charlie is NOT in top-secret-readers — forbid applies)
 ```
 
 ---
@@ -2559,30 +3659,34 @@ aws verifiedpermissions is-authorized \
 
 ### Description
 
-A working end-to-end demonstration: a simple TODO API in Python (FastAPI) running behind the ForgeGate proxy, with real Cognito JWTs for human users, static API keys for service-to-service callers, and real Verified Permissions authorization. Python is deliberate — it matches the tutorial in Doc 14 and proves the proxy is language-agnostic.
+A working end-to-end demonstration: a simple TODO API in Python (FastAPI) running behind the ForgeGuard proxy, with real Cognito JWTs for human users, static API keys for service-to-service callers, and real Verified Permissions authorization. Python is deliberate — it matches the tutorial in Doc 14 and proves the proxy is language-agnostic.
 
-The demo app has zero ForgeGate imports — it reads `X-ForgeGate-*` headers injected by the proxy. It never sees a JWT, never calls Verified Permissions, never checks a policy.
+The demo app has zero ForgeGuard imports — it reads `X-ForgeGuard-*` headers injected by the proxy. It never sees a JWT, never calls Verified Permissions, never checks a policy.
 
 ### Acceptance Criteria
 
 **Demo app** in `examples/todo-app/`:
 
 - 6-8 endpoints matching the TODO tutorial (lists CRUD + items CRUD + complete + archive)
-- One feature-gated endpoint: `GET /lists/{listId}/suggestions` (gated by `Todo:AiSuggestions`)
-- One endpoint that reads a flag from `X-ForgeGate-Features` for branching behavior (e.g., `Todo:MaxUploadMb`)
-- Reads `X-ForgeGate-User-Id`, `X-ForgeGate-Tenant-Id`, and `X-ForgeGate-Features` from headers
+- One feature-gated endpoint: `GET /lists/{listId}/suggestions` (gated by `todo:ai-suggestions`)
+- One endpoint that reads a flag from `X-ForgeGuard-Features` for branching behavior (e.g., `todo:max-upload-mb`)
+- Reads `X-ForgeGuard-User-Id`, `X-ForgeGuard-Tenant-Id`, `X-ForgeGuard-Groups`, and `X-ForgeGuard-Features` from headers
+- One resource-level access control demo: a `top-secret` list that only `top-secret-readers` group members can access (demonstrates DENY policy with `except`)
 - In-memory data store (HashMap, no database dependency)
 - Zero auth code in the app
 - Zero feature flag code in the app (except reading the header)
 
-**`forgegate.toml`** in `examples/todo-app/`:
+**`forgeguard.toml`** in `examples/todo-app/`:
 
 - Route mappings for all endpoints
+- Public routes: `GET /health` (anonymous), `GET /docs/{page}` (opportunistic — personalized when logged in), `POST /webhooks/{provider}` (anonymous)
 - Points to the Cognito + Verified Permissions resources from #8
+- Policy definitions: `todo-viewer`, `todo-editor`, `todo-admin`, `top-secret-deny` (DENY with `except`)
+- Group definitions: `admin`, `member`, `viewer`, `top-secret-readers` (with policy attachments)
 - Inline feature flag definitions:
-  - `Todo:AiSuggestions`: boolean, default false, enabled for `acme-corp`, disabled for `tenant_initech` (the default)
-  - `Todo:MaxUploadMb`: number, default 50, overridden to 100 for `acme-corp`, default for `tenant_initech`
-  - `Todo:PremiumAi`: boolean, default false, 25% rollout (tenant-independent — tests deterministic hashing)
+  - `todo:ai-suggestions`: boolean, default false, enabled for `acme-corp`, disabled for `tenant_initech` (the default)
+  - `todo:max-upload-mb`: number, default 50, overridden to 100 for `acme-corp`, default for `tenant_initech`
+  - `todo:premium-ai`: boolean, default false, 25% rollout (tenant-independent — tests deterministic hashing)
 
 **Demo script** (`examples/todo-app/demo.sh` or documented in README):
 
@@ -2594,7 +3698,30 @@ cd examples/todo-app && python -m uvicorn app:app --port 3000
 # On macOS:
 docker compose -f examples/todo-app/docker-compose.yml up proxy
 # On Linux (native):
-cargo run -p forgegate_proxy -- --config examples/todo-app/forgegate.toml
+cargo run -p forgeguard_proxy -- run --config examples/todo-app/forgeguard.toml
+
+# ── CLI utility subcommands (run on any platform, no Pingora needed) ──
+
+# Validate config without starting the proxy
+cargo run -p forgeguard_proxy -- check --config examples/todo-app/forgeguard.toml
+# → ✓ examples/todo-app/forgeguard.toml is valid (12 routes, 3 public routes, 4 flags)
+
+# Inspect the resolved route table
+cargo run -p forgeguard_proxy -- routes --config examples/todo-app/forgeguard.toml
+# → Public routes (no auth):
+# →   GET    /health                                  auth_mode=anonymous
+# →   GET    /docs/{page}                             auth_mode=opportunistic
+# →   ANY    /webhooks/{provider}                     auth_mode=anonymous
+# →
+# → Auth routes:
+# →   GET    /lists                                   → todo:list:list               resource_param=-
+# →   POST   /lists                                   → todo:create:list             resource_param=-
+# →   GET    /lists/{listId}                          → todo:read:list               resource_param=listId
+# →   ...
+
+# Dump fully resolved config as JSON (useful for debugging env var overrides)
+FORGEGUARD_LISTEN=0.0.0.0:9000 cargo run -p forgeguard_proxy -- config --config examples/todo-app/forgeguard.toml --format json | jq .listen_addr
+# → "0.0.0.0:9000"
 
 # Terminal 3: Test it
 TOKEN_ALICE=$(cargo xtask dev-token --user alice)       # admin, acme-corp
@@ -2602,6 +3729,42 @@ TOKEN_BOB=$(cargo xtask dev-token --user bob)           # member, acme-corp
 TOKEN_CHARLIE=$(cargo xtask dev-token --user charlie)   # viewer, acme-corp
 TOKEN_DAVE=$(cargo xtask dev-token --user dave)         # admin, tenant_initech
 TOKEN_EVE=$(cargo xtask dev-token --user eve)           # member, tenant_initech
+
+# ── Public routes (no auth required) ──
+
+# Health check — anonymous, no token, no API key, just works
+curl -s http://localhost:8000/health | jq .
+# → 200 {"status": "ok"}
+# No X-ForgeGuard-* identity headers — only X-ForgeGuard-Client-Ip.
+
+# Incoming webhook — anonymous, no auth required
+curl -s -X POST http://localhost:8000/webhooks/stripe \
+  -H "Content-Type: application/json" \
+  -d '{"event":"payment.completed"}' | jq .
+# → 200 {"received": true}
+
+# ── Opportunistic public routes ──
+
+# Docs page without credentials — works, anonymous view
+curl -s http://localhost:8000/docs/getting-started | jq .
+# → 200 (app renders public docs view)
+# Upstream sees X-ForgeGuard-Client-Ip but no identity headers.
+
+# Docs page with credentials — works, personalized view
+curl -s http://localhost:8000/docs/getting-started \
+  -H "Authorization: Bearer $TOKEN_ALICE" | jq .
+# → 200 (app renders personalized view: bookmarks, edit buttons)
+# Upstream sees X-ForgeGuard-User-Id, X-ForgeGuard-Tenant-Id, etc.
+
+# Docs page with expired token — still works, falls back to anonymous
+curl -s http://localhost:8000/docs/getting-started \
+  -H "Authorization: Bearer expired-token-here" | jq .
+# → 200 (app renders public docs view — NOT 401)
+# Upstream sees X-ForgeGuard-Client-Ip but no identity headers.
+
+# But auth routes still require credentials (public routes don't weaken anything)
+curl -s http://localhost:8000/lists | jq .
+# → 401 {"error":"Unauthorized"}
 
 # ── Auth enforcement ──
 
@@ -2617,7 +3780,7 @@ curl -s -X POST http://localhost:8000/lists \
   -H "Authorization: Bearer $TOKEN_CHARLIE" \
   -H "Content-Type: application/json" \
   -d '{"name":"My list"}' | jq .
-# → 403 {"error":"Forbidden","action":"Todo:Create:List"}
+# → 403 {"error":"Forbidden","action":"todo:create:list"}
 
 # charlie (viewer) reads lists — should succeed
 curl -s http://localhost:8000/lists \
@@ -2630,10 +3793,10 @@ curl -s http://localhost:8000/lists | jq .
 
 # ── API key authentication (service-to-service) ──
 
-# API keys are defined in forgegate.toml with hashed values.
+# API keys are defined in forgeguard.toml with hashed values.
 # The proxy tries api_key first (fast HashMap lookup), then jwt.
 
-# CI pipeline key (member role) creates an item — should succeed
+# CI pipeline key (member group) creates an item — should succeed
 curl -s -X POST http://localhost:8000/lists/list_001/items \
   -H "X-API-Key: sk-test-bob-member" \
   -H "Content-Type: application/json" \
@@ -2645,7 +3808,7 @@ curl -s -X POST http://localhost:8000/lists \
   -H "X-API-Key: sk-test-charlie-viewer" \
   -H "Content-Type: application/json" \
   -d '{"name":"Nope"}' | jq .
-# → 403 {"error":"Forbidden","action":"Todo:Create:List"}
+# → 403 {"error":"Forbidden","action":"todo:create:list"}
 
 # invalid key — should be rejected
 curl -s http://localhost:8000/lists \
@@ -2665,7 +3828,7 @@ curl -s http://localhost:8000/debug/context \
 # ── Feature flags: the enabled path ──
 
 # alice (acme-corp) requests AI suggestions — should succeed
-# (Todo:AiSuggestions is enabled for acme-corp in forgegate.toml)
+# (todo:ai-suggestions is enabled for acme-corp in forgeguard.toml)
 curl -s http://localhost:8000/lists/list_001/suggestions \
   -H "Authorization: Bearer $TOKEN_ALICE" | jq .
 # → 200 {"suggestions": ["Buy groceries", "Review PR #42"]}
@@ -2673,7 +3836,7 @@ curl -s http://localhost:8000/lists/list_001/suggestions \
 # ── Feature flags: the disabled path ──
 
 # dave (tenant_initech) requests the same endpoint — should get 404
-# (Todo:AiSuggestions is NOT enabled for tenant_initech — default is false)
+# (todo:ai-suggestions is NOT enabled for tenant_initech — default is false)
 curl -s http://localhost:8000/lists/list_001/suggestions \
   -H "Authorization: Bearer $TOKEN_DAVE" | jq .
 # → 404 {"error":"Not Found"}
@@ -2693,9 +3856,10 @@ curl -s http://localhost:8000/debug/context \
 # → {
 #     "user_id": "user_alice",
 #     "tenant_id": "acme-corp",
-#     "roles": "admin",
+#     "groups": "admin,top-secret-readers",
 #     "provider": "CognitoJwt",
-#     "features": {"Todo:AiSuggestions": true, "Todo:MaxUploadMb": 100, "Todo:PremiumAi": false},
+#     "client_ip": "127.0.0.1",
+#     "features": {"todo:ai-suggestions": true, "todo:max-upload-mb": 100, "todo:premium-ai": false},
 #     "max_upload_mb": 100
 #   }
 
@@ -2704,10 +3868,36 @@ curl -s http://localhost:8000/debug/context \
 # → {
 #     "user_id": "user_dave",
 #     "tenant_id": "tenant_initech",
-#     "features": {"Todo:AiSuggestions": false, "Todo:MaxUploadMb": 50, "Todo:PremiumAi": false},
+#     "groups": "admin",
+#     "client_ip": "127.0.0.1",
+#     "features": {"todo:ai-suggestions": false, "todo:max-upload-mb": 50, "todo:premium-ai": false},
 #     "max_upload_mb": 50
 #   }
 # Same app, same proxy, different tenant → different flag values.
+
+# ── Resource-level access control: top-secret list ──
+
+# alice (admin + top-secret-readers) reads the top-secret list — should succeed
+# The forbid policy has an except for top-secret-readers, so alice is not blocked.
+curl -s http://localhost:8000/lists/top-secret \
+  -H "Authorization: Bearer $TOKEN_ALICE" | jq .
+# → 200
+
+# bob (member + top-secret-readers) reads the top-secret list — should succeed
+curl -s http://localhost:8000/lists/top-secret \
+  -H "Authorization: Bearer $TOKEN_BOB" | jq .
+# → 200
+
+# charlie (viewer, NOT in top-secret-readers) reads the top-secret list — should be denied
+# The forbid policy matches charlie (he's not excepted), so access is blocked.
+curl -s http://localhost:8000/lists/top-secret \
+  -H "Authorization: Bearer $TOKEN_CHARLIE" | jq .
+# → 403 {"error":"Forbidden","action":"todo:read:list"}
+
+# charlie CAN still read regular lists — the forbid only applies to the top-secret resource
+curl -s http://localhost:8000/lists \
+  -H "Authorization: Bearer $TOKEN_CHARLIE" | jq .
+# → 200
 ```
 
 **Demo app feature flag usage** (in `app.py`):
@@ -2715,9 +3905,22 @@ curl -s http://localhost:8000/debug/context \
 ```python
 import json
 
+@app.get("/health")
+async def health():
+    """Public endpoint — no auth required, no X-ForgeGuard-* headers expected."""
+    return {"status": "ok"}
+
+
+@app.post("/webhooks/{provider}")
+async def webhook(provider: str, request: Request):
+    """Public endpoint — incoming webhooks from third parties, no auth."""
+    body = await request.json()
+    return {"received": True, "provider": provider}
+
+
 @app.get("/lists/{list_id}/suggestions")
 async def get_suggestions(list_id: str, request: Request):
-    # This endpoint only receives requests when Todo:AiSuggestions is enabled
+    # This endpoint only receives requests when todo:ai-suggestions is enabled
     # for this tenant — the proxy returns 404 otherwise.
     # The app doesn't check the flag. It just handles the request.
     return {"suggestions": ["Buy groceries", "Review PR #42"]}
@@ -2726,45 +3929,80 @@ async def get_suggestions(list_id: str, request: Request):
 @app.get("/debug/context")
 async def debug_context(request: Request):
     """Debug endpoint that echoes the full resolved context."""
-    features = json.loads(request.headers.get("X-ForgeGate-Features", "{}"))
+    features = json.loads(request.headers.get("X-ForgeGuard-Features", "{}"))
     return {
-        "user_id": request.headers.get("X-ForgeGate-User-Id"),
-        "tenant_id": request.headers.get("X-ForgeGate-Tenant-Id"),
-        "roles": request.headers.get("X-ForgeGate-Roles"),
-        "provider": request.headers.get("X-ForgeGate-Auth-Provider"),
-        "principal": request.headers.get("X-ForgeGate-Principal"),
+        "user_id": request.headers.get("X-ForgeGuard-User-Id"),
+        "tenant_id": request.headers.get("X-ForgeGuard-Tenant-Id"),
+        "groups": request.headers.get("X-ForgeGuard-Groups"),
+        "provider": request.headers.get("X-ForgeGuard-Auth-Provider"),
+        "principal": request.headers.get("X-ForgeGuard-Principal"),
+        "client_ip": request.headers.get("X-ForgeGuard-Client-Ip"),
         "features": features,
-        "max_upload_mb": features.get("Todo:MaxUploadMb", 50),
+        "max_upload_mb": features.get("todo:max-upload-mb", 50),
     }
 ```
 
 **Acceptance:**
 
+Public routes:
+
+- `GET /health` with no credential → 200 (proxied, no auth)
+- `POST /webhooks/stripe` with no credential → 200 (proxied, no auth)
+- Public routes have only `X-ForgeGuard-Client-Ip` header (no identity/feature headers)
+- Auth routes still require credentials (`GET /lists` with no token → 401)
+- Public routes work regardless of `default_policy` setting
+
+Origin IP:
+
+- `X-ForgeGuard-Client-Ip` present on all proxied requests (authenticated and public)
+- Debug endpoint shows `client_ip` field from the injected header
+
 Auth enforcement:
+
 - Admin creates a resource → 201
 - Viewer tries to create → 403
 - Viewer reads → 200
 - No token → 401
 
 API key authentication:
-- API key with member role creates item → 201
-- API key with viewer role tries to create → 403 (same authz rules as JWT — provider doesn't matter)
+
+- API key with member group creates item → 201
+- API key with viewer group tries to create → 403 (same authz rules as JWT — provider doesn't matter)
 - Invalid API key → 401
-- `X-ForgeGate-Auth-Provider` is `static_api_key` for API key requests
-- `X-ForgeGate-Auth-Provider` is `cognito_jwt` for JWT requests
+- `X-ForgeGuard-Auth-Provider` is `static_api_key` for API key requests
+- `X-ForgeGuard-Auth-Provider` is `cognito_jwt` for JWT requests
 - Request with both `Authorization: Bearer` and `X-API-Key` → api_key provider wins (first in chain)
-- API key resolves to correct tenant, correct roles, correct user_id as configured in TOML
+- API key resolves to correct tenant, correct groups, correct user_id as configured in TOML
+
+Resource-level access control (top-secret list):
+
+- Alice (admin + top-secret-readers) reads top-secret list → 200 (excepted from forbid)
+- Bob (member + top-secret-readers) reads top-secret list → 200 (excepted from forbid)
+- Charlie (viewer, NOT in top-secret-readers) reads top-secret list → 403 (forbid matches)
+- Charlie reads a regular list → 200 (forbid only applies to the top-secret resource)
+- DENY policy with `except` compiles correctly to Cedar `forbid...unless`
 
 Feature flags — the critical scenarios:
+
 - `acme-corp` user hits gated endpoint (flag enabled) → 200 (request reaches the app)
 - `tenant_initech` user hits the same gated endpoint (flag disabled, default) → 404 (proxy blocks, app never sees the request)
-- Both tenants hit a non-gated endpoint → 200 (flags don't block, but the `X-ForgeGate-Features` header shows different values per tenant)
-- `X-ForgeGate-Features` header is present on ALL proxied requests, contains valid JSON, and correctly reflects per-tenant flag resolution
-- Debug endpoint for `acme-corp` shows `Todo:MaxUploadMb: 100` (overridden)
-- Debug endpoint for `tenant_initech` shows `Todo:MaxUploadMb: 50` (default)
-- Proxy logs show `gate=Todo:AiSuggestions` on feature-gated requests
+- Both tenants hit a non-gated endpoint → 200 (flags don't block, but the `X-ForgeGuard-Features` header shows different values per tenant)
+- `X-ForgeGuard-Features` header is present on ALL proxied requests, contains valid JSON, and correctly reflects per-tenant flag resolution
+- Debug endpoint for `acme-corp` shows `todo:max-upload-mb: 100` (overridden)
+- Debug endpoint for `tenant_initech` shows `todo:max-upload-mb: 50` (default)
+- Proxy logs show `gate=todo:ai-suggestions` on feature-gated requests
+
+CLI subcommands (run on any platform — no Pingora/Docker needed):
+
+- `forgeguard-proxy check --config examples/todo-app/forgeguard.toml` exits 0 with route/flag/policy/group counts
+- `forgeguard-proxy routes --config examples/todo-app/forgeguard.toml` prints all public + auth routes
+- `forgeguard-proxy config --config examples/todo-app/forgeguard.toml --format json` prints resolved config
+- `FORGEGUARD_LISTEN=0.0.0.0:9000 forgeguard-proxy config --config ... --format json` shows overridden listen address
+- `forgeguard-proxy --help` shows all subcommands with descriptions
+- `forgeguard-proxy run --help` shows env var hints for each flag
 
 General:
+
 - Proxy startup log shows flag count and provider list
 - Health check returns `healthy` with correct flag count
 - README explains the full demo from scratch including both tenants and both auth methods (JWT + API key) (prerequisites: Rust, Python, AWS credentials, CDK-deployed infra from #8a + #8b)
@@ -2780,91 +4018,91 @@ General:
 
 ### Description
 
-Implement local feature flag evaluation in the proxy. Flags are defined in `forgegate.toml`, evaluated per-request with zero network calls, and resolved through a four-level override hierarchy: user+tenant override → user override → tenant override → percentage rollout → default.
+Implement local feature flag evaluation in the proxy. Flags are defined in `forgeguard.toml`, evaluated per-request with zero network calls, and resolved through a four-level override hierarchy: user+tenant override → user override → tenant override → percentage rollout → default.
 
 This mirrors the pattern from the design docs: feature flags share the permission context (who's asking, from which tenant) and answer the same kind of question ("should this entity see this thing?"), but are evaluated locally instead of calling Verified Permissions.
 
-The flag evaluation logic lives in `forgegate_core` (pure, no I/O). It takes a `FlagName`, `TenantId`, and `UserId` and returns a `FlagValue`.
+The flag evaluation logic lives in `forgeguard_core` (pure, no I/O). It takes a `FlagName`, `TenantId`, and `UserId` and returns a `FlagValue`.
 
 ### TOML Configuration
 
-Flags live in the `[flags.*]` section of `forgegate.toml`:
+Flags live in the `[flags.*]` section of `forgeguard.toml`:
 
 ```toml
-# Global flag — PascalCase, no namespace prefix
-[flags.DarkMode]
+# Global flag — kebab-case, no namespace prefix
+[flags.dark-mode]
 type = "boolean"
 default = false
 
 # Namespace-scoped flag with percentage rollout
-[flags."Todo:AiSuggestions"]
+[flags."todo:ai-suggestions"]
 type = "boolean"
 default = false
 rollout_percentage = 25
 
 # Namespace-scoped flag enabled for specific tenants
-[flags."Billing:AdvancedExport"]
+[flags."billing:advanced-export"]
 type = "boolean"
 default = false
 
-[[flags."Billing:AdvancedExport".overrides]]
+[[flags."billing:advanced-export".overrides]]
 tenant = "acme-corp"
 value = true
 
-[[flags."Billing:AdvancedExport".overrides]]
+[[flags."billing:advanced-export".overrides]]
 tenant = "tenant_globex"
 value = true
 
 # Namespace-scoped string variant flag (A/B test)
-[flags."Todo:CheckoutFlow"]
+[flags."todo:checkout-flow"]
 type = "string"
 default = "classic"
 rollout_percentage = 30
 rollout_variant = "streamlined"
 
-[[flags."Todo:CheckoutFlow".overrides]]
+[[flags."todo:checkout-flow".overrides]]
 tenant = "acme-corp"
 value = "streamlined"
 
 # Namespace-scoped numeric flag with tenant override
-[flags."Todo:MaxUploadMb"]
+[flags."todo:max-upload-mb"]
 type = "number"
 default = 50
 
-[[flags."Todo:MaxUploadMb".overrides]]
+[[flags."todo:max-upload-mb".overrides]]
 tenant = "acme-corp"
 value = 100
 
 # Global flag with user-level override (QA tester always sees the feature)
-[flags.NewDashboard]
+[flags.new-dashboard]
 type = "boolean"
 default = false
 rollout_percentage = 10
 
-[[flags.NewDashboard.overrides]]
+[[flags.new-dashboard.overrides]]
 user = "user_qa_alice"
 value = true
 
-[[flags.NewDashboard.overrides]]
+[[flags.new-dashboard.overrides]]
 user = "user_qa_bob"
 value = true
 
 # Namespace-scoped: tenant enabled, one user in that tenant excluded
-[flags."Billing:BetaBilling"]
+[flags."billing:beta-billing"]
 type = "boolean"
 default = false
 
-[[flags."Billing:BetaBilling".overrides]]
+[[flags."billing:beta-billing".overrides]]
 tenant = "acme-corp"
 value = true
 
-[[flags."Billing:BetaBilling".overrides]]
+[[flags."billing:beta-billing".overrides]]
 tenant = "acme-corp"
 user = "user_finance_charlie"
 value = false
 
 # Global kill switch — evaluation short-circuits to default
-[flags.MaintenanceMode]
+[flags.maintenance-mode]
 type = "boolean"
 default = false
 enabled = false
@@ -2876,14 +4114,14 @@ Route-level gating ties a flag to an endpoint. Proxy returns 404 (not 403) when 
 [[routes]]
 method = "GET"
 path = "/lists/{listId}/suggestions"
-action = "Todo:Read:List"
+action = "todo:read:list"
 resource_param = "listId"
-feature_gate = "Todo:AiSuggestions"
+feature_gate = "todo:ai-suggestions"
 ```
 
 ### Acceptance Criteria
 
-**Types** (in `forgegate_core`, pure, WASM-compatible):
+**Types** (in `forgeguard_core`, pure, WASM-compatible):
 
 ```rust
 pub struct FlagStore {
@@ -2943,7 +4181,7 @@ fn resolve_single_flag(
 
     // Rollout
     if let Some(pct) = flag.rollout_percentage {
-        let name_str = name.to_string(); // "MaintenanceMode" or "Todo:AiSuggestions"
+        let name_str = name.to_string(); // "maintenance-mode" or "todo:ai-suggestions"
         let bucket = deterministic_bucket(&name_str, tenant_id, user_id);
         if bucket < pct {
             return flag.rollout_variant.clone()
@@ -2964,14 +4202,15 @@ fn resolve_single_flag(
 **Proxy integration:**
 
 - Feature-gated routes: if `feature_gate` is set on a route and the flag evaluates to false/disabled, return 404 before authorization check
-- `X-ForgeGate-Features` header injected on all proxied requests, containing JSON of all evaluated flags:
+- `X-ForgeGuard-Features` header injected on all proxied requests, containing JSON of all evaluated flags:
   ```
-  X-ForgeGate-Features: {"Todo:AiSuggestions":true,"Todo:MaxUploadMb":100,"Todo:PremiumAi":false}
+  X-ForgeGuard-Features: {"todo:ai-suggestions":true,"todo:max-upload-mb":100,"todo:premium-ai":false}
   ```
 - Debug endpoint `GET /.well-known/forgeguard/flags?user_id=X&tenant_id=Y` returns all flag evaluations with resolution reasons (default, rollout, tenant_override, user_override, user_tenant_override, disabled)
 - Health check includes `flags_count` field
 
 **Config validation at startup:**
+
 - `rollout_percentage` must be 0-100
 - `type` must be "boolean", "string", or "number"
 - `default` and override `value` must match the declared type
@@ -2982,19 +4221,22 @@ fn resolve_single_flag(
 ### Tests
 
 Override resolution hierarchy:
-- User+tenant override wins over tenant-only override (`Billing:BetaBilling`: acme=true, charlie+acme=false → charlie gets false)
-- User override wins over rollout (`NewDashboard`: 10% rollout, qa_alice always true)
+
+- User+tenant override wins over tenant-only override (`billing:beta-billing`: acme=true, charlie+acme=false → charlie gets false)
+- User override wins over rollout (`new-dashboard`: 10% rollout, qa_alice always true)
 - Tenant override wins over rollout and default
 - Kill switch (`enabled = false`) ignores all overrides and rollout
 - String variant: tenant override returns the variant string, not the default
 - Numeric flag: tenant override returns the overridden number
 
 Rollout behavior:
+
 - Deterministic: same (flag, tenant, user) always produces the same result
 - Distribution: 25% rollout gives ~25% ± 3% of 10,000 test users (statistical, stable with deterministic hash)
 - Independence: different flag names produce different rollout buckets for the same user population
 
 Edge cases:
+
 - Nonexistent flag → `None`
 - Flag with no overrides and no rollout → always returns default
 - Boolean rollout with no `rollout_variant` → defaults to `true`
@@ -3002,23 +4244,25 @@ Edge cases:
 - `rollout_percentage = 100` → everyone gets the rollout
 
 Config validation:
+
 - `rollout_percentage = 150` → rejected at parse time
 - `type = "boolean"`, `default = "not a bool"` → rejected
 - `feature_gate = "nonexistent_flag"` on a route → startup error
 
 TOML round-trip:
-- Full example `forgegate.toml` parses without errors
+
+- Full example `forgeguard.toml` parses without errors
 - All flags from the TODO demo config are present and correctly typed
 
 ### Where This Lives
 
-| What | Where | Why |
-|------|-------|-----|
-| `FlagStore`, `FlagDefinition`, `FlagValue`, `FlagOverride`, `resolve_single_flag`, `deterministic_bucket` | `forgegate_core` (pure) | No I/O. Must compile to WASM for future SDK use. |
-| TOML deserialization (`RawFlagConfig`) | `forgegate_core` (pure) | serde + toml are pure. |
-| Route-level gating, header injection, debug endpoint | `forgegate_proxy` (binary) | Wires flag store into request lifecycle. |
+| What                                                                                                      | Where                       | Why                                              |
+| --------------------------------------------------------------------------------------------------------- | --------------------------- | ------------------------------------------------ |
+| `FlagStore`, `FlagDefinition`, `FlagValue`, `FlagOverride`, `resolve_single_flag`, `deterministic_bucket` | `forgeguard_core` (pure)    | No I/O. Must compile to WASM for future SDK use. |
+| TOML deserialization (`RawFlagConfig`)                                                                    | `forgeguard_core` (pure)    | serde + toml are pure.                           |
+| Route-level gating, header injection, debug endpoint                                                      | `forgeguard_proxy` (binary) | Wires flag store into request lifecycle.         |
 
-Feature flags are a module in `forgegate_core` for now. If they grow (remote sync, experimentation, analytics), they split into `forgegate_flags_core` later.
+Feature flags are a module in `forgeguard_core` for now. If they grow (remote sync, experimentation, analytics), they split into `forgeguard_flags_core` later.
 
 ---
 
@@ -3042,4 +4286,4 @@ Week 3:  #5 integration tests unblocked once #8b lands
 
 All Layer 1 issues (#1, #2, #3, #10) can be one-developer work. #4 and #5 can be done in parallel by two developers. #7 is the integration point where authn, authz, and feature flags all meet in the Pingora `ProxyHttp` implementation. #8a (Cognito infra) is independent and should start immediately — it's the long pole that unblocks #4 integration tests and #8b.
 
-**Platform note:** The proxy (#7) is Linux-only (Pingora). macOS developers run it via Docker (`docker-compose.yml` provided in #9). All pure crates (#1, #2, #3, #10) and the I/O crates (#4, #5) compile on macOS — only the `forgegate_proxy` binary requires Linux.
+**Platform note:** The proxy (#7) is Linux-only (Pingora). macOS developers run it via Docker (`docker-compose.yml` provided in #9). All pure crates (#1, #2, #3, #10) and the I/O crates (#4, #5) compile on macOS — only the `forgeguard_proxy` binary requires Linux.

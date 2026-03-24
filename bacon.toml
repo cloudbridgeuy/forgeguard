@@ -12,28 +12,41 @@ command = ["cargo", "check", "--workspace", "--color", "always"]
 need_stdout = false
 
 [jobs.check-all]
-command = ["cargo", "check", "--workspace", "--all-targets", "--color", "always"]
+command = [
+  "cargo",
+  "check",
+  "--workspace",
+  "--all-targets",
+  "--color",
+  "always",
+]
 need_stdout = false
 
 [jobs.clippy]
 command = [
-    "cargo", "clippy",
-    "--workspace",
-    "--all-targets",
-    "--color", "always",
+  "cargo",
+  "clippy",
+  "--workspace",
+  "--all-targets",
+  "--color",
+  "always",
 ]
 need_stdout = false
 
 [jobs.test]
 command = [
-    "cargo", "test", "--workspace", "--color", "always",
-    "--", "--color", "always", # see https://github.com/Canop/bacon/issues/124
+  "cargo",
+  "test",
+  "--workspace",
+  "--color",
+  "always",
+  "--",
+  "--color",
+  "always",      # see https://github.com/Canop/bacon/issues/124
 ]
 need_stdout = true
 default_watch = false
-watch = [
-    "crates"
-]
+watch = ["crates"]
 
 [jobs.doc]
 command = ["cargo", "doc", "--workspace", "--color", "always", "--no-deps"]
@@ -42,18 +55,22 @@ need_stdout = false
 # If the doc compiles, then it opens in your browser and bacon switches
 # to the previous job
 [jobs.doc-open]
-command = ["cargo", "doc", "--workspace", "--color", "always", "--no-deps", "--open"]
+command = [
+  "cargo",
+  "doc",
+  "--workspace",
+  "--color",
+  "always",
+  "--no-deps",
+  "--open",
+]
 need_stdout = false
 on_success = "back" # so that we don't open the browser at each change
 
-# Run a specific binary. Use: bacon run -- -p forgegate_cli
+# Run a specific binary. Use: bacon run -- -p forgeguard_cli
 # or override this command for the binary you're actively developing.
 [jobs.run]
-command = [
-    "cargo", "run",
-    "--color", "always",
-    "-p", "forgegate_cli",
-]
+command = ["cargo", "run", "--color", "always", "-p", "forgeguard_cli"]
 need_stdout = true
 allow_warnings = true
 

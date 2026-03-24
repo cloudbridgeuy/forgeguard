@@ -1,7 +1,7 @@
 [package]
-name = "forgegate_audit"
+name = "forgeguard_audit"
 version = "0.0.0"
-homepage = "https://github.com/cloudbridgeuy/forgegate"
+homepage = "https://github.com/cloudbridgeuy/forgeguard"
 description = "Auditing I/O — DynamoDB/S3 event log, CloudTrail integration, metric emission"
 autobins = false
 
@@ -10,12 +10,12 @@ edition.workspace = true
 license.workspace = true
 
 [lib]
-name = "forgegate_audit"
+name = "forgeguard_audit"
 path = "src/lib.rs"
 
 [dependencies]
-forgegate_core = { workspace = true }
-forgegate_audit_core = { workspace = true }
+forgeguard_core = { workspace = true }
+forgeguard_audit_core = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

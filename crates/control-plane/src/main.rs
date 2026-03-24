@@ -1,5 +1,5 @@
 #![deny(clippy::unwrap_used, clippy::expect_used)]
 
 fn main() {
-    println!("forgegate-control-plane");
+    println!("forgeguard-control-plane");
 }

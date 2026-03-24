@@ -1,5 +1,5 @@
 #![deny(clippy::unwrap_used, clippy::expect_used)]
 
 fn main() {
-    println!("forgegate-back-office");
+    println!("forgeguard-back-office");
 }

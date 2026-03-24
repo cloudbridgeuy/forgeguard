@@ -41,16 +41,16 @@ debug = 0
 [workspace.dependencies]
 
 # Internal crates — pure
-forgegate_core = { version = "0.0.0", path = "crates/core" }
-forgegate_authn_core = { version = "0.0.0", path = "crates/authn-core" }
-forgegate_authz_core = { version = "0.0.0", path = "crates/authz-core" }
-forgegate_audit_core = { version = "0.0.0", path = "crates/audit-core" }
-forgegate_sdk = { version = "0.0.0", path = "crates/sdk" }
+forgeguard_core = { version = "0.0.0", path = "crates/core" }
+forgeguard_authn_core = { version = "0.0.0", path = "crates/authn-core" }
+forgeguard_authz_core = { version = "0.0.0", path = "crates/authz-core" }
+forgeguard_audit_core = { version = "0.0.0", path = "crates/audit-core" }
+forgeguard_sdk = { version = "0.0.0", path = "crates/sdk" }
 
 # Internal crates — I/O
-forgegate_authn = { version = "0.0.0", path = "crates/authn" }
-forgegate_authz = { version = "0.0.0", path = "crates/authz" }
-forgegate_audit = { version = "0.0.0", path = "crates/audit" }
+forgeguard_authn = { version = "0.0.0", path = "crates/authn" }
+forgeguard_authz = { version = "0.0.0", path = "crates/authz" }
+forgeguard_audit = { version = "0.0.0", path = "crates/audit" }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }

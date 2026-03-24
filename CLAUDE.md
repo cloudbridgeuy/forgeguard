@@ -1,4 +1,4 @@
-# ForgeGate — Development Guidelines
+# ForgeGuard — Development Guidelines
 
 ## Quick Reference
 
@@ -21,7 +21,7 @@ Crate boundaries enforce the Functional Core / Imperative Shell split.
 - **Pure crates** — types, traits, pure functions. No I/O deps. Any crate can depend on them.
 - **I/O crates** — consume pure crate types, add side effects. Depend downward only.
 - **Why** — SDK must compile to `wasm32-unknown-unknown`. This is a compiler requirement.
-- **Naming** — pure: `forgegate_{domain}_core`. I/O: `forgegate_{domain}` (no `_core` suffix).
+- **Naming** — pure: `forgeguard{domain}_core`. I/O: `forgeguard{domain}` (no `_core` suffix).
 
 ### Visibility (MUST)
 
@@ -31,7 +31,7 @@ Crate boundaries enforce the Functional Core / Imperative Shell split.
 
 ### Error Types (MUST)
 
-Each crate defines `Error` and `Result<T> = std::result::Result<T, Error>`. No domain-prefixed error names (no `AuthnError`). Disambiguate with `forgegate_authn_core::Error`.
+Each crate defines `Error` and `Result<T> = std::result::Result<T, Error>`. No domain-prefixed error names (no `AuthnError`). Disambiguate with `forgeguardauthn_core::Error`.
 
 ### Clippy (MUST)
 
@@ -71,32 +71,32 @@ See `~/.claude/patterns/` for architectural patterns:
 ```
 crates/
 │  Pure (no I/O)
-├── core/              forgegate_core — shared primitives, traits, error types
-├── authn-core/        forgegate_authn_core — typestate flows, transition types
-├── authz-core/        forgegate_authz_core — Cedar policy types, permission types
-├── audit-core/        forgegate_audit_core — event log types, audit trail schema
-├── sdk/               forgegate_sdk — Guard, WebhookHandler (WASM-compatible)
+├── core/              forgeguardcore — shared primitives, traits, error types
+├── authn-core/        forgeguardauthn_core — typestate flows, transition types
+├── authz-core/        forgeguardauthz_core — Cedar policy types, permission types
+├── audit-core/        forgeguardaudit_core — event log types, audit trail schema
+├── sdk/               forgeguardsdk — Guard, WebhookHandler (WASM-compatible)
 │  I/O
-├── authn/             forgegate_authn — Cognito adapter, SES/SNS
-├── authz/             forgegate_authz — Verified Permissions, caching
-├── audit/             forgegate_audit — DynamoDB/S3 event log, CloudTrail
-├── ffi-python/        forgegate_ffi_python — PyO3 bindings
-├── ffi-wasm/          forgegate_ffi_wasm — wasm-bindgen bindings
+├── authn/             forgeguardauthn — Cognito adapter, SES/SNS
+├── authz/             forgeguardauthz — Verified Permissions, caching
+├── audit/             forgeguardaudit — DynamoDB/S3 event log, CloudTrail
+├── ffi-python/        forgeguardffi_python — PyO3 bindings
+├── ffi-wasm/          forgeguardffi_wasm — wasm-bindgen bindings
 │  Binaries
-├── control-plane/     forgegate_control_plane — dashboard API
-├── agent/             forgegate_agent — self-hosted data plane
-├── cli/               forgegate_cli — developer CLI (binary: forgegate)
-├── proxy/             forgegate_proxy — request interception
-└── back-office/       forgegate_back_office — internal ops API
+├── control-plane/     forgeguardcontrol_plane — dashboard API
+├── agent/             forgeguardagent — self-hosted data plane
+├── cli/               forgeguardcli — developer CLI (binary: forgeguard)
+├── proxy/             forgeguardproxy — request interception
+└── back-office/       forgeguardback_office — internal ops API
 ```
 
 Each crate's `README.md` describes what it owns and its pure/I/O classification.
 
 ## Context Documents
 
-| Document | Purpose |
-|----------|---------|
-| [Linting and Clippy](./.claude/context/linting-and-clippy.md) | Clippy thresholds, workspace lints, and how they map to design patterns |
-| [Commit and Release](./.claude/context/commit-and-release.md) | Conventional commits, version bump logic, release flow |
-| [Scaffolding Decisions](./.claude/designs/scaffolding-patterns.md) | All 36 design decisions with rationale |
-| [Design Documents](./.claude/context/) | Full ForgeGate architecture and technical specifications |
+| Document                                                           | Purpose                                                                 |
+| ------------------------------------------------------------------ | ----------------------------------------------------------------------- |
+| [Linting and Clippy](./.claude/context/linting-and-clippy.md)      | Clippy thresholds, workspace lints, and how they map to design patterns |
+| [Commit and Release](./.claude/context/commit-and-release.md)      | Conventional commits, version bump logic, release flow                  |
+| [Scaffolding Decisions](./.claude/designs/scaffolding-patterns.md) | All 36 design decisions with rationale                                  |
+| [Design Documents](./.claude/context/)                             | Full ForgeGuard architecture and technical specifications               |

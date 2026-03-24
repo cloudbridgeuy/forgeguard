@@ -421,16 +421,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "00b0228411908ca8685dba7fc2cdd70ec9990a6e753e89b6ac91a84c40fbaf4b"
 
 [[package]]
-name = "forgegate_agent"
+name = "forgeguard_agent"
 version = "0.0.0"
 dependencies = [
  "axum",
  "color-eyre",
- "forgegate_audit",
- "forgegate_audit_core",
- "forgegate_authz",
- "forgegate_authz_core",
- "forgegate_core",
+ "forgeguard_audit",
+ "forgeguard_audit_core",
+ "forgeguard_authz",
+ "forgeguard_authz_core",
+ "forgeguard_core",
  "serde",
  "serde_json",
  "tokio",
@@ -439,11 +439,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "forgegate_audit"
+name = "forgeguard_audit"
 version = "0.0.0"
 dependencies = [
- "forgegate_audit_core",
- "forgegate_core",
+ "forgeguard_audit_core",
+ "forgeguard_core",
  "serde",
  "serde_json",
  "thiserror",
@@ -452,23 +452,23 @@ dependencies = [
 ]
 
 [[package]]
-name = "forgegate_audit_core"
+name = "forgeguard_audit_core"
 version = "0.0.0"
 dependencies = [
  "chrono",
- "forgegate_core",
+ "forgeguard_core",
  "serde",
  "serde_json",
  "thiserror",
 ]
 
 [[package]]
-name = "forgegate_authn"
+name = "forgeguard_authn"
 version = "0.0.0"
 dependencies = [
- "forgegate_audit_core",
- "forgegate_authn_core",
- "forgegate_core",
+ "forgeguard_audit_core",
+ "forgeguard_authn_core",
+ "forgeguard_core",
  "serde",
  "serde_json",
  "thiserror",
@@ -477,23 +477,23 @@ dependencies = [
 ]
 
 [[package]]
-name = "forgegate_authn_core"
+name = "forgeguard_authn_core"
 version = "0.0.0"
 dependencies = [
  "chrono",
- "forgegate_core",
+ "forgeguard_core",
  "serde",
  "serde_json",
  "thiserror",
 ]
 
 [[package]]
-name = "forgegate_authz"
+name = "forgeguard_authz"
 version = "0.0.0"
 dependencies = [
- "forgegate_audit_core",
- "forgegate_authz_core",
- "forgegate_core",
+ "forgeguard_audit_core",
+ "forgeguard_authz_core",
+ "forgeguard_core",
  "serde",
  "serde_json",
  "thiserror",
@@ -502,28 +502,28 @@ dependencies = [
 ]
 
 [[package]]
-name = "forgegate_authz_core"
+name = "forgeguard_authz_core"
 version = "0.0.0"
 dependencies = [
- "forgegate_core",
+ "forgeguard_core",
  "serde",
  "serde_json",
  "thiserror",
 ]
 
 [[package]]
-name = "forgegate_back_office"
+name = "forgeguard_back_office"
 version = "0.0.0"
 dependencies = [
  "axum",
  "color-eyre",
- "forgegate_audit",
- "forgegate_audit_core",
- "forgegate_authn",
- "forgegate_authn_core",
- "forgegate_authz",
- "forgegate_authz_core",
- "forgegate_core",
+ "forgeguard_audit",
+ "forgeguard_audit_core",
+ "forgeguard_authn",
+ "forgeguard_authn_core",
+ "forgeguard_authz",
+ "forgeguard_authz_core",
+ "forgeguard_core",
  "serde",
  "serde_json",
  "tokio",
@@ -533,15 +533,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "forgegate_cli"
+name = "forgeguard_cli"
 version = "0.0.0"
 dependencies = [
  "clap",
  "color-eyre",
- "forgegate_authn_core",
- "forgegate_authz_core",
- "forgegate_core",
- "forgegate_sdk",
+ "forgeguard_authn_core",
+ "forgeguard_authz_core",
+ "forgeguard_core",
+ "forgeguard_sdk",
  "reqwest",
  "serde",
  "serde_json",
@@ -551,18 +551,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "forgegate_control_plane"
+name = "forgeguard_control_plane"
 version = "0.0.0"
 dependencies = [
  "axum",
  "color-eyre",
- "forgegate_audit",
- "forgegate_audit_core",
- "forgegate_authn",
- "forgegate_authn_core",
- "forgegate_authz",
- "forgegate_authz_core",
- "forgegate_core",
+ "forgeguard_audit",
+ "forgeguard_audit_core",
+ "forgeguard_authn",
+ "forgeguard_authn_core",
+ "forgeguard_authz",
+ "forgeguard_authz_core",
+ "forgeguard_core",
  "serde",
  "serde_json",
  "tokio",
@@ -572,7 +572,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "forgegate_core"
+name = "forgeguard_core"
 version = "0.0.0"
 dependencies = [
  "chrono",
@@ -583,38 +583,38 @@ dependencies = [
 ]
 
 [[package]]
-name = "forgegate_ffi_python"
+name = "forgeguard_ffi_python"
 version = "0.0.0"
 dependencies = [
- "forgegate_core",
- "forgegate_sdk",
+ "forgeguard_core",
+ "forgeguard_sdk",
  "serde",
  "serde_json",
  "thiserror",
 ]
 
 [[package]]
-name = "forgegate_ffi_wasm"
+name = "forgeguard_ffi_wasm"
 version = "0.0.0"
 dependencies = [
- "forgegate_core",
- "forgegate_sdk",
+ "forgeguard_core",
+ "forgeguard_sdk",
  "serde",
  "serde_json",
  "thiserror",
 ]
 
 [[package]]
-name = "forgegate_proxy"
+name = "forgeguard_proxy"
 version = "0.0.0"
 dependencies = [
  "axum",
  "color-eyre",
- "forgegate_audit",
- "forgegate_audit_core",
- "forgegate_authz",
- "forgegate_authz_core",
- "forgegate_core",
+ "forgeguard_audit",
+ "forgeguard_audit_core",
+ "forgeguard_authz",
+ "forgeguard_authz_core",
+ "forgeguard_core",
  "serde",
  "serde_json",
  "tokio",
@@ -623,12 +623,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "forgegate_sdk"
+name = "forgeguard_sdk"
 version = "0.0.0"
 dependencies = [
- "forgegate_authn_core",
- "forgegate_authz_core",
- "forgegate_core",
+ "forgeguard_authn_core",
+ "forgeguard_authz_core",
+ "forgeguard_core",
  "serde",
  "serde_json",
  "thiserror",

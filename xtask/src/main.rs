@@ -12,7 +12,7 @@ use clap::{Parser, Subcommand};
 use color_eyre::eyre::Result;
 
 #[derive(Parser)]
-#[command(name = "xtask", about = "ForgeGate development tasks")]
+#[command(name = "xtask", about = "ForgeGuard development tasks")]
 struct App {
     #[command(subcommand)]
     command: Commands,

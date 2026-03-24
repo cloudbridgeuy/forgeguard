@@ -8,7 +8,7 @@ All notable changes to this project will be documented in this file.\n
 """
 body = """
 {%- macro remote_url() -%}
-  https://github.com/cloudbridgeuy/forgegate
+  https://github.com/cloudbridgeuy/forgeguard
 {%- endmacro -%}
 
 {% if version -%}
@@ -35,19 +35,19 @@ conventional_commits = true
 filter_unconventional = true
 split_commits = false
 commit_parsers = [
-    { message = "^feat", group = "Features" },
-    { message = "^fix", group = "Bug Fixes" },
-    { message = "^doc", group = "Documentation" },
-    { message = "^perf", group = "Performance" },
-    { message = "^refactor", group = "Refactoring" },
-    { message = "^style", group = "Style" },
-    { message = "^test", group = "Testing" },
-    { message = "^chore\\(deps\\)", skip = true },
-    { message = "^chore\\(pr\\)", skip = true },
-    { message = "^chore\\(pull\\)", skip = true },
-    { message = "^chore: bump version", skip = true },
-    { message = "^chore|^ci", group = "Miscellaneous" },
-    { body = ".*security", group = "Security" },
+  { message = "^feat", group = "Features" },
+  { message = "^fix", group = "Bug Fixes" },
+  { message = "^doc", group = "Documentation" },
+  { message = "^perf", group = "Performance" },
+  { message = "^refactor", group = "Refactoring" },
+  { message = "^style", group = "Style" },
+  { message = "^test", group = "Testing" },
+  { message = "^chore\\(deps\\)", skip = true },
+  { message = "^chore\\(pr\\)", skip = true },
+  { message = "^chore\\(pull\\)", skip = true },
+  { message = "^chore: bump version", skip = true },
+  { message = "^chore|^ci", group = "Miscellaneous" },
+  { body = ".*security", group = "Security" },
 ]
 protect_breaking_commits = false
 filter_commits = false

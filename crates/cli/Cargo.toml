@@ -1,8 +1,8 @@
 [package]
-name = "forgegate_cli"
+name = "forgeguard_cli"
 version = "0.0.0"
-homepage = "https://github.com/cloudbridgeuy/forgegate"
-description = "ForgeGate developer CLI — schema validation, policy testing, local dev"
+homepage = "https://github.com/cloudbridgeuy/forgeguard"
+description = "ForgeGuard developer CLI — schema validation, policy testing, local dev"
 autobins = false
 
 authors.workspace = true
@@ -10,14 +10,14 @@ edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "forgegate"
+name = "forgeguard"
 path = "src/main.rs"
 
 [dependencies]
-forgegate_core = { workspace = true }
-forgegate_authn_core = { workspace = true }
-forgegate_authz_core = { workspace = true }
-forgegate_sdk = { workspace = true }
+forgeguard_core = { workspace = true }
+forgeguard_authn_core = { workspace = true }
+forgeguard_authz_core = { workspace = true }
+forgeguard_sdk = { workspace = true }
 clap = { workspace = true }
 color-eyre = { workspace = true }
 serde = { workspace = true }
