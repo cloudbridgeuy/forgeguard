@@ -13,11 +13,17 @@ license.workspace = true
 name = "forgeguard_authz_core"
 path = "src/lib.rs"
 
+[features]
+test-support = []
+
 [dependencies]
 forgeguard_core = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros"] }
 
 [lints]
 workspace = true
