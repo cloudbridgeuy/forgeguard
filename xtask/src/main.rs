@@ -20,7 +20,7 @@ struct App {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Run code quality checks (fmt, check, clippy, test, dependency analysis)
+    /// Run all code quality checks (fmt, check, clippy, test, rail, file-length)
     Lint(lint::LintArgs),
 }
 

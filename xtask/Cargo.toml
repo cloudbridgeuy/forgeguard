@@ -12,10 +12,6 @@ path = "src/main.rs"
 [dependencies]
 clap = { workspace = true }
 color-eyre = { workspace = true }
-thiserror = { workspace = true }
-tokio = { workspace = true }
-anstream = { workspace = true }
 chrono = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
+duct = "1.1.0"
 glob = "0.3"
