@@ -39,6 +39,14 @@ Each crate defines `Error` and `Result<T> = std::result::Result<T, Error>`. No d
 - Workspace lints enforce pattern compliance — see [linting-and-clippy.md](./.claude/context/linting-and-clippy.md)
 - Test code may use `.unwrap()`
 
+### Verification (MUST)
+
+**`cargo xtask lint` is the single source of truth for code quality.** Run it to validate all changes. Do NOT run `cargo fmt`, `cargo clippy`, `cargo test`, or `cargo check` individually — `xtask lint` runs them all in the correct order and with the correct flags.
+
+- **Before claiming work is done:** run `cargo xtask lint` and confirm exit code 0 (zero output = pass)
+- **To auto-fix:** `cargo xtask lint --fix` (applies formatting + clippy fixes)
+- Pipeline details: see [xtask-lint.md](./.claude/context/xtask-lint.md)
+
 ### Code Quality
 
 - No dead code
@@ -98,5 +106,6 @@ Each crate's `README.md` describes what it owns and its pure/I/O classification.
 | ------------------------------------------------------------------ | ----------------------------------------------------------------------- |
 | [Linting and Clippy](./.claude/context/linting-and-clippy.md)      | Clippy thresholds, workspace lints, and how they map to design patterns |
 | [Commit and Release](./.claude/context/commit-and-release.md)      | Conventional commits, version bump logic, release flow                  |
+| [xtask lint](./.claude/context/xtask-lint.md)                      | Lint pipeline checks, flags, architecture, adding new checks            |
 | [Scaffolding Decisions](./.claude/designs/scaffolding-patterns.md) | All 36 design decisions with rationale                                  |
 | [Design Documents](./.claude/context/)                             | Full ForgeGuard architecture and technical specifications               |
