@@ -80,7 +80,7 @@ See `~/.claude/patterns/` for architectural patterns:
 crates/
 │  Pure (no I/O)
 ├── core/              forgeguardcore — shared primitives, traits, error types
-├── authn-core/        forgeguardauthn_core — typestate flows, transition types
+├── authn-core/        forgeguardauthn_core — identity resolution types and traits
 ├── authz-core/        forgeguardauthz_core — Cedar policy types, permission types
 ├── audit-core/        forgeguardaudit_core — event log types, audit trail schema
 ├── sdk/               forgeguardsdk — Guard, WebhookHandler (WASM-compatible)

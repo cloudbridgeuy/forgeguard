@@ -2,7 +2,7 @@
 name = "forgeguard_authn_core"
 version = "0.0.0"
 homepage = "https://github.com/cloudbridgeuy/forgeguard"
-description = "Authentication domain types and typestate flow definitions (pure)"
+description = "Authentication domain types and identity resolution (pure)"
 autobins = false
 
 authors.workspace = true
@@ -13,12 +13,18 @@ license.workspace = true
 name = "forgeguard_authn_core"
 path = "src/lib.rs"
 
+[features]
+test-support = []
+
 [dependencies]
 forgeguard_core = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros"] }
 
 [lints]
 workspace = true
