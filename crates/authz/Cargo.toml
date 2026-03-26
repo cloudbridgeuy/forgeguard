@@ -16,12 +16,17 @@ path = "src/lib.rs"
 [dependencies]
 forgeguard_core = { workspace = true }
 forgeguard_authz_core = { workspace = true }
-forgeguard_audit_core = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-thiserror = { workspace = true }
+aws-sdk-verifiedpermissions = { workspace = true }
+aws-config = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+lru = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros"] }
 
 [lints]
 workspace = true
