@@ -85,8 +85,9 @@ crates/
 ├── audit-core/        forgeguardaudit_core — event log types, audit trail schema
 ├── sdk/               forgeguardsdk — Guard, WebhookHandler (WASM-compatible)
 │  I/O
-├── authn/             forgeguardauthn — Cognito adapter, SES/SNS
-├── authz/             forgeguardauthz — Verified Permissions, caching
+├── authn/             forgeguardauthn — Cognito JWT resolver, JWKS caching
+├── authz/             forgeguardauthz — Verified Permissions client, decision caching
+├── http/              forgeguardhttp — route matching, config, HTTP adapter (no Pingora)
 ├── audit/             forgeguardaudit — DynamoDB/S3 event log, CloudTrail
 ├── ffi-python/        forgeguardffi_python — PyO3 bindings
 ├── ffi-wasm/          forgeguardffi_wasm — wasm-bindgen bindings
