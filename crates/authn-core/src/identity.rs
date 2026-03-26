@@ -22,9 +22,10 @@ pub struct Identity {
 }
 
 impl Identity {
-    /// Construct a new Identity. Only callable within this crate.
+    /// Construct a new Identity. Takes fully-typed arguments — invariants
+    /// are enforced by the argument types (Parse Don't Validate), not visibility.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn new(
+    pub fn new(
         user_id: UserId,
         tenant_id: Option<TenantId>,
         groups: Vec<GroupName>,

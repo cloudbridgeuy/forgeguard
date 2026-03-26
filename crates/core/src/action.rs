@@ -309,6 +309,7 @@ impl ResourceId {
 
 /// A concrete resource instance for authorization checks.
 /// Constructed from a `QualifiedAction` (namespace + entity) + extracted path param.
+#[derive(Debug)]
 pub struct ResourceRef {
     namespace: Namespace,
     entity: Entity,
