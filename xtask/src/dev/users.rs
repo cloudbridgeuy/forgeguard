@@ -128,8 +128,13 @@ pub(crate) fn build_groups_context(config: &UserConfig) -> String {
 
 /// Run the `dev users` subcommand: read users.toml and display the result.
 pub fn run(args: &UsersArgs) -> Result<()> {
-    let content = std::fs::read_to_string("infra/dev/users.toml")
-        .wrap_err("failed to read infra/dev/users.toml (copy users.example.toml to get started)")?;
+    let path = if std::path::Path::new("infra/dev/users.toml").exists() {
+        "infra/dev/users.toml"
+    } else {
+        "infra/dev/users.example.toml"
+    };
+    let content =
+        std::fs::read_to_string(path).wrap_err_with(|| format!("failed to read {path}"))?;
 
     let config = parse_users_toml(&content)?;
 
