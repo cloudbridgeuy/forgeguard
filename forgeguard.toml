@@ -1,0 +1,240 @@
+# ForgeGuard Proxy Configuration
+# ================================
+# This is the reference configuration with all proxy options documented.
+# Copy this file to `forgeguard.dev.toml` and adjust for your environment.
+# Override the config path with the FORGEGUARD_CONFIG env var.
+#
+# Example values below assume a TODO app sitting behind the proxy.
+
+# ---------------------------------------------------------------------------
+# General
+# ---------------------------------------------------------------------------
+
+# Unique identifier for this project (used in audit logs and policy scoping).
+project_id = "todo-app"
+
+# Address the proxy listens on for incoming HTTP traffic.
+listen_addr = "127.0.0.1:8080"
+
+# The backend service URL that the proxy forwards requests to.
+upstream_url = "http://127.0.0.1:3000"
+
+# Default authorization policy when no route-level policy matches.
+# Values: "allow" or "deny" (default: "deny").
+default_policy = "deny"
+
+# How the proxy determines the client IP address.
+# Values: "peer" (default, uses socket peer address),
+#         "x-forwarded-for" (uses the X-Forwarded-For header),
+#         "x-real-ip" (uses the X-Real-Ip header).
+client_ip_source = "peer"
+
+# ---------------------------------------------------------------------------
+# Authentication
+# ---------------------------------------------------------------------------
+
+[auth]
+# Ordered list of authentication methods the proxy will try.
+# The proxy walks the chain in order; the first one that succeeds wins.
+# Values: "jwt", "api-key", "anonymous"
+chain_order = ["jwt"]
+
+# JWT authentication settings (planned -- not yet wired into the proxy).
+# The xtask `dev setup --cognito` command writes these values to forgeguard.dev.toml.
+# [authn.jwt]
+# jwks_url = "https://cognito-idp.<region>.amazonaws.com/<user-pool-id>/.well-known/jwks.json"
+# issuer   = "https://cognito-idp.<region>.amazonaws.com/<user-pool-id>"
+
+# ---------------------------------------------------------------------------
+# Authorization (Amazon Verified Permissions)
+# ---------------------------------------------------------------------------
+
+[authz]
+# The AVP policy store identifier.
+policy_store_id = "ps-EXAMPLE"
+
+# AWS region where the policy store lives.
+aws_region = "us-east-1"
+
+# How long (in seconds) to cache authorization decisions (default: 300).
+cache_ttl_secs = 300
+
+# Maximum number of entries in the authorization cache (default: 10000).
+cache_max_entries = 10000
+
+# ---------------------------------------------------------------------------
+# Metrics
+# ---------------------------------------------------------------------------
+
+[metrics]
+# Whether to expose a Prometheus-compatible metrics endpoint.
+enabled = false
+
+# Address the metrics endpoint listens on. Only used when enabled = true.
+listen_addr = "127.0.0.1:9090"
+
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
+# Each [[routes]] entry maps an HTTP method + path to an authorization action.
+# The proxy evaluates the matched route's action against the identity and
+# policies to decide allow/deny.
+#
+# Fields:
+#   method         - HTTP method (GET, POST, PUT, DELETE, PATCH, etc.)
+#   path           - URL path pattern. Supports path parameters like `:id`.
+#   action         - The Cedar action name used in authorization evaluation.
+#   resource_param - (optional) Path parameter to use as the Cedar resource id.
+#   feature_gate   - (optional) Feature flag name; if the flag evaluates to
+#                    false, the route returns 404.
+
+[[routes]]
+method = "GET"
+path = "/api/todos"
+action = "Todo::ListTodos"
+
+[[routes]]
+method = "POST"
+path = "/api/todos"
+action = "Todo::CreateTodo"
+
+[[routes]]
+method = "GET"
+path = "/api/todos/:id"
+action = "Todo::ReadTodo"
+resource_param = "id"
+
+[[routes]]
+method = "PUT"
+path = "/api/todos/:id"
+action = "Todo::UpdateTodo"
+resource_param = "id"
+
+[[routes]]
+method = "DELETE"
+path = "/api/todos/:id"
+action = "Todo::DeleteTodo"
+resource_param = "id"
+
+[[routes]]
+method = "POST"
+path = "/api/todos/:id/share"
+action = "Todo::ShareTodo"
+resource_param = "id"
+feature_gate = "todo:sharing"
+
+# ---------------------------------------------------------------------------
+# Public Routes
+# ---------------------------------------------------------------------------
+# Routes that bypass authentication entirely (health checks, docs, etc.).
+#
+# Fields:
+#   method    - HTTP method
+#   path      - URL path pattern
+#   auth_mode - Authentication mode (default: "anonymous")
+
+[[public_routes]]
+method = "GET"
+path = "/healthz"
+auth_mode = "anonymous"
+
+[[public_routes]]
+method = "GET"
+path = "/api/docs"
+auth_mode = "anonymous"
+
+# ---------------------------------------------------------------------------
+# Policies
+# ---------------------------------------------------------------------------
+# Cedar-style policy definitions evaluated locally by the proxy.
+# Each policy has a name, optional description, and a list of statements.
+#
+# Statement fields:
+#   effect    - "Allow" or "Deny"
+#   actions   - List of Cedar action patterns (e.g., "Todo::*", "Todo::ReadTodo")
+#   resources - (optional) List of Cedar entity references; omit for all resources
+#   except    - (optional) List of group names excluded from this statement
+
+[[policies]]
+name = "admin-full-access"
+description = "Admins can perform any action on any resource."
+
+[[policies.statements]]
+effect = "Allow"
+actions = ["Todo::*"]
+
+[[policies]]
+name = "viewer-read-only"
+description = "Viewers can only list and read todos."
+
+[[policies.statements]]
+effect = "Allow"
+actions = ["Todo::ListTodos", "Todo::ReadTodo"]
+
+# ---------------------------------------------------------------------------
+# Groups
+# ---------------------------------------------------------------------------
+# Group definitions that bundle policies and can inherit from other groups.
+#
+# Fields:
+#   name          - Unique group identifier
+#   description   - (optional) Human-readable description
+#   policies      - List of policy names attached to this group
+#   member_groups - (optional) Groups whose members also belong to this group
+
+[[groups]]
+name = "admin"
+description = "Full access to all resources."
+policies = ["admin-full-access"]
+
+[[groups]]
+name = "viewer"
+description = "Read-only access."
+policies = ["viewer-read-only"]
+
+# ---------------------------------------------------------------------------
+# Feature Flags
+# ---------------------------------------------------------------------------
+# Feature flags control runtime behavior without redeployment.
+#
+# Flag names can be global ("maintenance-mode") or scoped ("todo:sharing").
+#
+# Flag definition fields:
+#   type               - "boolean", "string", or "number"
+#   default            - Default value when no override or rollout matches
+#   enabled            - Kill switch (default: true). Set to false to force the
+#                        default value regardless of overrides or rollout.
+#   rollout_percentage - (optional) 0-100. Percentage of users who get the
+#                        rollout_variant instead of the default. Uses a
+#                        deterministic hash so the same user always gets the
+#                        same bucket.
+#   rollout_variant    - (optional) Value returned for users inside the rollout.
+#                        Defaults to true for boolean flags.
+#
+# Override fields (evaluated in order, first match wins):
+#   tenant - (optional) Match a specific tenant id
+#   user   - (optional) Match a specific user id
+#   group  - (optional) Match users belonging to a specific group
+#   value  - The value to return when this override matches
+
+[features]
+
+[features.flags."maintenance-mode"]
+type = "boolean"
+default = false
+enabled = true
+
+[features.flags."todo:sharing"]
+type = "boolean"
+default = false
+enabled = true
+rollout_percentage = 25
+
+[[features.flags."todo:sharing".overrides]]
+group = "admin"
+value = true
+
+[features.flags."todo:ai-suggestions"]
+type = "boolean"
+default = false
+enabled = false

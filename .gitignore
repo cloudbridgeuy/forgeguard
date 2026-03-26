@@ -19,6 +19,11 @@
 
 # Local development
 .local/
+forgeguard.dev.toml
+infra/dev/.env
+infra/dev/users.toml
+infra/dev/node_modules/
+infra/dev/cdk.out/
 
 # Playwright MCP screenshots
 .playwright-mcp/

@@ -1,0 +1,17 @@
+{
+  "app": "bun run ts-node bin/app.ts",
+  "watch": {
+    "include": ["**"],
+    "exclude": [
+      "README.md",
+      "cdk*.js",
+      "**/*.d.ts",
+      "**/*.js",
+      "node_modules",
+      "cdk.out"
+    ]
+  },
+  "context": {
+    "@aws-cdk/core:target-partitions": ["aws"]
+  }
+}

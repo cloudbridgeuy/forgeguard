@@ -1,0 +1,26 @@
+groups = ["admin", "member", "viewer", "top-secret-readers"]
+
+[[users]]
+username = "alice"
+tenant = "acme-corp"
+groups = ["admin", "top-secret-readers"]
+
+[[users]]
+username = "bob"
+tenant = "acme-corp"
+groups = ["member", "top-secret-readers"]
+
+[[users]]
+username = "charlie"
+tenant = "acme-corp"
+groups = ["viewer"]
+
+[[users]]
+username = "dave"
+tenant = "initech"
+groups = ["admin"]
+
+[[users]]
+username = "eve"
+tenant = "initech"
+groups = ["member"]
