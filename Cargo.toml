@@ -42,6 +42,10 @@ debug = 0
 
 # Output formatting
 anstream = "1.0"
+
+# Async trait support
+async-trait = "0.1"
+
 aws-config = "1"
 
 # AWS SDKs
@@ -49,6 +53,9 @@ aws-sdk-verifiedpermissions = "1"
 
 # HTTP framework
 axum = { version = "0.8", features = ["macros"] }
+
+# Binary data
+bytes = "1"
 
 # Date/time
 chrono = { version = "0.4", features = ["serde"] }
@@ -80,6 +87,13 @@ lru = "0.12"
 
 # Routing
 matchit = "0.8"
+
+# Pingora reverse proxy framework
+pingora = "0.8"
+pingora-core = "0.8"
+pingora-error = "0.8"
+pingora-http = "0.8"
+pingora-proxy = "0.8"
 
 # HTTP client
 reqwest = { version = "0.12", features = ["json"] }
