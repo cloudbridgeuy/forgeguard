@@ -13,7 +13,7 @@ export class CognitoStack extends cdk.Stack {
     const userPool = new cognito.UserPool(this, "UserPool", {
       userPoolName: `${id}-user-pool`,
       selfSignUpEnabled: false,
-      signInAliases: { email: true },
+      signInAliases: { username: true, email: true },
       autoVerify: { email: true },
       standardAttributes: {
         email: { required: true, mutable: true },
