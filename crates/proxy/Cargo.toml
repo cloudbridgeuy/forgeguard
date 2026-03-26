@@ -2,7 +2,7 @@
 name = "forgeguard_proxy"
 version = "0.0.0"
 homepage = "https://github.com/cloudbridgeuy/forgeguard"
-description = "ForgeGuard request interception proxy"
+description = "ForgeGuard Pingora-based auth-enforcing reverse proxy"
 autobins = false
 
 authors.workspace = true
@@ -15,17 +15,24 @@ path = "src/main.rs"
 
 [dependencies]
 forgeguard_core = { workspace = true }
-forgeguard_authz_core = { workspace = true }
-forgeguard_audit_core = { workspace = true }
+forgeguard_http = { workspace = true }
+forgeguard_authn_core = { workspace = true }
 forgeguard_authz = { workspace = true }
-forgeguard_audit = { workspace = true }
-axum = { workspace = true }
+forgeguard_authz_core = { workspace = true }
+async-trait = { workspace = true }
+aws-config = { workspace = true }
+bytes = { workspace = true }
+aws-sdk-verifiedpermissions = { workspace = true }
+clap = { workspace = true }
 color-eyre = { workspace = true }
-serde = { workspace = true }
+pingora-core = { workspace = true }
+pingora-http = { workspace = true }
+pingora-proxy = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+url = { workspace = true }
 
 [lints]
 workspace = true
