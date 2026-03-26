@@ -95,7 +95,7 @@ crates/
 ├── control-plane/     forgeguardcontrol_plane — dashboard API
 ├── agent/             forgeguardagent — self-hosted data plane
 ├── cli/               forgeguardcli — developer CLI (binary: forgeguard)
-├── proxy/             forgeguardproxy — request interception
+├── proxy/             forgeguardproxy — Pingora auth-enforcing reverse proxy
 └── back-office/       forgeguardback_office — internal ops API
 ```
 
@@ -109,4 +109,5 @@ Each crate's `README.md` describes what it owns and its pure/I/O classification.
 | [Commit and Release](./.claude/context/commit-and-release.md)      | Conventional commits, version bump logic, release flow                  |
 | [xtask lint](./.claude/context/xtask-lint.md)                      | Lint pipeline checks, flags, architecture, adding new checks            |
 | [Scaffolding Decisions](./.claude/designs/scaffolding-patterns.md) | All 36 design decisions with rationale                                  |
+| [Proxy Shaping](./.claude/designs/proxy-shaping.md)                | Proxy design: requirements, shape, breadboard, slices                   |
 | [Design Documents](./.claude/context/)                             | Full ForgeGuard architecture and technical specifications               |
