@@ -7,7 +7,6 @@ use std::time::{Duration, Instant};
 
 use forgeguard_authz_core::PolicyDecision;
 use forgeguard_authz_core::PolicyQuery;
-use forgeguard_core::PrincipalRef;
 use lru::LruCache;
 
 // ---------------------------------------------------------------------------
@@ -31,17 +30,17 @@ impl CacheKey {
 
 /// Build a deterministic cache key from a [`PolicyQuery`].
 ///
-/// Format: `{principal_entity_type}|{action}|{resource_or_none}|{tenant_or_none}`
+/// Format: `{principal_user_id}|{action}|{resource_identity_or_none}|{tenant_or_none}`
 ///
 /// Uses `Display` representations of the typed IDs so we don't need `Hash`
 /// on every core type.
 pub(crate) fn build_cache_key(query: &PolicyQuery) -> CacheKey {
-    let principal_type = PrincipalRef::vp_entity_type();
+    let principal_id = query.principal().user_id().as_str();
     let action = query.action().to_string();
 
     let resource_part = query
         .resource()
-        .map(forgeguard_core::ResourceRef::vp_entity_type)
+        .map(std::string::ToString::to_string)
         .unwrap_or_else(|| "none".to_string());
 
     let tenant_part = query
@@ -51,7 +50,7 @@ pub(crate) fn build_cache_key(query: &PolicyQuery) -> CacheKey {
         .unwrap_or_else(|| "none".to_string());
 
     CacheKey(format!(
-        "{principal_type}|{action}|{resource_part}|{tenant_part}"
+        "{principal_id}|{action}|{resource_part}|{tenant_part}"
     ))
 }
 
@@ -145,12 +144,16 @@ mod tests {
     use std::thread;
 
     use forgeguard_authz_core::{DenyReason, PolicyContext};
-    use forgeguard_core::{QualifiedAction, UserId};
+    use forgeguard_core::{PrincipalRef, QualifiedAction, UserId};
 
     use super::*;
 
     fn make_query(action_str: &str) -> PolicyQuery {
-        let principal = PrincipalRef::new(UserId::new("test-user").unwrap());
+        make_query_for_user("test-user", action_str)
+    }
+
+    fn make_query_for_user(user: &str, action_str: &str) -> PolicyQuery {
+        let principal = PrincipalRef::new(UserId::new(user).unwrap());
         let action = QualifiedAction::parse(action_str).unwrap();
         let context = PolicyContext::new();
         PolicyQuery::new(principal, action, None, context)
@@ -258,18 +261,27 @@ mod tests {
     }
 
     #[test]
-    fn deterministic_cache_key() {
-        let q1 = make_query("todo:read:list");
-        let q2 = make_query("todo:read:list");
+    fn same_user_same_action_produces_same_key() {
+        let q1 = make_query_for_user("alice", "todo:read:list");
+        let q2 = make_query_for_user("alice", "todo:read:list");
         let k1 = build_cache_key(&q1);
         let k2 = build_cache_key(&q2);
         assert_eq!(k1, k2);
     }
 
     #[test]
-    fn different_actions_produce_different_keys() {
-        let q1 = make_query("todo:read:list");
-        let q2 = make_query("todo:write:list");
+    fn different_users_same_action_produces_different_keys() {
+        let q1 = make_query_for_user("alice", "todo:read:list");
+        let q2 = make_query_for_user("bob", "todo:read:list");
+        let k1 = build_cache_key(&q1);
+        let k2 = build_cache_key(&q2);
+        assert_ne!(k1, k2);
+    }
+
+    #[test]
+    fn same_user_different_action_produces_different_keys() {
+        let q1 = make_query_for_user("alice", "todo:read:list");
+        let q2 = make_query_for_user("alice", "todo:write:list");
         let k1 = build_cache_key(&q1);
         let k2 = build_cache_key(&q2);
         assert_ne!(k1, k2);
