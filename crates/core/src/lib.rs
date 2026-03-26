@@ -14,8 +14,8 @@ pub use action::{
 pub use cedar::{compile_all_to_cedar, compile_policy_to_cedar};
 pub use error::{Error, Result};
 pub use features::{
-    evaluate_flags, FlagConfig, FlagDefinition, FlagName, FlagOverride, FlagType, FlagValue,
-    ResolvedFlags,
+    evaluate_flags, evaluate_flags_detailed, DetailedResolvedFlags, FlagConfig, FlagDefinition,
+    FlagName, FlagOverride, FlagType, FlagValue, ResolutionReason, ResolvedFlag, ResolvedFlags,
 };
 pub use fgrn::{Fgrn, FgrnSegment};
 pub use permission::{
