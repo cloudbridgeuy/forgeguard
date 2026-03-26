@@ -1,4 +1,5 @@
 mod setup;
+mod setup_core;
 mod token;
 mod users;
 
