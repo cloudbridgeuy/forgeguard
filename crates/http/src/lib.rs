@@ -3,6 +3,7 @@
 pub mod config;
 pub(crate) mod config_raw;
 pub mod credential;
+pub mod debug;
 pub mod error;
 pub mod headers;
 pub mod method;
@@ -16,6 +17,7 @@ pub use config::{
     ConfigOverrides, DefaultPolicy, MetricsConfig, ProxyConfig,
 };
 pub use credential::extract_credential;
+pub use debug::{evaluate_debug, FlagDebugQuery};
 pub use error::{Error, Result, ValidationError, ValidationErrorKind, ValidationWarning};
 pub use headers::{inject_client_ip, inject_headers, IdentityProjection};
 pub use method::HttpMethod;

@@ -17,6 +17,10 @@ pub enum Error {
     #[error("no route matched the request")]
     RouteNotFound,
 
+    /// Invalid query parameter in a debug/admin endpoint.
+    #[error("invalid query: {0}")]
+    InvalidQuery(String),
+
     /// An error from the core crate.
     #[error(transparent)]
     Core(#[from] forgeguard_core::Error),
