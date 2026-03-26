@@ -13,12 +13,16 @@ use forgeguard_authn_core::{Identity, IdentityChain};
 use forgeguard_authz_core::PolicyEngine;
 use forgeguard_core::{evaluate_flags, FlagConfig, ProjectId, ResolvedFlags};
 use forgeguard_http::{
-    build_query, extract_credential, inject_headers, ClientIpSource, DefaultPolicy,
-    IdentityProjection, MatchedRoute, PublicMatch, PublicRouteMatcher, RouteMatcher,
+    build_query, evaluate_debug, extract_credential, inject_headers, ClientIpSource, DefaultPolicy,
+    FlagDebugQuery, IdentityProjection, MatchedRoute, PublicMatch, PublicRouteMatcher,
+    RouteMatcher,
 };
 
 /// Health check path served before any auth logic.
 const HEALTH_PATH: &str = "/.well-known/forgeguard/health";
+
+/// Debug endpoint for flag evaluation (requires --debug flag).
+const FLAGS_DEBUG_PATH: &str = "/.well-known/forgeguard/flags";
 
 /// Configuration consumed by [`ForgeGuardProxy`] at construction time.
 pub(crate) struct ProxyParams {
@@ -34,6 +38,7 @@ pub(crate) struct ProxyParams {
     pub client_ip_source: ClientIpSource,
     pub project_id: ProjectId,
     pub auth_providers: Vec<String>,
+    pub debug_mode: bool,
 }
 
 /// The Pingora `ProxyHttp` implementation.
@@ -53,6 +58,7 @@ pub(crate) struct ForgeGuardProxy {
     client_ip_source: ClientIpSource,
     project_id: ProjectId,
     auth_providers: Vec<String>,
+    debug_mode: bool,
 }
 
 impl ForgeGuardProxy {
@@ -70,6 +76,7 @@ impl ForgeGuardProxy {
             client_ip_source: params.client_ip_source,
             project_id: params.project_id,
             auth_providers: params.auth_providers,
+            debug_mode: params.debug_mode,
         }
     }
 }
@@ -120,6 +127,36 @@ impl ProxyHttp for ForgeGuardProxy {
             return Ok(true);
         }
 
+        // 1b. Debug endpoint — flag evaluation with reasons (requires --debug)
+        if self.debug_mode && ctx.path == FLAGS_DEBUG_PATH {
+            let query_str = req.uri.query().unwrap_or("");
+            match FlagDebugQuery::parse(query_str) {
+                Ok(query) => {
+                    let result = evaluate_debug(&self.flag_config, &query);
+                    match serde_json::to_string(&result) {
+                        Ok(json) => {
+                            let _ = session
+                                .respond_error_with_body(200, Bytes::from(json))
+                                .await;
+                        }
+                        Err(_) => {
+                            let body = serde_json::json!({"error": "Internal Server Error"});
+                            let _ = session
+                                .respond_error_with_body(500, Bytes::from(body.to_string()))
+                                .await;
+                        }
+                    }
+                }
+                Err(e) => {
+                    let body = serde_json::json!({"error": format!("{e}")});
+                    let _ = session
+                        .respond_error_with_body(400, Bytes::from(body.to_string()))
+                        .await;
+                }
+            }
+            return Ok(true);
+        }
+
         // 2. Public route check
         let public_match = self.public_matcher.check(&ctx.method, &ctx.path);
 
@@ -167,8 +204,12 @@ impl ProxyHttp for ForgeGuardProxy {
 
         // 4. Evaluate feature flags (pure, no I/O)
         if let Some(identity) = &ctx.identity {
-            let resolved =
-                evaluate_flags(&self.flag_config, identity.tenant_id(), identity.user_id());
+            let resolved = evaluate_flags(
+                &self.flag_config,
+                identity.tenant_id(),
+                identity.user_id(),
+                identity.groups(),
+            );
             ctx.flags = Some(resolved);
         }
 
@@ -183,7 +224,10 @@ impl ProxyHttp for ForgeGuardProxy {
                     .as_ref()
                     .is_some_and(|flags| flags.enabled(&gate.to_string()));
                 if !gate_enabled {
-                    let _ = session.respond_error(404).await;
+                    let body = serde_json::json!({"error": "Not Found"});
+                    let _ = session
+                        .respond_error_with_body(404, Bytes::from(body.to_string()))
+                        .await;
                     return Ok(true);
                 }
             }

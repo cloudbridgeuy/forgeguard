@@ -56,8 +56,13 @@ fn run(app: App) -> color_eyre::Result<()> {
         listen = %config.listen_addr(),
         upstream = %config.upstream_url(),
         project = %config.project_id(),
+        flags = config.features().flags.len(),
         "starting forgeguard-proxy"
     );
+
+    if opts.debug {
+        tracing::warn!("debug mode enabled — flag debug endpoint is accessible");
+    }
 
     let identity_chain = build_identity_chain(&config)?;
     let policy_engine = build_policy_engine(&config)?;
@@ -87,6 +92,7 @@ fn run(app: App) -> color_eyre::Result<()> {
         client_ip_source: config.client_ip_source(),
         project_id: config.project_id().clone(),
         auth_providers: config.auth().chain_order().to_vec(),
+        debug_mode: opts.debug,
     });
 
     let mut server =

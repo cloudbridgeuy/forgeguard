@@ -42,6 +42,10 @@ pub(crate) struct RunOptions {
     /// Override the default policy (passthrough or deny).
     #[arg(long, env = "FORGEGUARD_DEFAULT_POLICY", value_parser = parse_default_policy)]
     pub default_policy: Option<DefaultPolicy>,
+
+    /// Enable debug endpoints (e.g., /.well-known/forgeguard/flags).
+    #[arg(long, env = "FORGEGUARD_DEBUG")]
+    pub debug: bool,
 }
 
 fn parse_default_policy(s: &str) -> std::result::Result<DefaultPolicy, String> {
