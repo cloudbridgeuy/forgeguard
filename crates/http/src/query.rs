@@ -38,11 +38,9 @@ pub fn build_query(
         context = context.with_attribute("extra_claims", extra.clone());
     }
 
-    // ResourceRef doesn't implement Clone, so we cannot extract it from the
-    // shared reference to MatchedRoute. The proxy layer should consume the
-    // MatchedRoute and pass the resource separately. For query construction,
-    // we pass None — the caller can use `MatchedRoute::into_resource()` if needed.
-    PolicyQuery::new(principal, matched_route.action().clone(), None, context)
+    let resource = matched_route.resource().cloned();
+
+    PolicyQuery::new(principal, matched_route.action().clone(), resource, context)
 }
 
 #[cfg(test)]

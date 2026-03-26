@@ -309,7 +309,7 @@ impl ResourceId {
 
 /// A concrete resource instance for authorization checks.
 /// Constructed from a `QualifiedAction` (namespace + entity) + extracted path param.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ResourceRef {
     namespace: Namespace,
     entity: Entity,
@@ -337,6 +337,33 @@ impl ResourceRef {
     pub fn to_fgrn(&self, project: &ProjectId, tenant: &TenantId) -> Fgrn {
         Fgrn::resource(project, tenant, &self.namespace, &self.entity, &self.id)
     }
+
+    /// Borrow the namespace.
+    pub fn namespace(&self) -> &Namespace {
+        &self.namespace
+    }
+
+    /// Borrow the entity.
+    pub fn entity(&self) -> &Entity {
+        &self.entity
+    }
+
+    /// Borrow the resource ID.
+    pub fn id(&self) -> &ResourceId {
+        &self.id
+    }
+}
+
+impl fmt::Display for ResourceRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}:{}:{}",
+            self.namespace.as_str(),
+            self.entity.as_str(),
+            self.id.as_str()
+        )
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -352,6 +379,11 @@ impl PrincipalRef {
     /// Wrap a user ID as a principal reference.
     pub fn new(user_id: UserId) -> Self {
         Self { user_id }
+    }
+
+    /// Borrow the user ID.
+    pub fn user_id(&self) -> &UserId {
+        &self.user_id
     }
 
     /// Verified Permissions entity type for principals.
