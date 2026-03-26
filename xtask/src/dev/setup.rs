@@ -20,6 +20,9 @@ pub struct SetupArgs {
     /// Delete and recreate test users
     #[arg(long)]
     pub force: bool,
+    /// Destroy the CDK stack and all its resources
+    #[arg(long)]
+    pub destroy: bool,
     /// Print what would happen without executing
     #[arg(long)]
     pub dry_run: bool,
@@ -60,6 +63,42 @@ pub async fn run(args: &SetupArgs) -> Result<()> {
         bail!(
             "currently only `--cognito` setup is supported; run: cargo xtask dev setup --cognito"
         );
+    }
+
+    // -- Destroy mode ------------------------------------------------------
+
+    if args.destroy {
+        if !std::path::Path::new("infra/dev/.env").exists() {
+            std::fs::copy("infra/dev/.env.example", "infra/dev/.env")
+                .context("failed to copy .env.example to .env")?;
+        }
+        dotenvy::from_path("infra/dev/.env").context("failed to load infra/dev/.env")?;
+        let stack_prefix =
+            std::env::var("STACK_PREFIX").context("STACK_PREFIX not set in infra/dev/.env")?;
+        let stack_name = format!("{stack_prefix}-cognito");
+
+        if args.dry_run {
+            println!("Dry run -- would destroy CDK stack: {stack_name}");
+            return Ok(());
+        }
+
+        // Ensure node_modules exist for CDK CLI
+        if !std::path::Path::new("infra/dev/node_modules").exists() {
+            println!("Installing node_modules...");
+            duct::cmd!("bun", "install")
+                .dir("infra/dev")
+                .run()
+                .context("bun install failed")?;
+        }
+
+        println!("Destroying CDK stack: {stack_name}...");
+        duct::cmd!("bun", "run", "cdk", "destroy", &stack_name, "--force")
+            .dir("infra/dev")
+            .run()
+            .context("CDK destroy failed")?;
+
+        println!("Stack {stack_name} destroyed.");
+        return Ok(());
     }
 
     // -- Auto-copy example files if missing --------------------------------
