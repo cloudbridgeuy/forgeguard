@@ -62,49 +62,28 @@ pub async fn run(args: &SetupArgs) -> Result<()> {
         );
     }
 
-    // -- Resolve config file paths (fall back to examples for dry-run) ----
+    // -- Auto-copy example files if missing --------------------------------
 
-    let env_path = if std::path::Path::new("infra/dev/.env").exists() {
-        "infra/dev/.env"
-    } else {
-        "infra/dev/.env.example"
-    };
+    if !std::path::Path::new("infra/dev/.env").exists() {
+        std::fs::copy("infra/dev/.env.example", "infra/dev/.env")
+            .context("failed to copy .env.example to .env")?;
+        println!("Created infra/dev/.env from .env.example");
+    }
 
-    let users_path = if std::path::Path::new("infra/dev/users.toml").exists() {
-        "infra/dev/users.toml"
-    } else {
-        "infra/dev/users.example.toml"
-    };
+    if !std::path::Path::new("infra/dev/users.toml").exists() {
+        std::fs::copy("infra/dev/users.example.toml", "infra/dev/users.toml")
+            .context("failed to copy users.example.toml to users.toml")?;
+        println!("Created infra/dev/users.toml from users.example.toml");
+    }
 
-    let using_examples = env_path.contains("example") || users_path.contains("example");
-
-    // -- Preflight: check tools and files ---------------------------------
+    // -- Preflight: check tools -------------------------------------------
 
     let checks = PreflightChecks {
         bun_exists: tool_exists("bun"),
         bunx_exists: tool_exists("bunx"),
-        env_file_exists: !using_examples || args.dry_run,
-        users_file_exists: !users_path.contains("example") || args.dry_run,
+        env_file_exists: true,
+        users_file_exists: true,
     };
-
-    if !args.dry_run && using_examples {
-        let mut errors = Vec::new();
-        if !std::path::Path::new("infra/dev/.env").exists() {
-            errors.push(
-                "infra/dev/.env not found -- copy .env.example and fill in values".to_string(),
-            );
-        }
-        if !std::path::Path::new("infra/dev/users.toml").exists() {
-            errors.push(
-                "infra/dev/users.toml not found -- copy users.example.toml and customise"
-                    .to_string(),
-            );
-        }
-        if !errors.is_empty() {
-            let msg = errors.join("\n  - ");
-            bail!("preflight checks failed:\n  - {msg}");
-        }
-    }
 
     let tool_errors = validate_preflight(&checks);
     if !tool_errors.is_empty() {
@@ -114,7 +93,7 @@ pub async fn run(args: &SetupArgs) -> Result<()> {
 
     // -- Load config ------------------------------------------------------
 
-    dotenvy::from_path(env_path).wrap_err_with(|| format!("failed to load {env_path}"))?;
+    dotenvy::from_path("infra/dev/.env").context("failed to load infra/dev/.env")?;
 
     let stack_prefix =
         std::env::var("STACK_PREFIX").context("STACK_PREFIX not set in infra/dev/.env")?;
@@ -122,8 +101,8 @@ pub async fn run(args: &SetupArgs) -> Result<()> {
     let password =
         std::env::var("DEV_PASSWORD").context("DEV_PASSWORD not set in infra/dev/.env")?;
 
-    let users_content = std::fs::read_to_string(users_path)
-        .wrap_err_with(|| format!("failed to read {users_path}"))?;
+    let users_content = std::fs::read_to_string("infra/dev/users.toml")
+        .context("failed to read infra/dev/users.toml")?;
     let user_config = users::parse_users_toml(&users_content)?;
     let groups_context = users::build_groups_context(&user_config);
 
