@@ -16,12 +16,18 @@ path = "src/lib.rs"
 [dependencies]
 forgeguard_core = { workspace = true }
 forgeguard_authn_core = { workspace = true }
-forgeguard_audit_core = { workspace = true }
+chrono = { workspace = true }
+jsonwebtoken = { workspace = true }
+reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
 
 [lints]
 workspace = true
