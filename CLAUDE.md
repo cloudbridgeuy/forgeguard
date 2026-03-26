@@ -9,6 +9,7 @@
 - **Pre-commit hooks:** `cargo xtask lint --install-hooks`
 - **Commits:** Conventional Commits — see [commit-and-release.md](./.claude/context/commit-and-release.md)
 - **Releases:** `cargo xtask release` — see [commit-and-release.md](./.claude/context/commit-and-release.md)
+- **GitHub CLI:** always use `gh auth switch --user cloudbridgeuy` before any `gh` command
 
 ## Unnegotiables
 
