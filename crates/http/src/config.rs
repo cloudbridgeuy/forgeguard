@@ -5,7 +5,7 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use forgeguard_core::{FlagName, ProjectId, QualifiedAction};
+use forgeguard_core::{FlagConfig, FlagName, GroupDefinition, Policy, ProjectId, QualifiedAction};
 use url::Url;
 
 use crate::config_raw::RawProxyConfig;
@@ -144,6 +144,9 @@ pub struct ProxyConfig {
     metrics: MetricsConfig,
     routes: Vec<RouteMapping>,
     public_routes: Vec<PublicRoute>,
+    policies: Vec<Policy>,
+    groups: Vec<GroupDefinition>,
+    features: FlagConfig,
 }
 
 impl ProxyConfig {
@@ -176,6 +179,15 @@ impl ProxyConfig {
     }
     pub fn public_routes(&self) -> &[PublicRoute] {
         &self.public_routes
+    }
+    pub fn policies(&self) -> &[Policy] {
+        &self.policies
+    }
+    pub fn groups(&self) -> &[GroupDefinition] {
+        &self.groups
+    }
+    pub fn features(&self) -> &FlagConfig {
+        &self.features
     }
 }
 
@@ -304,6 +316,13 @@ impl TryFrom<RawProxyConfig> for ProxyConfig {
             .map(|(i, r)| parse_public_route(i, r))
             .collect::<Result<Vec<_>>>()?;
 
+        let policies = raw.policies;
+        let groups = raw.groups;
+        let features = raw
+            .features
+            .map(|f| FlagConfig { flags: f.flags })
+            .unwrap_or_default();
+
         Ok(ProxyConfig {
             project_id,
             listen_addr,
@@ -315,6 +334,9 @@ impl TryFrom<RawProxyConfig> for ProxyConfig {
             metrics,
             routes,
             public_routes,
+            policies,
+            groups,
+            features,
         })
     }
 }

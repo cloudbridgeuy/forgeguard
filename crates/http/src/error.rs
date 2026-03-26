@@ -80,6 +80,8 @@ pub enum ValidationErrorKind {
     InvalidPolicyReference,
     /// A group member-group reference is invalid.
     InvalidGroupReference,
+    /// Circular group nesting detected.
+    CircularGroupNesting,
 }
 
 impl fmt::Display for ValidationErrorKind {
@@ -89,6 +91,7 @@ impl fmt::Display for ValidationErrorKind {
             Self::UndefinedFeatureGate => write!(f, "undefined-feature-gate"),
             Self::InvalidPolicyReference => write!(f, "invalid-policy-reference"),
             Self::InvalidGroupReference => write!(f, "invalid-group-reference"),
+            Self::CircularGroupNesting => write!(f, "circular-group-nesting"),
         }
     }
 }

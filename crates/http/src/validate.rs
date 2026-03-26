@@ -2,27 +2,23 @@
 //!
 //! Returns all errors and warnings at once so the user can fix everything in one pass.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
-use forgeguard_core::{FlagConfig, GroupDefinition, Policy};
+use forgeguard_core::GroupName;
 
 use crate::config::ProxyConfig;
 use crate::error::{ValidationError, ValidationErrorKind, ValidationWarning};
 
 /// Validate a proxy config. Returns all errors and warnings (collect-all, not fail-fast).
-pub fn validate(
-    config: &ProxyConfig,
-    policies: &[Policy],
-    groups: &[GroupDefinition],
-    features: &FlagConfig,
-) -> (Vec<ValidationError>, Vec<ValidationWarning>) {
+pub fn validate(config: &ProxyConfig) -> (Vec<ValidationError>, Vec<ValidationWarning>) {
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
 
     check_duplicate_routes(config, &mut errors);
-    check_feature_gates(config, features, &mut errors);
-    check_policy_references(groups, policies, &mut errors);
-    check_group_references(groups, &mut errors);
+    check_feature_gates(config, &mut errors);
+    check_policy_references(config, &mut errors);
+    check_group_references(config, &mut errors);
+    check_circular_group_nesting(config, &mut errors);
     check_public_route_overlap(config, &mut warnings);
 
     (errors, warnings)
@@ -44,14 +40,10 @@ fn check_duplicate_routes(config: &ProxyConfig, errors: &mut Vec<ValidationError
 }
 
 /// Check that feature_gate references point to defined flags.
-fn check_feature_gates(
-    config: &ProxyConfig,
-    features: &FlagConfig,
-    errors: &mut Vec<ValidationError>,
-) {
+fn check_feature_gates(config: &ProxyConfig, errors: &mut Vec<ValidationError>) {
     for (i, route) in config.routes().iter().enumerate() {
         if let Some(gate) = route.feature_gate() {
-            if !features.flags.contains_key(gate) {
+            if !config.features().flags.contains_key(gate) {
                 errors.push(ValidationError::new(
                     ValidationErrorKind::UndefinedFeatureGate,
                     format!("flag '{}' is not defined in features", gate),
@@ -63,13 +55,13 @@ fn check_feature_gates(
 }
 
 /// Check that all policy references in groups exist.
-fn check_policy_references(
-    groups: &[GroupDefinition],
-    policies: &[Policy],
-    errors: &mut Vec<ValidationError>,
-) {
-    let policy_names: HashSet<&str> = policies.iter().map(|p| p.name().as_str()).collect();
-    for (i, group) in groups.iter().enumerate() {
+fn check_policy_references(config: &ProxyConfig, errors: &mut Vec<ValidationError>) {
+    let policy_names: HashSet<&str> = config
+        .policies()
+        .iter()
+        .map(|p| p.name().as_str())
+        .collect();
+    for (i, group) in config.groups().iter().enumerate() {
         for (j, policy_ref) in group.policies().iter().enumerate() {
             if !policy_names.contains(policy_ref.as_str()) {
                 errors.push(ValidationError::new(
@@ -87,9 +79,9 @@ fn check_policy_references(
 }
 
 /// Check that all member_group references in groups exist.
-fn check_group_references(groups: &[GroupDefinition], errors: &mut Vec<ValidationError>) {
-    let group_names: HashSet<&str> = groups.iter().map(|g| g.name().as_str()).collect();
-    for (i, group) in groups.iter().enumerate() {
+fn check_group_references(config: &ProxyConfig, errors: &mut Vec<ValidationError>) {
+    let group_names: HashSet<&str> = config.groups().iter().map(|g| g.name().as_str()).collect();
+    for (i, group) in config.groups().iter().enumerate() {
         for (j, member) in group.member_groups().iter().enumerate() {
             if !group_names.contains(member.as_str()) {
                 errors.push(ValidationError::new(
@@ -104,6 +96,65 @@ fn check_group_references(groups: &[GroupDefinition], errors: &mut Vec<Validatio
             }
         }
     }
+}
+
+/// Detect circular group nesting via DFS.
+fn check_circular_group_nesting(config: &ProxyConfig, errors: &mut Vec<ValidationError>) {
+    let groups = config.groups();
+    if groups.is_empty() {
+        return;
+    }
+
+    let adjacency: HashMap<&str, Vec<&str>> = groups
+        .iter()
+        .map(|g| {
+            (
+                g.name().as_str(),
+                g.member_groups().iter().map(GroupName::as_str).collect(),
+            )
+        })
+        .collect();
+
+    let mut visited: HashSet<&str> = HashSet::new();
+    let mut in_stack: HashSet<&str> = HashSet::new();
+
+    for group in groups {
+        let name = group.name().as_str();
+        if !visited.contains(name) {
+            dfs_cycle_check(name, &adjacency, &mut visited, &mut in_stack, errors);
+        }
+    }
+}
+
+/// DFS helper for cycle detection. On finding a back-edge, pushes a `ValidationError`.
+fn dfs_cycle_check<'a>(
+    node: &'a str,
+    adjacency: &HashMap<&'a str, Vec<&'a str>>,
+    visited: &mut HashSet<&'a str>,
+    in_stack: &mut HashSet<&'a str>,
+    errors: &mut Vec<ValidationError>,
+) {
+    visited.insert(node);
+    in_stack.insert(node);
+
+    if let Some(neighbors) = adjacency.get(node) {
+        for &neighbor in neighbors {
+            if in_stack.contains(neighbor) {
+                errors.push(ValidationError::new(
+                    ValidationErrorKind::CircularGroupNesting,
+                    format!(
+                        "circular group nesting detected: '{}' -> '{}'",
+                        node, neighbor
+                    ),
+                    format!("groups[{}].member_groups", node),
+                ));
+            } else if !visited.contains(neighbor) {
+                dfs_cycle_check(neighbor, adjacency, visited, in_stack, errors);
+            }
+        }
+    }
+
+    in_stack.remove(node);
 }
 
 /// Warn when a public route overlaps with an auth route.
@@ -130,41 +181,9 @@ fn check_public_route_overlap(config: &ProxyConfig, warnings: &mut Vec<Validatio
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use std::collections::HashMap;
-
-    use forgeguard_core::{FlagConfig, FlagDefinition, FlagName, FlagType, FlagValue};
-
     use crate::config::parse_config;
 
     use super::*;
-
-    fn empty_features() -> FlagConfig {
-        FlagConfig::default()
-    }
-
-    fn features_with(name: &str) -> FlagConfig {
-        let mut flags = HashMap::new();
-        flags.insert(
-            FlagName::parse(name).unwrap(),
-            FlagDefinition {
-                flag_type: FlagType::Boolean,
-                default: FlagValue::Bool(false),
-                enabled: true,
-                overrides: vec![],
-                rollout_percentage: None,
-                rollout_variant: None,
-            },
-        );
-        FlagConfig { flags }
-    }
-
-    fn parse_groups(json: &str) -> Vec<GroupDefinition> {
-        serde_json::from_str(json).unwrap()
-    }
-
-    fn parse_policies(json: &str) -> Vec<Policy> {
-        serde_json::from_str(json).unwrap()
-    }
 
     #[test]
     fn no_errors_on_valid_config() {
@@ -181,7 +200,7 @@ action = "todo:list:user"
 "#,
         )
         .unwrap();
-        let (errors, warnings) = validate(&config, &[], &[], &empty_features());
+        let (errors, warnings) = validate(&config);
         assert!(errors.is_empty());
         assert!(warnings.is_empty());
     }
@@ -206,10 +225,7 @@ action = "todo:read:user"
 "#,
         )
         .unwrap();
-        // Duplicate routes are detected at validation time (not parse time).
-        // parse_config only builds a Vec<RouteMapping>; the RouteMatcher (which
-        // rejects dupes via matchit) is built later by the proxy layer.
-        let (errors, _) = validate(&config, &[], &[], &empty_features());
+        let (errors, _) = validate(&config);
         assert_eq!(errors.len(), 1);
         assert_eq!(*errors[0].kind(), ValidationErrorKind::DuplicateRoute);
     }
@@ -230,7 +246,7 @@ feature_gate = "nonexistent"
 "#,
         )
         .unwrap();
-        let (errors, _) = validate(&config, &[], &[], &empty_features());
+        let (errors, _) = validate(&config);
         assert_eq!(errors.len(), 1);
         assert_eq!(*errors[0].kind(), ValidationErrorKind::UndefinedFeatureGate);
     }
@@ -248,28 +264,33 @@ method = "GET"
 path = "/beta"
 action = "todo:read:beta"
 feature_gate = "beta-feature"
+
+[features.flags.beta-feature]
+type = "boolean"
+default = false
 "#,
         )
         .unwrap();
-        let features = features_with("beta-feature");
-        let (errors, _) = validate(&config, &[], &[], &features);
+        let (errors, _) = validate(&config);
         assert!(errors.is_empty());
     }
 
     #[test]
     fn invalid_policy_reference_detected() {
-        let groups = parse_groups(
-            r#"[{"name": "admin", "policies": ["nonexistent-policy"], "member_groups": []}]"#,
-        );
         let config = parse_config(
             r#"
 project_id = "my-app"
 listen_addr = "127.0.0.1:8080"
 upstream_url = "http://localhost:3000"
+
+[[groups]]
+name = "admin"
+policies = ["nonexistent-policy"]
+member_groups = []
 "#,
         )
         .unwrap();
-        let (errors, _) = validate(&config, &[], &groups, &empty_features());
+        let (errors, _) = validate(&config);
         assert_eq!(errors.len(), 1);
         assert_eq!(
             *errors[0].kind(),
@@ -279,43 +300,135 @@ upstream_url = "http://localhost:3000"
 
     #[test]
     fn valid_policy_reference_passes() {
-        let policies = parse_policies(
-            r#"[{"name": "todo-viewer", "statements": [{"effect": "allow", "actions": ["todo:read:list"]}]}]"#,
-        );
-        let groups = parse_groups(
-            r#"[{"name": "admin", "policies": ["todo-viewer"], "member_groups": []}]"#,
-        );
         let config = parse_config(
             r#"
 project_id = "my-app"
 listen_addr = "127.0.0.1:8080"
 upstream_url = "http://localhost:3000"
+
+[[policies]]
+name = "todo-viewer"
+[[policies.statements]]
+effect = "allow"
+actions = ["todo:read:list"]
+
+[[groups]]
+name = "admin"
+policies = ["todo-viewer"]
+member_groups = []
 "#,
         )
         .unwrap();
-        let (errors, _) = validate(&config, &policies, &groups, &empty_features());
+        let (errors, _) = validate(&config);
         assert!(errors.is_empty());
     }
 
     #[test]
     fn invalid_group_reference_detected() {
-        let groups = parse_groups(
-            r#"[{"name": "admin", "policies": [], "member_groups": ["nonexistent"]}]"#,
-        );
         let config = parse_config(
             r#"
 project_id = "my-app"
 listen_addr = "127.0.0.1:8080"
 upstream_url = "http://localhost:3000"
+
+[[groups]]
+name = "admin"
+policies = []
+member_groups = ["nonexistent"]
 "#,
         )
         .unwrap();
-        let (errors, _) = validate(&config, &[], &groups, &empty_features());
+        let (errors, _) = validate(&config);
         assert_eq!(errors.len(), 1);
         assert_eq!(
             *errors[0].kind(),
             ValidationErrorKind::InvalidGroupReference
         );
+    }
+
+    #[test]
+    fn circular_group_nesting_detected() {
+        let config = parse_config(
+            r#"
+project_id = "my-app"
+listen_addr = "127.0.0.1:8080"
+upstream_url = "http://localhost:3000"
+
+[[groups]]
+name = "group-a"
+policies = []
+member_groups = ["group-b"]
+
+[[groups]]
+name = "group-b"
+policies = []
+member_groups = ["group-a"]
+"#,
+        )
+        .unwrap();
+        let (errors, _) = validate(&config);
+        let cycle_errors: Vec<_> = errors
+            .iter()
+            .filter(|e| *e.kind() == ValidationErrorKind::CircularGroupNesting)
+            .collect();
+        assert!(!cycle_errors.is_empty());
+        assert!(cycle_errors[0].message().contains("circular"));
+    }
+
+    #[test]
+    fn self_referencing_group_detected() {
+        let config = parse_config(
+            r#"
+project_id = "my-app"
+listen_addr = "127.0.0.1:8080"
+upstream_url = "http://localhost:3000"
+
+[[groups]]
+name = "loop"
+policies = []
+member_groups = ["loop"]
+"#,
+        )
+        .unwrap();
+        let (errors, _) = validate(&config);
+        let cycle_errors: Vec<_> = errors
+            .iter()
+            .filter(|e| *e.kind() == ValidationErrorKind::CircularGroupNesting)
+            .collect();
+        assert!(!cycle_errors.is_empty());
+    }
+
+    #[test]
+    fn no_cycle_in_valid_group_hierarchy() {
+        let config = parse_config(
+            r#"
+project_id = "my-app"
+listen_addr = "127.0.0.1:8080"
+upstream_url = "http://localhost:3000"
+
+[[groups]]
+name = "super-admin"
+policies = []
+member_groups = ["admin"]
+
+[[groups]]
+name = "admin"
+policies = []
+member_groups = ["users"]
+
+[[groups]]
+name = "users"
+policies = []
+member_groups = []
+"#,
+        )
+        .unwrap();
+        let (errors, _) = validate(&config);
+        let cycle_errors: Vec<_> = errors
+            .iter()
+            .filter(|e| *e.kind() == ValidationErrorKind::CircularGroupNesting)
+            .collect();
+        assert!(cycle_errors.is_empty());
     }
 
     #[test]
@@ -338,7 +451,7 @@ auth_mode = "anonymous"
 "#,
         )
         .unwrap();
-        let (errors, warnings) = validate(&config, &[], &[], &empty_features());
+        let (errors, warnings) = validate(&config);
         assert!(errors.is_empty());
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].message().contains("public route"));
@@ -346,11 +459,6 @@ auth_mode = "anonymous"
 
     #[test]
     fn multiple_errors_collected() {
-        let groups = parse_groups(
-            r#"[
-                {"name": "admin", "policies": ["missing-policy"], "member_groups": ["missing-group"]}
-            ]"#,
-        );
         let config = parse_config(
             r#"
 project_id = "my-app"
@@ -362,10 +470,15 @@ method = "GET"
 path = "/beta"
 action = "todo:read:beta"
 feature_gate = "nonexistent"
+
+[[groups]]
+name = "admin"
+policies = ["missing-policy"]
+member_groups = ["missing-group"]
 "#,
         )
         .unwrap();
-        let (errors, _) = validate(&config, &[], &groups, &empty_features());
+        let (errors, _) = validate(&config);
         // Should have: undefined feature gate + invalid policy ref + invalid group ref
         assert_eq!(errors.len(), 3);
     }

@@ -25,6 +25,20 @@ pub(crate) struct RawProxyConfig {
     pub(crate) routes: Vec<RawRouteMapping>,
     #[serde(default)]
     pub(crate) public_routes: Vec<RawPublicRoute>,
+    #[serde(default)]
+    pub(crate) policies: Vec<forgeguard_core::Policy>,
+    #[serde(default)]
+    pub(crate) groups: Vec<forgeguard_core::GroupDefinition>,
+    #[serde(default)]
+    pub(crate) features: Option<RawFlagConfig>,
+}
+
+/// Raw feature flag configuration.
+#[derive(Debug, Deserialize, Default)]
+pub(crate) struct RawFlagConfig {
+    #[serde(default)]
+    pub(crate) flags:
+        std::collections::HashMap<forgeguard_core::FlagName, forgeguard_core::FlagDefinition>,
 }
 
 fn default_policy() -> String {
