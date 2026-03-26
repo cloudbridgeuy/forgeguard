@@ -131,6 +131,14 @@ pub async fn run(args: &SetupArgs) -> Result<()> {
             .context("bun install failed")?;
     }
 
+    // -- Bootstrap CDK (idempotent) ---------------------------------------
+
+    println!("Ensuring CDK environment is bootstrapped...");
+    duct::cmd!("bun", "run", "cdk", "bootstrap")
+        .dir("infra/dev")
+        .run()
+        .context("CDK bootstrap failed")?;
+
     // -- Deploy CDK stack -------------------------------------------------
 
     println!("Deploying CDK stack: {}-cognito...", params.stack_prefix);

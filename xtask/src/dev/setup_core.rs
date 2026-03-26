@@ -141,17 +141,18 @@ pub(crate) fn format_dry_run(params: &SetupParams) -> String {
 
     out.push_str("\nSteps:\n");
     out.push_str("  1. Install node_modules if missing (bun install)\n");
-    out.push_str("  2. Deploy CDK stack via `bun run cdk deploy`\n");
-    out.push_str("  3. Read CloudFormation stack outputs\n");
+    out.push_str("  2. Bootstrap CDK environment (idempotent)\n");
+    out.push_str("  3. Deploy CDK stack via `bun run cdk deploy`\n");
+    out.push_str("  4. Read CloudFormation stack outputs\n");
     if params.force {
-        out.push_str("  4. Delete existing test users (--force)\n");
-        out.push_str("  5. Create test users, set passwords, assign groups\n");
+        out.push_str("  5. Delete existing test users (--force)\n");
+        out.push_str("  6. Create test users, set passwords, assign groups\n");
+        out.push_str("  7. Update infra/dev/.env with Cognito outputs\n");
+        out.push_str("  8. Update forgeguard.dev.toml with authn.jwt settings\n");
+    } else {
+        out.push_str("  5. Create test users (skip existing), set passwords, assign groups\n");
         out.push_str("  6. Update infra/dev/.env with Cognito outputs\n");
         out.push_str("  7. Update forgeguard.dev.toml with authn.jwt settings\n");
-    } else {
-        out.push_str("  4. Create test users (skip existing), set passwords, assign groups\n");
-        out.push_str("  5. Update infra/dev/.env with Cognito outputs\n");
-        out.push_str("  6. Update forgeguard.dev.toml with authn.jwt settings\n");
     }
 
     out
