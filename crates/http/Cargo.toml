@@ -1,0 +1,29 @@
+[package]
+name = "forgeguard_http"
+version = "0.0.0"
+homepage = "https://github.com/cloudbridgeuy/forgeguard"
+description = "HTTP adapter types: route matching, config parsing, credential extraction, header injection"
+autobins = false
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "forgeguard_http"
+path = "src/lib.rs"
+
+[dependencies]
+forgeguard_core = { workspace = true }
+forgeguard_authn_core = { workspace = true }
+forgeguard_authz_core = { workspace = true }
+matchit = { workspace = true }
+toml = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+url = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true
