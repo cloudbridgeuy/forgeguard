@@ -20,6 +20,7 @@ pub fn validate(config: &ProxyConfig) -> (Vec<ValidationError>, Vec<ValidationWa
     check_group_references(config, &mut errors);
     check_circular_group_nesting(config, &mut errors);
     check_public_route_overlap(config, &mut warnings);
+    check_cors_config(config, &mut errors);
 
     (errors, warnings)
 }
@@ -151,6 +152,15 @@ fn dfs_cycle_check<'a>(
     }
 
     in_stack.remove(node);
+}
+
+/// Validate CORS config constraints that depend on the full proxy config.
+///
+/// Note: most CORS validation happens in `CorsConfig::try_from()`.
+/// This hook exists for future cross-cutting checks (e.g., CORS vs public routes).
+fn check_cors_config(_config: &ProxyConfig, _errors: &mut Vec<ValidationError>) {
+    // Currently all CORS validation is self-contained in CorsConfig::try_from.
+    // This hook exists for future cross-cutting checks (e.g., CORS vs public routes).
 }
 
 /// Warn when a public route overlaps with an auth route.

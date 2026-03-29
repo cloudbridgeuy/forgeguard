@@ -38,6 +38,8 @@ pub(crate) struct RawProxyConfig {
     #[serde(default)]
     pub(crate) schema: Option<RawSchemaConfig>,
     #[serde(default)]
+    pub(crate) cors: Option<crate::cors::RawCorsConfig>,
+    #[serde(default)]
     pub(crate) policy_tests: Vec<RawPolicyTest>,
 }
 

@@ -3,6 +3,7 @@
 pub mod config;
 pub(crate) mod config_raw;
 pub mod config_types;
+pub(crate) mod cors;
 pub mod credential;
 pub mod debug;
 pub mod error;
@@ -27,3 +28,5 @@ pub use public::{PublicAuthMode, PublicMatch, PublicRoute, PublicRouteMatcher};
 pub use query::build_query;
 pub use route::{MatchedRoute, RouteMapping, RouteMatcher};
 pub use validate::validate;
+
+pub use cors::CorsConfig;

@@ -150,6 +150,7 @@ pub struct ProxyConfig {
     aws: AwsConfig,
     schema: SchemaConfig,
     policy_tests: Vec<PolicyTest>,
+    cors: Option<crate::cors::CorsConfig>,
 }
 
 impl ProxyConfig {
@@ -200,6 +201,9 @@ impl ProxyConfig {
     }
     pub fn policy_tests(&self) -> &[PolicyTest] {
         &self.policy_tests
+    }
+    pub fn cors(&self) -> Option<&crate::cors::CorsConfig> {
+        self.cors.as_ref()
     }
 }
 
@@ -369,6 +373,12 @@ impl TryFrom<RawProxyConfig> for ProxyConfig {
             .map(|(i, t)| parse_policy_test(i, t))
             .collect::<Result<Vec<_>>>()?;
 
+        let cors = raw
+            .cors
+            .map(crate::cors::CorsConfig::try_from)
+            .transpose()
+            .map_err(Error::Validation)?;
+
         Ok(ProxyConfig {
             project_id,
             listen_addr,
@@ -386,6 +396,7 @@ impl TryFrom<RawProxyConfig> for ProxyConfig {
             aws,
             schema,
             policy_tests,
+            cors,
         })
     }
 }
@@ -876,5 +887,68 @@ member_of = ["todo::project"]
         let list = &todo_entities["list"];
         assert_eq!(list.member_of(), &["todo::project"]);
         assert!(list.attributes().is_empty());
+    }
+
+    #[test]
+    fn parse_cors_absent() {
+        let config = parse_config(MINIMAL_TOML).unwrap();
+        assert!(config.cors().is_none());
+    }
+
+    #[test]
+    fn parse_cors_enabled() {
+        let toml = r#"
+project_id = "my-app"
+listen_addr = "127.0.0.1:8080"
+upstream_url = "http://localhost:3000"
+
+[cors]
+enabled = true
+allowed_origins = ["https://app.forgeguard.dev", "*.forgeguard.dev"]
+allow_credentials = true
+"#;
+        let config = parse_config(toml).unwrap();
+        let cors = config.cors().unwrap();
+        assert_eq!(
+            cors.matches_origin("https://app.forgeguard.dev"),
+            Some("https://app.forgeguard.dev"),
+        );
+        assert_eq!(
+            cors.matches_origin("https://staging.forgeguard.dev"),
+            Some("https://staging.forgeguard.dev"),
+        );
+        assert_eq!(cors.matches_origin("https://evil.com"), None);
+    }
+
+    #[test]
+    fn parse_cors_disabled() {
+        let toml = r#"
+project_id = "my-app"
+listen_addr = "127.0.0.1:8080"
+upstream_url = "http://localhost:3000"
+
+[cors]
+enabled = false
+"#;
+        let config = parse_config(toml).unwrap();
+        // Disabled CORS parses but matches nothing
+        let cors = config.cors().unwrap();
+        assert_eq!(cors.matches_origin("https://anything.com"), None);
+    }
+
+    #[test]
+    fn parse_cors_wildcard_credentials_rejected() {
+        let toml = r#"
+project_id = "my-app"
+listen_addr = "127.0.0.1:8080"
+upstream_url = "http://localhost:3000"
+
+[cors]
+enabled = true
+allowed_origins = ["*"]
+allow_credentials = true
+"#;
+        let err = parse_config(toml).unwrap_err();
+        assert!(err.to_string().contains("validation failed"));
     }
 }

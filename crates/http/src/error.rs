@@ -86,6 +86,8 @@ pub enum ValidationErrorKind {
     InvalidGroupReference,
     /// Circular group nesting detected.
     CircularGroupNesting,
+    /// Invalid CORS configuration.
+    InvalidCorsConfig,
 }
 
 impl fmt::Display for ValidationErrorKind {
@@ -96,6 +98,7 @@ impl fmt::Display for ValidationErrorKind {
             Self::InvalidPolicyReference => write!(f, "invalid-policy-reference"),
             Self::InvalidGroupReference => write!(f, "invalid-group-reference"),
             Self::CircularGroupNesting => write!(f, "circular-group-nesting"),
+            Self::InvalidCorsConfig => write!(f, "invalid-cors-config"),
         }
     }
 }
