@@ -5,13 +5,19 @@ use toml_edit::DocumentMut;
 // Functional Core -- pure types and logic, no I/O
 // ---------------------------------------------------------------------------
 
-/// All resolved values needed to execute the setup.
+/// All resolved values needed to execute the Cognito setup.
 pub(crate) struct SetupParams {
     pub(crate) stack_prefix: String,
     pub(crate) region: String,
     pub(crate) groups_context: String,
     pub(crate) password: String,
     pub(crate) force: bool,
+}
+
+/// Resolved configuration for the VP setup flow.
+pub(crate) struct VpSetupParams {
+    pub(crate) stack_prefix: String,
+    pub(crate) region: String,
 }
 
 /// Boolean results of each preflight check.
@@ -92,6 +98,28 @@ pub(crate) fn merge_authn_jwt_toml(existing: &str, jwks_url: &str, issuer: &str)
     Ok(doc.to_string())
 }
 
+/// Merge `[authz]` section into existing TOML content.
+///
+/// Sets `policy_store_id` under `[authz]`, preserving all other content.
+pub(crate) fn merge_authz_toml(existing: &str, policy_store_id: &str) -> Result<String> {
+    let mut doc: DocumentMut = existing
+        .parse()
+        .context("failed to parse existing TOML content")?;
+
+    // Ensure [authz] table exists.
+    if !doc.contains_table("authz") {
+        doc["authz"] = toml_edit::Item::Table(toml_edit::Table::new());
+    }
+
+    let authz = doc["authz"]
+        .as_table_mut()
+        .ok_or_else(|| color_eyre::eyre::eyre!("`authz` is not a table"))?;
+
+    authz["policy_store_id"] = toml_edit::value(policy_store_id);
+
+    Ok(doc.to_string())
+}
+
 /// Build a JWKS URL for a Cognito user pool.
 pub(crate) fn derive_jwks_url(region: &str, pool_id: &str) -> String {
     format!("https://cognito-idp.{region}.amazonaws.com/{pool_id}/.well-known/jwks.json")
@@ -126,7 +154,7 @@ pub(crate) fn validate_preflight(checks: &PreflightChecks) -> Vec<String> {
     errors
 }
 
-/// Format a human-readable description of what the setup would do.
+/// Format a human-readable description of what the Cognito setup would do.
 pub(crate) fn format_dry_run(params: &SetupParams) -> String {
     let mut out = String::from("Dry run -- the following actions would be performed:\n\n");
 
@@ -154,6 +182,24 @@ pub(crate) fn format_dry_run(params: &SetupParams) -> String {
         out.push_str("  6. Update infra/dev/.env with Cognito outputs\n");
         out.push_str("  7. Update forgeguard.dev.toml with authn.jwt settings\n");
     }
+
+    out
+}
+
+/// Format a human-readable description of what the VP setup would do.
+pub(crate) fn format_vp_dry_run(params: &VpSetupParams) -> String {
+    let mut out = String::from("Dry run (VP) -- the following actions would be performed:\n\n");
+
+    out.push_str(&format!("  Stack prefix : {}\n", params.stack_prefix));
+    out.push_str(&format!("  Region       : {}\n", params.region));
+
+    out.push_str("\nSteps:\n");
+    out.push_str("  1. Install node_modules if missing (bun install)\n");
+    out.push_str("  2. Bootstrap CDK environment (idempotent)\n");
+    out.push_str("  3. Deploy VP CDK stack via `bun run cdk deploy`\n");
+    out.push_str("  4. Read CloudFormation stack outputs (PolicyStoreId)\n");
+    out.push_str("  5. Update infra/dev/.env with VP_POLICY_STORE_ID\n");
+    out.push_str("  6. Update forgeguard.dev.toml with authz.policy_store_id\n");
 
     out
 }
@@ -251,6 +297,51 @@ issuer = "https://old.example.com"
         assert!(result.contains("https://new.example.com\""));
         // Old values gone.
         assert!(!result.contains("https://old.example.com"));
+    }
+
+    // --- merge_authz_toml ---
+
+    #[test]
+    fn merge_authz_toml_creates_section_in_empty_file() {
+        let result = merge_authz_toml("", "ps-abc123").unwrap();
+        assert!(result.contains("[authz]"));
+        assert!(result.contains("policy_store_id"));
+        assert!(result.contains("ps-abc123"));
+    }
+
+    #[test]
+    fn merge_authz_toml_updates_existing_and_preserves_other_sections() {
+        let existing = r#"
+[logging]
+level = "debug"
+
+[authz]
+policy_store_id = "ps-old"
+"#;
+        let result = merge_authz_toml(existing, "ps-new456").unwrap();
+
+        // Preserved other section.
+        assert!(result.contains("[logging]"));
+        assert!(result.contains("level = \"debug\""));
+        // Updated authz values.
+        assert!(result.contains("ps-new456"));
+        // Old value gone.
+        assert!(!result.contains("ps-old"));
+    }
+
+    #[test]
+    fn merge_authz_toml_preserves_authn_section() {
+        let existing = r#"
+[authn.jwt]
+jwks_url = "https://example.com/jwks"
+issuer = "https://example.com"
+"#;
+        let result = merge_authz_toml(existing, "ps-xyz").unwrap();
+
+        assert!(result.contains("[authn.jwt]"));
+        assert!(result.contains("https://example.com/jwks"));
+        assert!(result.contains("[authz]"));
+        assert!(result.contains("ps-xyz"));
     }
 
     // --- derive_jwks_url / derive_issuer ---
@@ -354,5 +445,21 @@ issuer = "https://old.example.com"
         assert!(output.contains("no")); // force = false
         assert!(output.contains("skip existing"));
         assert!(!output.contains("Delete existing"));
+    }
+
+    // --- format_vp_dry_run ---
+
+    #[test]
+    fn format_vp_dry_run_contains_all_parameters() {
+        let params = VpSetupParams {
+            stack_prefix: "forgeguard-dev".to_string(),
+            region: "us-east-2".to_string(),
+        };
+        let output = format_vp_dry_run(&params);
+
+        assert!(output.contains("forgeguard-dev"));
+        assert!(output.contains("us-east-2"));
+        assert!(output.contains("Dry run (VP)"));
+        assert!(output.contains("PolicyStoreId"));
     }
 }
