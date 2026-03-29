@@ -117,6 +117,9 @@ toml = "0.8"
 toml_edit = "0.22"
 tower-http = { version = "0.6", features = ["cors", "trace", "timeout"] }
 
+# Terminal colors
+owo-colors = { version = "4", features = ["supports-colors"] }
+
 # Logging / tracing
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
