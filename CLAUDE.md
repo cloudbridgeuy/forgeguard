@@ -111,5 +111,6 @@ Each crate's `README.md` describes what it owns and its pure/I/O classification.
 | [xtask lint](./.claude/context/xtask-lint.md)                      | Lint pipeline checks, flags, architecture, adding new checks            |
 | [Scaffolding Decisions](./.claude/designs/scaffolding-patterns.md) | All 36 design decisions with rationale                                  |
 | [Feature Flags](./.claude/context/feature-flags.md)                | Flag types, evaluation order, overrides, debug endpoint, proxy wiring   |
+| [Verified Permissions](./.claude/context/verified-permissions.md)   | VP integration: action format, Cedar types, CLI, config, infrastructure |
 | [Proxy Shaping](./.claude/designs/proxy-shaping.md)                | Proxy design: requirements, shape, breadboard, slices                   |
 | [Design Documents](./.claude/context/)                             | Full ForgeGuard architecture and technical specifications               |

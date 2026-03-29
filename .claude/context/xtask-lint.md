@@ -18,6 +18,7 @@ Checks run in this order:
 | 4 | Test | `cargo test --workspace --all-targets` | no | unchanged |
 | 5 | Rail | `cargo rail unify --check` | yes | `cargo rail unify` |
 | 6 | FileLength | custom: all `.rs` files under `crates/*/src/` must be <= 1000 lines | no | unchanged |
+| 7 | TypeScript | `npx tsc --noEmit` in `infra/dev/` | no | unchanged |
 
 Optional checks are gracefully skipped if the tool is not installed.
 
@@ -33,6 +34,7 @@ Optional checks are gracefully skipped if the tool is not installed.
 | `--no-test` | Skip tests |
 | `--no-rail` | Skip cargo-rail unify |
 | `--no-file-length` | Skip file length check |
+| `--no-typescript` | Skip TypeScript compilation check |
 | `--install-hooks` | Install git pre-commit hook |
 | `--uninstall-hooks` | Remove git pre-commit hook |
 | `--hooks-status` | Show hook installation status |

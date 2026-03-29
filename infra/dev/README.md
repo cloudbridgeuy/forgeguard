@@ -1,8 +1,9 @@
-# Development Cognito Infrastructure
+# Development Infrastructure
 
-This directory contains a CDK stack that provisions an AWS Cognito user pool,
-app client, and groups for local development. The `cargo xtask dev` commands
-deploy the stack, seed test users, and retrieve JWTs.
+This directory contains CDK stacks that provision AWS resources for local
+development: a Cognito user pool (authentication) and a Verified Permissions
+policy store (authorization). The `cargo xtask dev` commands deploy the stacks,
+seed test users, and retrieve JWTs.
 
 ## Prerequisites
 
@@ -43,6 +44,18 @@ aws sts get-caller-identity --profile admin
    resulting pool ID, client ID, JWKS URL, and issuer back into `.env` and
    `forgeguard.dev.toml`.
 
+4. (Optional) Deploy the Verified Permissions policy store:
+
+   ```bash
+   cargo xtask dev setup --vp
+   ```
+
+   Or deploy both Cognito and VP together:
+
+   ```bash
+   cargo xtask dev setup --all
+   ```
+
 ## Available Commands
 
 ### `cargo xtask dev setup --cognito`
@@ -61,6 +74,32 @@ cargo xtask dev setup --cognito --dry-run
 
 # Recreate all users from scratch
 cargo xtask dev setup --cognito --force
+```
+
+### `cargo xtask dev setup --vp`
+
+Deploy the Verified Permissions policy store with a Cognito identity source.
+
+The VP CDK stack creates a policy store in OFF validation mode and configures
+the Cognito user pool as an identity source. After deployment, the
+`PolicyStoreId` is written to `.env` and `forgeguard.dev.toml`.
+
+| Flag         | Effect |
+| ------------ | ------ |
+| `--vp`       | Required. Selects the VP setup path. |
+| `--dry-run`  | Print what would happen without executing anything. |
+
+```bash
+cargo xtask dev setup --vp
+cargo xtask dev setup --vp --dry-run
+```
+
+### `cargo xtask dev setup --all`
+
+Deploy both the Cognito and VP stacks in a single command.
+
+```bash
+cargo xtask dev setup --all
 ```
 
 ### `cargo xtask dev token --user <username>`
@@ -193,9 +232,10 @@ aws cognito-idp initiate-auth \
 | `COGNITO_APP_CLIENT_ID` | Written by `setup --cognito`. The app client ID. | -- |
 | `COGNITO_JWKS_URL`    | Written by `setup --cognito`. JWKS endpoint for JWT verification. | -- |
 | `COGNITO_ISSUER`       | Written by `setup --cognito`. Token issuer URL (`https://cognito-idp.<region>.amazonaws.com/<pool-id>`). | -- |
+| `VP_POLICY_STORE_ID`   | Written by `setup --vp`. The Verified Permissions policy store ID. | -- |
 
-The last four keys are written automatically after a successful deploy. Do not
-edit them by hand.
+The auto-written keys are populated after a successful deploy. Do not edit them
+by hand.
 
 ### `users.toml`
 

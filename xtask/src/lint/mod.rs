@@ -19,6 +19,7 @@ enum CheckId {
     Test,
     Rail,
     FileLength,
+    TypeScript,
 }
 
 /// A lint check to execute.
@@ -72,6 +73,10 @@ pub struct LintArgs {
     /// Skip file-length check
     #[arg(long)]
     pub no_file_length: bool,
+
+    /// Skip TypeScript compilation check (infra/dev)
+    #[arg(long)]
+    pub no_typescript: bool,
 
     /// Auto-fix where possible (fmt applies formatting, clippy applies fixes)
     #[arg(long)]
@@ -147,6 +152,13 @@ const CHECKS: &[Check] = &[
         args: &[],
         optional: false,
     },
+    Check {
+        id: CheckId::TypeScript,
+        name: "tsc --noEmit (infra/dev)",
+        program: "__builtin__",
+        args: &[],
+        optional: false,
+    },
 ];
 
 /// Determine whether a check should be skipped based on the user's skip flags.
@@ -158,6 +170,7 @@ fn should_skip(id: CheckId, args: &LintArgs) -> bool {
         CheckId::Test => args.no_test,
         CheckId::Rail => args.no_rail,
         CheckId::FileLength => args.no_file_length,
+        CheckId::TypeScript => args.no_typescript,
     }
 }
 
@@ -292,6 +305,11 @@ pub fn run(args: &LintArgs) -> Result<()> {
                 name: check.name.to_string(),
                 outcome: evaluate_file_lengths(&files, 1000),
             }
+        } else if check.id == CheckId::TypeScript {
+            CheckResult {
+                name: check.name.to_string(),
+                outcome: run_typescript_check(),
+            }
         } else {
             let effective_args: Option<Vec<&str>> = if fix { fix_args(check.id) } else { None };
             let effective_name = match &effective_args {
@@ -358,6 +376,30 @@ fn resolve_log_path() -> Result<String> {
     fs::create_dir_all(&target_dir)?;
     let log_path = target_dir.join("xtask-lint.log");
     Ok(log_path.to_string_lossy().into_owned())
+}
+
+/// Run `npx tsc --noEmit` in `infra/dev/` to check TypeScript compilation.
+fn run_typescript_check() -> CheckOutcome {
+    let output = cmd("npx", &["tsc", "--noEmit"])
+        .dir("infra/dev")
+        .stderr_to_stdout()
+        .stdout_capture()
+        .unchecked()
+        .run();
+
+    match output {
+        Ok(o) => {
+            let text = String::from_utf8_lossy(&o.stdout).into_owned();
+            if o.status.success() {
+                CheckOutcome::Passed { output: text }
+            } else {
+                CheckOutcome::Failed { output: text }
+            }
+        }
+        Err(e) => CheckOutcome::Failed {
+            output: format!("failed to run npx tsc: {e}"),
+        },
+    }
 }
 
 /// Collect (path, line_count) for every `.rs` file under `crates/*/src/`.
@@ -480,6 +522,7 @@ mod tests {
         assert!(!should_skip(CheckId::Test, &base));
         assert!(!should_skip(CheckId::Rail, &base));
         assert!(!should_skip(CheckId::FileLength, &base));
+        assert!(!should_skip(CheckId::TypeScript, &base));
     }
 
     #[test]
@@ -519,6 +562,7 @@ mod tests {
         assert!(fix_args(CheckId::Check).is_none());
         assert!(fix_args(CheckId::Test).is_none());
         assert!(fix_args(CheckId::FileLength).is_none());
+        assert!(fix_args(CheckId::TypeScript).is_none());
     }
 
     // --- determine_outcome ---
@@ -604,6 +648,7 @@ mod tests {
             no_test: false,
             no_rail: false,
             no_file_length: false,
+            no_typescript: false,
             fix: false,
             staged_only: false,
             install_hooks: false,
