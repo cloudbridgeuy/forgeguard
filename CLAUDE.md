@@ -144,6 +144,7 @@ Each crate's `README.md` describes what it owns and its pure/I/O classification.
 | [Feature Flags](./.claude/context/feature-flags.md)                | Flag types, evaluation order, overrides, debug endpoint, proxy wiring   |
 | [Verified Permissions](./.claude/context/verified-permissions.md)   | VP integration: action format, Cedar types, CLI, config, infrastructure |
 | [Container Builds](./.claude/context/container-builds.md)          | Distroless images, multi-stage builds, SSL strategy, health checks      |
+| [CORS](./.claude/context/cors.md)                                  | CORS config, origin matching, request flow, crate placement             |
 | [Proxy Shaping](./.claude/designs/proxy-shaping.md)                | Proxy design: requirements, shape, breadboard, slices                   |
 | [SaaS Architecture](./.claude/context/saas-architecture.md)        | Control/data plane split, infra stack, worker saga, org domain model    |
 | [Design Documents](./.claude/context/)                             | Full ForgeGuard architecture and technical specifications               |
