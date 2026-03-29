@@ -1,5 +1,6 @@
 import * as cdk from "aws-cdk-lib";
 import { CognitoStack } from "../lib/cognito-stack";
+import { VerifiedPermissionsStack } from "../lib/verified-permissions-stack";
 
 function parseGroups(raw: string | undefined): string[] {
   if (!raw) return [];
@@ -10,10 +11,18 @@ const app = new cdk.App();
 const stackPrefix = (app.node.tryGetContext("stackPrefix") as string) ?? "forgeguard-dev";
 const groups = parseGroups(app.node.tryGetContext("groups") as string | undefined);
 
-new CognitoStack(app, `${stackPrefix}-cognito`, {
+const env = {
+  account: process.env.CDK_DEFAULT_ACCOUNT,
+  region: process.env.CDK_DEFAULT_REGION,
+};
+
+const cognito = new CognitoStack(app, `${stackPrefix}-cognito`, {
   groups,
-  env: {
-    account: process.env.CDK_DEFAULT_ACCOUNT,
-    region: process.env.CDK_DEFAULT_REGION,
-  },
+  env,
+});
+
+new VerifiedPermissionsStack(app, `${stackPrefix}-verified-permissions`, {
+  userPoolId: cognito.userPoolId,
+  userPoolArn: cognito.userPoolArn,
+  env,
 });

@@ -7,6 +7,9 @@ interface CognitoStackProps extends cdk.StackProps {
 }
 
 export class CognitoStack extends cdk.Stack {
+  public readonly userPoolId: string;
+  public readonly userPoolArn: string;
+
   constructor(scope: Construct, id: string, props: CognitoStackProps) {
     super(scope, id, props);
 
@@ -30,6 +33,9 @@ export class CognitoStack extends cdk.Stack {
       },
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
+
+    this.userPoolId = userPool.userPoolId;
+    this.userPoolArn = userPool.userPoolArn;
 
     const appClient = userPool.addClient("AppClient", {
       userPoolClientName: `${id}-app-client`,
