@@ -30,6 +30,16 @@ default_policy = "deny"
 client_ip_source = "peer"
 
 # ---------------------------------------------------------------------------
+# AWS
+# ---------------------------------------------------------------------------
+# AWS defaults for all SDK calls. Both fields are optional.
+# Precedence: CLI flag > env var > [aws] config > SDK default chain.
+
+[aws]
+region = "us-east-2"
+profile = "admin"
+
+# ---------------------------------------------------------------------------
 # Authentication
 # ---------------------------------------------------------------------------
 
@@ -53,14 +63,24 @@ chain_order = ["jwt"]
 # The AVP policy store identifier.
 policy_store_id = "ps-EXAMPLE"
 
-# AWS region where the policy store lives.
-aws_region = "us-east-1"
-
 # How long (in seconds) to cache authorization decisions (default: 300).
 cache_ttl_secs = 300
 
 # Maximum number of entries in the authorization cache (default: 10000).
 cache_max_entries = 10000
+
+# ---------------------------------------------------------------------------
+# Schema (entity relationships)
+# ---------------------------------------------------------------------------
+# Entity type definitions for Cedar schema generation.
+# Maps namespace > entity > { member_of, attributes }.
+# Commented out for MVP — uncomment and fill in as needed.
+#
+# [schema.entities.todo.list]
+# member_of = ["todo::project"]
+#
+# [schema.entities.todo.project]
+# attributes = { owner = "String" }
 
 # ---------------------------------------------------------------------------
 # Metrics
@@ -83,7 +103,7 @@ listen_addr = "127.0.0.1:9090"
 # Fields:
 #   method         - HTTP method (GET, POST, PUT, DELETE, PATCH, etc.)
 #   path           - URL path pattern. Supports path parameters like `:id`.
-#   action         - The Cedar action name used in authorization evaluation.
+#   action         - The Cedar action in canonical format: namespace:entity:verb
 #   resource_param - (optional) Path parameter to use as the Cedar resource id.
 #   feature_gate   - (optional) Feature flag name; if the flag evaluates to
 #                    false, the route returns 404.
@@ -91,37 +111,73 @@ listen_addr = "127.0.0.1:9090"
 [[routes]]
 method = "GET"
 path = "/api/todos"
-action = "Todo::ListTodos"
+action = "todo:list:list"
 
 [[routes]]
 method = "POST"
 path = "/api/todos"
-action = "Todo::CreateTodo"
+action = "todo:list:create"
 
 [[routes]]
 method = "GET"
 path = "/api/todos/:id"
-action = "Todo::ReadTodo"
+action = "todo:list:read"
 resource_param = "id"
 
 [[routes]]
 method = "PUT"
 path = "/api/todos/:id"
-action = "Todo::UpdateTodo"
+action = "todo:list:update"
 resource_param = "id"
 
 [[routes]]
 method = "DELETE"
 path = "/api/todos/:id"
-action = "Todo::DeleteTodo"
+action = "todo:list:delete"
 resource_param = "id"
 
 [[routes]]
 method = "POST"
 path = "/api/todos/:id/share"
-action = "Todo::ShareTodo"
+action = "todo:list:share"
 resource_param = "id"
 feature_gate = "todo:sharing"
+
+# --- Shopping namespace (demonstrates multi-namespace with shared entity name) ---
+
+[[routes]]
+method = "GET"
+path = "/api/shopping-lists"
+action = "shopping:list:list"
+
+[[routes]]
+method = "POST"
+path = "/api/shopping-lists"
+action = "shopping:list:create"
+
+[[routes]]
+method = "GET"
+path = "/api/shopping-lists/:id"
+action = "shopping:list:read"
+resource_param = "id"
+
+[[routes]]
+method = "PUT"
+path = "/api/shopping-lists/:id"
+action = "shopping:list:update"
+resource_param = "id"
+
+[[routes]]
+method = "DELETE"
+path = "/api/shopping-lists/:id"
+action = "shopping:list:delete"
+resource_param = "id"
+
+[[routes]]
+method = "POST"
+path = "/api/shopping-lists/:id/items"
+action = "shopping:item:add"
+resource_param = "id"
 
 # ---------------------------------------------------------------------------
 # Public Routes
@@ -150,47 +206,161 @@ auth_mode = "anonymous"
 # Each policy has a name, optional description, and a list of statements.
 #
 # Statement fields:
-#   effect    - "Allow" or "Deny"
-#   actions   - List of Cedar action patterns (e.g., "Todo::*", "Todo::ReadTodo")
+#   effect    - "allow" or "deny"
+#   actions   - List of Cedar action patterns (e.g., "todo:*:*", "todo:list:read")
 #   resources - (optional) List of Cedar entity references; omit for all resources
 #   except    - (optional) List of group names excluded from this statement
 
 [[policies]]
 name = "admin-full-access"
-description = "Admins can perform any action on any resource."
+description = "Admins can perform any action on any resource in any namespace."
+groups = ["admin"]
 
 [[policies.statements]]
-effect = "Allow"
-actions = ["Todo::*"]
+effect = "allow"
+actions = ["todo:*:*", "shopping:*:*"]
 
 [[policies]]
 name = "viewer-read-only"
 description = "Viewers can only list and read todos."
+groups = ["viewer"]
 
 [[policies.statements]]
-effect = "Allow"
-actions = ["Todo::ListTodos", "Todo::ReadTodo"]
+effect = "allow"
+actions = ["todo:list:list", "todo:list:read"]
+
+[[policies]]
+name = "shopper-access"
+description = "Shoppers can manage shopping lists and add items."
+groups = ["shopper"]
+
+[[policies.statements]]
+effect = "allow"
+actions = ["shopping:list:list", "shopping:list:read", "shopping:list:create", "shopping:item:add"]
+
+[[policies]]
+name = "top-secret-deny"
+description = "Deny access to top-secret list unless in top-secret-readers group."
+
+[[policies.statements]]
+effect = "deny"
+actions = ["todo:list:*"]
+resources = ["todo::list::top-secret"]
+except = ["top-secret-readers"]
 
 # ---------------------------------------------------------------------------
 # Groups
 # ---------------------------------------------------------------------------
-# Group definitions that bundle policies and can inherit from other groups.
+# Group definitions that can inherit from other groups.
 #
 # Fields:
 #   name          - Unique group identifier
 #   description   - (optional) Human-readable description
-#   policies      - List of policy names attached to this group
 #   member_groups - (optional) Groups whose members also belong to this group
 
 [[groups]]
 name = "admin"
 description = "Full access to all resources."
-policies = ["admin-full-access"]
 
 [[groups]]
 name = "viewer"
 description = "Read-only access."
-policies = ["viewer-read-only"]
+
+[[groups]]
+name = "shopper"
+description = "Shopping list management."
+
+[[groups]]
+name = "top-secret-readers"
+description = "Can access top-secret resources."
+
+# ---------------------------------------------------------------------------
+# Policy Tests
+# ---------------------------------------------------------------------------
+# Inline authorization test scenarios. Used by `forgeguard test` to verify
+# that policies and groups produce the expected allow/deny decisions.
+
+[[policy_tests]]
+name = "alice (admin) can delete list"
+principal = "alice"
+groups = ["admin", "top-secret-readers"]
+tenant = "acme-corp"
+action = "todo:list:delete"
+expect = "allow"
+
+[[policy_tests]]
+name = "charlie (viewer) can read regular list"
+principal = "charlie"
+groups = ["viewer"]
+tenant = "acme-corp"
+action = "todo:list:read"
+expect = "allow"
+
+[[policy_tests]]
+name = "charlie cannot create list"
+principal = "charlie"
+groups = ["viewer"]
+tenant = "acme-corp"
+action = "todo:list:create"
+expect = "deny"
+
+[[policy_tests]]
+name = "admin can delete shopping list"
+principal = "alice"
+groups = ["admin"]
+tenant = "acme-corp"
+action = "shopping:list:delete"
+expect = "allow"
+
+[[policy_tests]]
+name = "shopper can create shopping list"
+principal = "dave"
+groups = ["shopper"]
+tenant = "acme-corp"
+action = "shopping:list:create"
+expect = "allow"
+
+[[policy_tests]]
+name = "shopper can add item to shopping list"
+principal = "dave"
+groups = ["shopper"]
+tenant = "acme-corp"
+action = "shopping:item:add"
+expect = "allow"
+
+[[policy_tests]]
+name = "shopper cannot delete shopping list"
+principal = "dave"
+groups = ["shopper"]
+tenant = "acme-corp"
+action = "shopping:list:delete"
+expect = "deny"
+
+[[policy_tests]]
+name = "viewer cannot access shopping lists"
+principal = "charlie"
+groups = ["viewer"]
+tenant = "acme-corp"
+action = "shopping:list:read"
+expect = "deny"
+
+[[policy_tests]]
+name = "charlie denied on top-secret"
+principal = "charlie"
+groups = ["viewer"]
+tenant = "acme-corp"
+action = "todo:list:list"
+resource = "todo::list::top-secret"
+expect = "deny"
+
+[[policy_tests]]
+name = "alice can read top-secret"
+principal = "alice"
+groups = ["admin", "top-secret-readers"]
+tenant = "acme-corp"
+action = "todo:list:list"
+resource = "todo::list::top-secret"
+expect = "allow"
 
 # ---------------------------------------------------------------------------
 # Feature Flags
