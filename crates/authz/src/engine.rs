@@ -3,12 +3,15 @@
 use std::future::Future;
 use std::pin::Pin;
 
+use aws_sdk_verifiedpermissions::types::EntitiesDefinition;
 use forgeguard_authz_core::{DenyReason, PolicyDecision, PolicyEngine, PolicyQuery};
 use forgeguard_core::{ProjectId, TenantId};
 
 use crate::cache::{build_cache_key, AuthzCache, CacheKey};
 use crate::config::VpEngineConfig;
-use crate::translate::{build_vp_request, translate_vp_decision, VpRequestComponents};
+use crate::translate::{
+    build_vp_entities, build_vp_request, translate_vp_decision, VpRequestComponents,
+};
 
 /// AWS Verified Permissions policy engine.
 ///
@@ -52,13 +55,15 @@ impl VpPolicyEngine {
         &self,
         cache_key: CacheKey,
         components: VpRequestComponents,
+        entities: EntitiesDefinition,
     ) -> PolicyDecision {
         let mut req = self
             .client
             .is_authorized()
             .policy_store_id(&self.policy_store_id)
             .principal(components.principal)
-            .action(components.action);
+            .action(components.action)
+            .entities(entities);
 
         if let Some(resource) = components.resource {
             req = req.resource(resource);
@@ -106,6 +111,22 @@ impl PolicyEngine for VpPolicyEngine {
             }
         };
 
-        Box::pin(async move { Ok(self.call_vp(cache_key, components).await) })
+        // Build inline entities (user + group hierarchy).
+        let entities = match build_vp_entities(
+            query.principal(),
+            query.context().groups(),
+            &self.project_id,
+            &self.tenant_id,
+        ) {
+            Ok(e) => e,
+            Err(e) => {
+                let decision = PolicyDecision::Deny {
+                    reason: DenyReason::EvaluationError(e.to_string()),
+                };
+                return Box::pin(std::future::ready(Ok(decision)));
+            }
+        };
+
+        Box::pin(async move { Ok(self.call_vp(cache_key, components, entities).await) })
     }
 }

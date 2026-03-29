@@ -15,9 +15,9 @@ use lru::LruCache;
 
 /// A deterministic cache key derived from a [`PolicyQuery`].
 ///
-/// Wraps a `String` built from the query's principal, action, resource, and
-/// tenant components. Two queries that produce the same key are considered
-/// equivalent for caching purposes.
+/// Wraps a `String` built from the query's principal, action, resource,
+/// tenant, and group components. Two queries that produce the same key are
+/// considered equivalent for caching purposes.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct CacheKey(String);
 
@@ -30,7 +30,11 @@ impl CacheKey {
 
 /// Build a deterministic cache key from a [`PolicyQuery`].
 ///
-/// Format: `{principal_user_id}|{action}|{resource_identity_or_none}|{tenant_or_none}`
+/// Format: `{principal_user_id}|{action}|{resource_or_none}|{tenant_or_none}|{sorted_groups}`
+///
+/// Groups are sorted alphabetically and comma-separated. Two queries
+/// with the same user/action/resource but different groups produce
+/// different keys, preventing stale cache hits.
 ///
 /// Uses `Display` representations of the typed IDs so we don't need `Hash`
 /// on every core type.
@@ -49,8 +53,20 @@ pub(crate) fn build_cache_key(query: &PolicyQuery) -> CacheKey {
         .map(|t| t.as_str().to_string())
         .unwrap_or_else(|| "none".to_string());
 
+    let groups = query.context().groups();
+    let groups_part = if groups.is_empty() {
+        String::new()
+    } else {
+        let mut sorted: Vec<&str> = groups
+            .iter()
+            .map(forgeguard_core::GroupName::as_str)
+            .collect();
+        sorted.sort_unstable();
+        sorted.join(",")
+    };
+
     CacheKey(format!(
-        "{principal_id}|{action}|{resource_part}|{tenant_part}"
+        "{principal_id}|{action}|{resource_part}|{tenant_part}|{groups_part}"
     ))
 }
 
@@ -144,7 +160,7 @@ mod tests {
     use std::thread;
 
     use forgeguard_authz_core::{DenyReason, PolicyContext};
-    use forgeguard_core::{PrincipalRef, QualifiedAction, UserId};
+    use forgeguard_core::{GroupName, PrincipalRef, QualifiedAction, UserId};
 
     use super::*;
 
@@ -159,10 +175,21 @@ mod tests {
         PolicyQuery::new(principal, action, None, context)
     }
 
+    fn make_query_with_groups(user: &str, action_str: &str, groups: Vec<&str>) -> PolicyQuery {
+        let principal = PrincipalRef::new(UserId::new(user).unwrap());
+        let action = QualifiedAction::parse(action_str).unwrap();
+        let group_names: Vec<GroupName> = groups
+            .into_iter()
+            .map(|g| GroupName::new(g).unwrap())
+            .collect();
+        let context = PolicyContext::new().with_groups(group_names);
+        PolicyQuery::new(principal, action, None, context)
+    }
+
     #[test]
     fn cache_miss_on_empty_cache() {
         let cache = AuthzCache::new(Duration::from_secs(60), 100);
-        let query = make_query("todo:read:list");
+        let query = make_query("todo:list:read");
         let key = build_cache_key(&query);
 
         assert!(cache.get(&key).is_none());
@@ -173,7 +200,7 @@ mod tests {
     #[test]
     fn cache_hit_after_insert() {
         let cache = AuthzCache::new(Duration::from_secs(60), 100);
-        let query = make_query("todo:read:list");
+        let query = make_query("todo:list:read");
         let key = build_cache_key(&query);
 
         cache.insert(key.clone(), PolicyDecision::Allow);
@@ -188,7 +215,7 @@ mod tests {
     #[test]
     fn cache_returns_deny_decision() {
         let cache = AuthzCache::new(Duration::from_secs(60), 100);
-        let query = make_query("admin:delete:user");
+        let query = make_query("admin:user:delete");
         let key = build_cache_key(&query);
 
         let deny = PolicyDecision::Deny {
@@ -203,7 +230,7 @@ mod tests {
     #[test]
     fn ttl_expiry() {
         let cache = AuthzCache::new(Duration::from_millis(50), 100);
-        let query = make_query("todo:read:list");
+        let query = make_query("todo:list:read");
         let key = build_cache_key(&query);
 
         cache.insert(key.clone(), PolicyDecision::Allow);
@@ -222,11 +249,11 @@ mod tests {
     fn lru_eviction() {
         let cache = AuthzCache::new(Duration::from_secs(60), 2);
 
-        let q1 = make_query("todo:read:list");
+        let q1 = make_query("todo:list:read");
         let k1 = build_cache_key(&q1);
-        let q2 = make_query("todo:write:list");
+        let q2 = make_query("todo:list:write");
         let k2 = build_cache_key(&q2);
-        let q3 = make_query("todo:delete:list");
+        let q3 = make_query("todo:list:delete");
         let k3 = build_cache_key(&q3);
 
         cache.insert(k1.clone(), PolicyDecision::Allow);
@@ -242,7 +269,7 @@ mod tests {
     #[test]
     fn counter_accuracy() {
         let cache = AuthzCache::new(Duration::from_secs(60), 100);
-        let query = make_query("todo:read:list");
+        let query = make_query("todo:list:read");
         let key = build_cache_key(&query);
 
         // 3 misses
@@ -262,8 +289,8 @@ mod tests {
 
     #[test]
     fn same_user_same_action_produces_same_key() {
-        let q1 = make_query_for_user("alice", "todo:read:list");
-        let q2 = make_query_for_user("alice", "todo:read:list");
+        let q1 = make_query_for_user("alice", "todo:list:read");
+        let q2 = make_query_for_user("alice", "todo:list:read");
         let k1 = build_cache_key(&q1);
         let k2 = build_cache_key(&q2);
         assert_eq!(k1, k2);
@@ -271,8 +298,8 @@ mod tests {
 
     #[test]
     fn different_users_same_action_produces_different_keys() {
-        let q1 = make_query_for_user("alice", "todo:read:list");
-        let q2 = make_query_for_user("bob", "todo:read:list");
+        let q1 = make_query_for_user("alice", "todo:list:read");
+        let q2 = make_query_for_user("bob", "todo:list:read");
         let k1 = build_cache_key(&q1);
         let k2 = build_cache_key(&q2);
         assert_ne!(k1, k2);
@@ -280,10 +307,44 @@ mod tests {
 
     #[test]
     fn same_user_different_action_produces_different_keys() {
-        let q1 = make_query_for_user("alice", "todo:read:list");
-        let q2 = make_query_for_user("alice", "todo:write:list");
+        let q1 = make_query_for_user("alice", "todo:list:read");
+        let q2 = make_query_for_user("alice", "todo:list:write");
         let k1 = build_cache_key(&q1);
         let k2 = build_cache_key(&q2);
         assert_ne!(k1, k2);
+    }
+
+    #[test]
+    fn different_groups_produce_different_keys() {
+        let q1 = make_query_with_groups("alice", "todo:list:read", vec!["admin"]);
+        let q2 = make_query_with_groups("alice", "todo:list:read", vec!["viewer"]);
+        let k1 = build_cache_key(&q1);
+        let k2 = build_cache_key(&q2);
+        assert_ne!(k1, k2);
+    }
+
+    #[test]
+    fn same_groups_different_order_produce_same_key() {
+        let q1 = make_query_with_groups("alice", "todo:list:read", vec!["admin", "viewer"]);
+        let q2 = make_query_with_groups("alice", "todo:list:read", vec!["viewer", "admin"]);
+        let k1 = build_cache_key(&q1);
+        let k2 = build_cache_key(&q2);
+        assert_eq!(k1, k2);
+    }
+
+    #[test]
+    fn no_groups_vs_some_groups_produce_different_keys() {
+        let q1 = make_query_for_user("alice", "todo:list:read");
+        let q2 = make_query_with_groups("alice", "todo:list:read", vec!["admin"]);
+        let k1 = build_cache_key(&q1);
+        let k2 = build_cache_key(&q2);
+        assert_ne!(k1, k2);
+    }
+
+    #[test]
+    fn cache_key_groups_segment_is_sorted_csv() {
+        let q = make_query_with_groups("alice", "todo:list:read", vec!["beta", "alpha"]);
+        let key = build_cache_key(&q);
+        assert!(key.as_str().ends_with("|alpha,beta"));
     }
 }
