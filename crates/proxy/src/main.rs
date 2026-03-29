@@ -136,11 +136,14 @@ fn build_policy_engine(
 ) -> color_eyre::Result<Arc<dyn forgeguard_authz_core::PolicyEngine>> {
     if let Some(authz) = config.authz() {
         let rt = tokio::runtime::Runtime::new()?;
-        let aws_config = rt.block_on(
-            aws_config::defaults(aws_config::BehaviorVersion::latest())
-                .region(aws_config::Region::new(authz.aws_region().to_string()))
-                .load(),
-        );
+        let mut aws_defaults = aws_config::defaults(aws_config::BehaviorVersion::latest());
+        if let Some(region) = config.aws().region() {
+            aws_defaults = aws_defaults.region(aws_config::Region::new(region.to_string()));
+        }
+        if let Some(profile) = config.aws().profile() {
+            aws_defaults = aws_defaults.profile_name(profile);
+        }
+        let aws_config = rt.block_on(aws_defaults.load());
         let vp_client = aws_sdk_verifiedpermissions::Client::new(&aws_config);
 
         let engine_config = VpEngineConfig::new(authz.policy_store_id())

@@ -3,6 +3,8 @@
 //! These mirror the TOML shape with `String` fields. The validated domain types
 //! are produced via `TryFrom<RawProxyConfig> for ProxyConfig` (Parse Don't Validate).
 
+use std::collections::HashMap;
+
 use serde::Deserialize;
 
 /// Top-level raw config as it appears in `forgeguard.toml`.
@@ -31,6 +33,12 @@ pub(crate) struct RawProxyConfig {
     pub(crate) groups: Vec<forgeguard_core::GroupDefinition>,
     #[serde(default)]
     pub(crate) features: Option<RawFlagConfig>,
+    #[serde(default)]
+    pub(crate) aws: Option<RawAwsConfig>,
+    #[serde(default)]
+    pub(crate) schema: Option<RawSchemaConfig>,
+    #[serde(default)]
+    pub(crate) policy_tests: Vec<RawPolicyTest>,
 }
 
 /// Raw feature flag configuration.
@@ -60,7 +68,6 @@ pub(crate) struct RawAuthConfig {
 #[derive(Debug, Deserialize)]
 pub(crate) struct RawAuthzConfig {
     pub(crate) policy_store_id: Option<String>,
-    pub(crate) aws_region: Option<String>,
     #[serde(default = "default_cache_ttl_secs")]
     pub(crate) cache_ttl_secs: u64,
     #[serde(default = "default_cache_max_entries")]
@@ -104,4 +111,40 @@ pub(crate) struct RawPublicRoute {
 
 fn default_auth_mode() -> String {
     "anonymous".to_string()
+}
+
+/// Raw AWS configuration.
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawAwsConfig {
+    pub(crate) region: Option<String>,
+    pub(crate) profile: Option<String>,
+}
+
+/// Raw entity schema definition.
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawEntitySchema {
+    #[serde(default)]
+    pub(crate) member_of: Vec<String>,
+    #[serde(default)]
+    pub(crate) attributes: HashMap<String, String>,
+}
+
+/// Raw schema configuration.
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawSchemaConfig {
+    #[serde(default)]
+    pub(crate) entities: HashMap<String, HashMap<String, RawEntitySchema>>,
+}
+
+/// Raw policy test definition.
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawPolicyTest {
+    pub(crate) name: String,
+    pub(crate) principal: String,
+    #[serde(default)]
+    pub(crate) groups: Vec<String>,
+    pub(crate) tenant: String,
+    pub(crate) action: String,
+    pub(crate) resource: Option<String>,
+    pub(crate) expect: String,
 }

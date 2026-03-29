@@ -2,6 +2,7 @@
 
 pub mod config;
 pub(crate) mod config_raw;
+pub mod config_types;
 pub mod credential;
 pub mod debug;
 pub mod error;
@@ -16,6 +17,7 @@ pub use config::{
     apply_overrides, load_config, parse_config, AuthConfig, AuthzConfig, ClientIpSource,
     ConfigOverrides, DefaultPolicy, MetricsConfig, ProxyConfig,
 };
+pub use config_types::{AwsConfig, EntitySchema, PolicyTest, PolicyTestExpect, SchemaConfig};
 pub use credential::extract_credential;
 pub use debug::{evaluate_debug, FlagDebugQuery};
 pub use error::{Error, Result, ValidationError, ValidationErrorKind, ValidationWarning};

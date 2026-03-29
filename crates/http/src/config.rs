@@ -5,10 +5,16 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use forgeguard_core::{FlagConfig, FlagName, GroupDefinition, Policy, ProjectId, QualifiedAction};
+use forgeguard_core::{
+    CedarEntityRef, FlagConfig, FlagName, GroupDefinition, GroupName, Policy, ProjectId,
+    QualifiedAction,
+};
 use url::Url;
 
 use crate::config_raw::RawProxyConfig;
+use crate::config_types::{
+    AwsConfig, EntitySchema, PolicyTest, PolicyTestExpect, PolicyTestParams, SchemaConfig,
+};
 use crate::method::HttpMethod;
 use crate::public::{PublicAuthMode, PublicRoute};
 use crate::route::RouteMapping;
@@ -75,7 +81,6 @@ impl Default for AuthConfig {
 #[derive(Debug, Clone)]
 pub struct AuthzConfig {
     policy_store_id: String,
-    aws_region: String,
     cache_ttl: Duration,
     cache_max_entries: usize,
 }
@@ -84,11 +89,6 @@ impl AuthzConfig {
     /// The Verified Permissions policy store ID.
     pub fn policy_store_id(&self) -> &str {
         &self.policy_store_id
-    }
-
-    /// The AWS region for Verified Permissions.
-    pub fn aws_region(&self) -> &str {
-        &self.aws_region
     }
 
     /// TTL for cached authorization decisions.
@@ -147,6 +147,9 @@ pub struct ProxyConfig {
     policies: Vec<Policy>,
     groups: Vec<GroupDefinition>,
     features: FlagConfig,
+    aws: AwsConfig,
+    schema: SchemaConfig,
+    policy_tests: Vec<PolicyTest>,
 }
 
 impl ProxyConfig {
@@ -188,6 +191,15 @@ impl ProxyConfig {
     }
     pub fn features(&self) -> &FlagConfig {
         &self.features
+    }
+    pub fn aws(&self) -> &AwsConfig {
+        &self.aws
+    }
+    pub fn schema(&self) -> &SchemaConfig {
+        &self.schema
+    }
+    pub fn policy_tests(&self) -> &[PolicyTest] {
+        &self.policy_tests
     }
 }
 
@@ -277,7 +289,6 @@ impl TryFrom<RawProxyConfig> for ProxyConfig {
             let ttl = Duration::from_secs(a.cache_ttl_secs);
             AuthzConfig {
                 policy_store_id: a.policy_store_id.unwrap_or_default(),
-                aws_region: a.aws_region.unwrap_or_default(),
                 cache_ttl: ttl,
                 cache_max_entries: a.cache_max_entries,
             }
@@ -323,6 +334,41 @@ impl TryFrom<RawProxyConfig> for ProxyConfig {
             .map(|f| FlagConfig { flags: f.flags })
             .unwrap_or_default();
 
+        let aws = raw
+            .aws
+            .map(|a| AwsConfig::new(a.region, a.profile))
+            .unwrap_or_default();
+
+        let schema = raw
+            .schema
+            .map(|s| {
+                let entities = s
+                    .entities
+                    .into_iter()
+                    .map(|(ns, entity_map)| {
+                        let validated = entity_map
+                            .into_iter()
+                            .map(|(name, raw_schema)| {
+                                (
+                                    name,
+                                    EntitySchema::new(raw_schema.member_of, raw_schema.attributes),
+                                )
+                            })
+                            .collect();
+                        (ns, validated)
+                    })
+                    .collect();
+                SchemaConfig::new(entities)
+            })
+            .unwrap_or_default();
+
+        let policy_tests = raw
+            .policy_tests
+            .into_iter()
+            .enumerate()
+            .map(|(i, t)| parse_policy_test(i, t))
+            .collect::<Result<Vec<_>>>()?;
+
         Ok(ProxyConfig {
             project_id,
             listen_addr,
@@ -337,6 +383,9 @@ impl TryFrom<RawProxyConfig> for ProxyConfig {
             policies,
             groups,
             features,
+            aws,
+            schema,
+            policy_tests,
         })
     }
 }
@@ -413,6 +462,50 @@ fn parse_public_route(index: usize, raw: crate::config_raw::RawPublicRoute) -> R
     Ok(PublicRoute::new(method, raw.path, auth_mode))
 }
 
+fn parse_policy_test(index: usize, raw: crate::config_raw::RawPolicyTest) -> Result<PolicyTest> {
+    let action = QualifiedAction::parse(&raw.action)
+        .map_err(|e| Error::Config(format!("policy_tests[{index}].action: {e}")))?;
+
+    let groups = raw
+        .groups
+        .into_iter()
+        .enumerate()
+        .map(|(gi, g)| {
+            GroupName::new(&g)
+                .map_err(|e| Error::Config(format!("policy_tests[{index}].groups[{gi}]: {e}")))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let resource = raw
+        .resource
+        .map(|r| {
+            CedarEntityRef::parse(&r)
+                .map_err(|e| Error::Config(format!("policy_tests[{index}].resource: {e}")))
+        })
+        .transpose()?;
+
+    let expect = match raw.expect.to_ascii_lowercase().as_str() {
+        "allow" => PolicyTestExpect::Allow,
+        "deny" => PolicyTestExpect::Deny,
+        _ => {
+            return Err(Error::Config(format!(
+                "policy_tests[{index}].expect: expected 'allow' or 'deny', got '{}'",
+                raw.expect
+            )));
+        }
+    };
+
+    Ok(PolicyTest::new(PolicyTestParams {
+        name: raw.name,
+        principal: raw.principal,
+        groups,
+        tenant: raw.tenant,
+        action,
+        resource,
+        expect,
+    }))
+}
+
 /// Load a proxy config from a TOML file path.
 ///
 /// This is the only I/O function in this crate.
@@ -456,7 +549,6 @@ chain_order = ["jwt", "api-key"]
 
 [authz]
 policy_store_id = "ps-123"
-aws_region = "us-east-1"
 cache_ttl_secs = 600
 cache_max_entries = 5000
 
@@ -467,12 +559,12 @@ listen_addr = "127.0.0.1:9090"
 [[routes]]
 method = "GET"
 path = "/users"
-action = "todo:list:user"
+action = "todo:user:list"
 
 [[routes]]
 method = "GET"
 path = "/users/{id}"
-action = "todo:read:user"
+action = "todo:user:read"
 resource_param = "id"
 
 [[public_routes]]
@@ -503,7 +595,6 @@ auth_mode = "anonymous"
 
         let authz = config.authz().unwrap();
         assert_eq!(authz.policy_store_id(), "ps-123");
-        assert_eq!(authz.aws_region(), "us-east-1");
         assert_eq!(authz.cache_ttl(), Duration::from_secs(600));
         assert_eq!(authz.cache_max_entries(), 5000);
 
@@ -609,7 +700,7 @@ upstream_url = "http://localhost:3000"
 [[routes]]
 method = "GET"
 path = "/beta"
-action = "todo:read:beta"
+action = "todo:beta:read"
 feature_gate = "beta-feature"
 "#;
         let config = parse_config(toml).unwrap();
@@ -633,5 +724,157 @@ feature_gate = "beta-feature"
             ClientIpSource::CfConnectingIp
         );
         assert!(parse_client_ip_source("unknown").is_err());
+    }
+
+    #[test]
+    fn parse_aws_config_present() {
+        let toml = r#"
+project_id = "my-app"
+listen_addr = "127.0.0.1:8080"
+upstream_url = "http://localhost:3000"
+
+[aws]
+region = "us-east-2"
+profile = "admin"
+"#;
+        let config = parse_config(toml).unwrap();
+        assert_eq!(config.aws().region(), Some("us-east-2"));
+        assert_eq!(config.aws().profile(), Some("admin"));
+    }
+
+    #[test]
+    fn parse_aws_config_absent() {
+        let config = parse_config(MINIMAL_TOML).unwrap();
+        assert!(config.aws().region().is_none());
+        assert!(config.aws().profile().is_none());
+    }
+
+    #[test]
+    fn parse_aws_config_partial() {
+        let toml = r#"
+project_id = "my-app"
+listen_addr = "127.0.0.1:8080"
+upstream_url = "http://localhost:3000"
+
+[aws]
+region = "eu-west-1"
+"#;
+        let config = parse_config(toml).unwrap();
+        assert_eq!(config.aws().region(), Some("eu-west-1"));
+        assert!(config.aws().profile().is_none());
+    }
+
+    #[test]
+    fn parse_policy_tests_present() {
+        let toml = r#"
+project_id = "my-app"
+listen_addr = "127.0.0.1:8080"
+upstream_url = "http://localhost:3000"
+
+[[policy_tests]]
+name = "alice can delete"
+principal = "alice"
+groups = ["admin"]
+tenant = "acme-corp"
+action = "todo:list:delete"
+expect = "allow"
+
+[[policy_tests]]
+name = "charlie denied on top-secret"
+principal = "charlie"
+groups = ["viewer"]
+tenant = "acme-corp"
+action = "todo:list:read"
+resource = "todo::list::top-secret"
+expect = "deny"
+"#;
+        let config = parse_config(toml).unwrap();
+        assert_eq!(config.policy_tests().len(), 2);
+
+        let t0 = &config.policy_tests()[0];
+        assert_eq!(t0.name(), "alice can delete");
+        assert_eq!(t0.principal(), "alice");
+        assert_eq!(t0.groups().len(), 1);
+        assert_eq!(t0.groups()[0].as_str(), "admin");
+        assert_eq!(t0.tenant(), "acme-corp");
+        assert_eq!(t0.action().to_string(), "todo:list:delete");
+        assert!(t0.resource().is_none());
+        assert_eq!(t0.expect(), PolicyTestExpect::Allow);
+
+        let t1 = &config.policy_tests()[1];
+        assert_eq!(t1.name(), "charlie denied on top-secret");
+        assert!(t1.resource().is_some());
+        assert_eq!(t1.resource().unwrap().to_string(), "todo::list::top-secret");
+        assert_eq!(t1.expect(), PolicyTestExpect::Deny);
+    }
+
+    #[test]
+    fn parse_policy_tests_absent() {
+        let config = parse_config(MINIMAL_TOML).unwrap();
+        assert!(config.policy_tests().is_empty());
+    }
+
+    #[test]
+    fn parse_policy_test_invalid_action_errors() {
+        let toml = r#"
+project_id = "my-app"
+listen_addr = "127.0.0.1:8080"
+upstream_url = "http://localhost:3000"
+
+[[policy_tests]]
+name = "bad test"
+principal = "alice"
+groups = ["admin"]
+tenant = "acme-corp"
+action = "invalid-action"
+expect = "allow"
+"#;
+        let err = parse_config(toml).unwrap_err();
+        assert!(err.to_string().contains("policy_tests[0].action"));
+    }
+
+    #[test]
+    fn parse_policy_test_invalid_expect_errors() {
+        let toml = r#"
+project_id = "my-app"
+listen_addr = "127.0.0.1:8080"
+upstream_url = "http://localhost:3000"
+
+[[policy_tests]]
+name = "bad test"
+principal = "alice"
+groups = ["admin"]
+tenant = "acme-corp"
+action = "todo:list:read"
+expect = "maybe"
+"#;
+        let err = parse_config(toml).unwrap_err();
+        assert!(err.to_string().contains("policy_tests[0].expect"));
+    }
+
+    #[test]
+    fn parse_schema_config_absent() {
+        let config = parse_config(MINIMAL_TOML).unwrap();
+        assert!(config.schema().entities().is_empty());
+    }
+
+    #[test]
+    fn parse_schema_config_present() {
+        let toml = r#"
+project_id = "my-app"
+listen_addr = "127.0.0.1:8080"
+upstream_url = "http://localhost:3000"
+
+[schema.entities.todo.list]
+member_of = ["todo::project"]
+"#;
+        let config = parse_config(toml).unwrap();
+        let entities = config.schema().entities();
+        assert!(entities.contains_key("todo"));
+        let todo_entities = &entities["todo"];
+        assert!(todo_entities.contains_key("list"));
+        let list = &todo_entities["list"];
+        assert_eq!(list.member_of(), &["todo::project"]);
+        assert!(list.attributes().is_empty());
     }
 }
