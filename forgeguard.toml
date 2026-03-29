@@ -94,6 +94,38 @@ enabled = false
 listen_addr = "127.0.0.1:9090"
 
 # ---------------------------------------------------------------------------
+# CORS
+# ---------------------------------------------------------------------------
+# Cross-Origin Resource Sharing configuration. When enabled, the proxy handles
+# all CORS logic — the upstream service remains CORS-unaware.
+#
+# Fields:
+#   enabled           - Master switch (default: false). When false, no CORS
+#                        headers are emitted regardless of other settings.
+#   allowed_origins   - Origins that may make cross-origin requests.
+#                        Supports exact ("https://app.example.com"),
+#                        wildcard suffix ("*.example.com"), and bare
+#                        wildcard ("*"). Required when enabled = true.
+#   allowed_methods   - HTTP methods allowed in preflight responses
+#                        (default: GET, POST, PUT, PATCH, DELETE).
+#   allowed_headers   - Headers the browser may send in the actual request
+#                        (default: Content-Type, Authorization, X-API-Key).
+#   expose_headers    - Response headers the browser may read via JS
+#                        (default: none).
+#   allow_credentials - Whether the browser may send cookies / auth headers.
+#                        Cannot be true when allowed_origins contains "*".
+#   max_age_secs      - Preflight cache duration in seconds (default: 3600).
+
+# [cors]
+# enabled = true
+# allowed_origins = ["https://app.forgeguard.dev", "*.forgeguard.dev"]
+# allowed_methods = ["GET", "POST", "PUT", "PATCH", "DELETE"]
+# allowed_headers = ["Content-Type", "Authorization", "X-API-Key"]
+# expose_headers = ["X-Request-Id", "X-Trace-Id"]
+# allow_credentials = true
+# max_age_secs = 3600
+
+# ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
 # Each [[routes]] entry maps an HTTP method + path to an authorization action.
