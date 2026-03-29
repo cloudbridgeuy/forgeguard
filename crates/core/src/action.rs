@@ -1,6 +1,6 @@
 //! Action vocabulary types for the ForgeGuard authorization model.
 //!
-//! These types represent the three-part action format: `namespace:action:entity`.
+//! These types represent the three-part action format: `namespace:entity:action`.
 //! All components are validated [`Segment`] values (lowercase, kebab-case).
 
 use std::fmt;
@@ -11,7 +11,9 @@ use serde::ser::Serializer;
 use serde::{Deserialize, Serialize};
 
 use crate::fgrn::known_segments;
-use crate::{Error, Fgrn, ProjectId, Result, Segment, TenantId, UserId};
+use crate::{
+    CedarEntityType, CedarNamespace, Error, Fgrn, ProjectId, Result, Segment, TenantId, UserId,
+};
 
 // ---------------------------------------------------------------------------
 // Namespace
@@ -172,9 +174,9 @@ impl Entity {
 // QualifiedAction
 // ---------------------------------------------------------------------------
 
-/// A fully qualified action: namespace:action:entity
+/// A fully qualified action: namespace:entity:action
 ///
-/// ForgeGuard:  "todo:read:list"
+/// ForgeGuard:  "todo:list:read"
 /// Cedar maps:  namespace=todo, action="read-list", entity=todo::list
 ///
 /// Three explicit segments — no parsing heuristics to split verb from entity.
@@ -196,11 +198,11 @@ impl QualifiedAction {
         }
     }
 
-    /// Parse from the canonical format: "todo:read:list"
+    /// Parse from the canonical format: "todo:list:read" (namespace:entity:action)
     pub fn parse(s: &str) -> Result<Self> {
         let parts: Vec<&str> = s.splitn(4, ':').collect();
         match parts.as_slice() {
-            [ns, action, entity] => Ok(Self {
+            [ns, entity, action] => Ok(Self {
                 namespace: Namespace::parse(*ns)?,
                 action: Action::parse(*action)?,
                 entity: Entity::parse(*entity)?,
@@ -208,7 +210,7 @@ impl QualifiedAction {
             _ => Err(Error::Parse {
                 field: "qualified_action",
                 value: s.to_string(),
-                reason: "expected namespace:action:entity (e.g., 'todo:read:list')",
+                reason: "expected namespace:entity:action (e.g., 'todo:list:read')",
             }),
         }
     }
@@ -228,28 +230,43 @@ impl QualifiedAction {
         &self.entity
     }
 
-    /// Verified Permissions `IsAuthorized`: actionType — "todo::action"
-    pub fn vp_action_type(&self) -> String {
-        format!("{}::action", self.namespace.as_str())
+    /// Verified Permissions `IsAuthorized`: actionType — e.g. "todo_app::Action"
+    ///
+    /// Uses the VP namespace derived from the project ID, not the ForgeGuard namespace.
+    pub fn vp_action_type(&self, project: &ProjectId) -> String {
+        let ns = CedarNamespace::from_project(project);
+        format!("{}::Action", ns.as_str())
     }
 
-    /// Verified Permissions `IsAuthorized`: actionId — "read-list" (action + entity, hyphen-joined)
+    /// Verified Permissions `IsAuthorized`: actionId — "todo-list-read" (namespace-entity-action)
+    ///
+    /// Includes the ForgeGuard namespace to disambiguate actions with the same
+    /// entity-verb pair across different namespaces (e.g., `todo:list:read` vs
+    /// `shopping:list:read`).
     pub fn vp_action_id(&self) -> String {
-        format!("{}-{}", self.action.as_str(), self.entity.as_str())
-    }
-
-    /// Cedar action reference: `todo::action::"read-list"`
-    pub fn cedar_action_ref(&self) -> String {
         format!(
-            "{}::action::\"{}\"",
+            "{}-{}-{}",
             self.namespace.as_str(),
-            self.vp_action_id()
+            self.entity.as_str(),
+            self.action.as_str()
         )
     }
 
-    /// Cedar entity type for the resource: "todo::list"
-    pub fn cedar_entity_type(&self) -> String {
-        self.entity.cedar_entity_type(&self.namespace)
+    /// Cedar action reference: `todo_app::Action::"todo-list-read"`
+    ///
+    /// Uses the VP namespace derived from the project ID.
+    pub fn cedar_action_ref(&self, project: &ProjectId) -> String {
+        let ns = CedarNamespace::from_project(project);
+        format!("{}::Action::\"{}\"", ns.as_str(), self.vp_action_id())
+    }
+
+    /// VP entity type for the resource: e.g. "todo_app::todo__list"
+    ///
+    /// Uses the VP namespace and CedarEntityType format.
+    pub fn vp_entity_type(&self, project: &ProjectId) -> String {
+        let ns = CedarNamespace::from_project(project);
+        let entity_type = CedarEntityType::new(&self.namespace, &self.entity);
+        format!("{}::{}", ns.as_str(), entity_type)
     }
 }
 
@@ -259,8 +276,8 @@ impl fmt::Display for QualifiedAction {
             f,
             "{}:{}:{}",
             self.namespace.as_str(),
-            self.action.as_str(),
-            self.entity.as_str()
+            self.entity.as_str(),
+            self.action.as_str()
         )
     }
 }
@@ -327,9 +344,13 @@ impl ResourceRef {
         }
     }
 
-    /// Verified Permissions entity type: "todo::list"
-    pub fn vp_entity_type(&self) -> String {
-        self.entity.cedar_entity_type(&self.namespace)
+    /// Verified Permissions entity type: e.g. "todo_app::todo__list"
+    ///
+    /// Uses the VP namespace derived from the project ID and CedarEntityType format.
+    pub fn vp_entity_type(&self, project: &ProjectId) -> String {
+        let ns = CedarNamespace::from_project(project);
+        let entity_type = CedarEntityType::new(&self.namespace, &self.entity);
+        format!("{}::{}", ns.as_str(), entity_type)
     }
 
     /// Build the FGRN for this resource. Used as the Verified Permissions entity ID.
@@ -386,9 +407,20 @@ impl PrincipalRef {
         &self.user_id
     }
 
-    /// Verified Permissions entity type for principals.
-    pub fn vp_entity_type() -> &'static str {
-        "iam::user"
+    /// Verified Permissions entity type for principals: e.g. "todo_app::user"
+    ///
+    /// Uses the VP namespace derived from the project ID.
+    pub fn vp_entity_type(project: &ProjectId) -> String {
+        let ns = CedarNamespace::from_project(project);
+        format!("{}::user", ns.as_str())
+    }
+
+    /// VP group entity type: e.g. "todo_app::group"
+    ///
+    /// Uses the VP namespace derived from the project ID.
+    pub fn vp_group_entity_type(project: &ProjectId) -> String {
+        let ns = CedarNamespace::from_project(project);
+        format!("{}::group", ns.as_str())
     }
 
     /// Build the FGRN for this principal. Used as the Verified Permissions entity ID.
@@ -490,18 +522,18 @@ mod tests {
 
     #[test]
     fn qualified_action_parse_valid() {
-        let qa = QualifiedAction::parse("todo:read:list").unwrap();
+        let qa = QualifiedAction::parse("todo:list:read").unwrap();
         assert_eq!(qa.namespace().as_str(), "todo");
-        assert_eq!(qa.action().as_str(), "read");
         assert_eq!(qa.entity().as_str(), "list");
+        assert_eq!(qa.action().as_str(), "read");
     }
 
     #[test]
     fn qualified_action_parse_complex() {
-        let qa = QualifiedAction::parse("billing:force-delete:payment-tracker").unwrap();
+        let qa = QualifiedAction::parse("billing:payment-tracker:force-delete").unwrap();
         assert_eq!(qa.namespace().as_str(), "billing");
-        assert_eq!(qa.action().as_str(), "force-delete");
         assert_eq!(qa.entity().as_str(), "payment-tracker");
+        assert_eq!(qa.action().as_str(), "force-delete");
     }
 
     #[test]
@@ -519,41 +551,48 @@ mod tests {
         assert!(QualifiedAction::parse("").is_err());
     }
 
+    fn test_project() -> ProjectId {
+        ProjectId::new("todo-app").unwrap()
+    }
+
     #[test]
     fn vp_action_type() {
-        let qa = QualifiedAction::parse("todo:read:list").unwrap();
-        assert_eq!(qa.vp_action_type(), "todo::action");
+        let qa = QualifiedAction::parse("todo:list:read").unwrap();
+        assert_eq!(qa.vp_action_type(&test_project()), "todo_app::Action");
     }
 
     #[test]
     fn vp_action_id() {
-        let qa = QualifiedAction::parse("todo:read:list").unwrap();
-        assert_eq!(qa.vp_action_id(), "read-list");
+        let qa = QualifiedAction::parse("todo:list:read").unwrap();
+        assert_eq!(qa.vp_action_id(), "todo-list-read");
     }
 
     #[test]
     fn cedar_action_ref() {
-        let qa = QualifiedAction::parse("todo:read:list").unwrap();
-        assert_eq!(qa.cedar_action_ref(), "todo::action::\"read-list\"");
+        let qa = QualifiedAction::parse("todo:list:read").unwrap();
+        assert_eq!(
+            qa.cedar_action_ref(&test_project()),
+            "todo_app::Action::\"todo-list-read\""
+        );
     }
 
     #[test]
-    fn cedar_entity_type() {
-        let qa = QualifiedAction::parse("todo:read:list").unwrap();
-        assert_eq!(qa.cedar_entity_type(), "todo::list");
+    fn vp_entity_type_on_action() {
+        let qa = QualifiedAction::parse("todo:list:read").unwrap();
+        assert_eq!(qa.vp_entity_type(&test_project()), "todo_app::todo__list");
     }
 
     #[test]
     fn qualified_action_display() {
-        let qa = QualifiedAction::parse("todo:read:list").unwrap();
-        assert_eq!(qa.to_string(), "todo:read:list");
+        let qa = QualifiedAction::parse("todo:list:read").unwrap();
+        assert_eq!(qa.to_string(), "todo:list:read");
     }
 
     #[test]
     fn qualified_action_serde_round_trip() {
-        let qa = QualifiedAction::parse("todo:read:list").unwrap();
+        let qa = QualifiedAction::parse("todo:list:read").unwrap();
         let json = serde_json::to_string(&qa).unwrap();
-        assert_eq!(json, "\"todo:read:list\"");
+        assert_eq!(json, "\"todo:list:read\"");
         let deser: QualifiedAction = serde_json::from_str(&json).unwrap();
         assert_eq!(qa, deser);
     }
@@ -579,7 +618,17 @@ mod tests {
 
     #[test]
     fn principal_ref_vp_entity_type() {
-        assert_eq!(PrincipalRef::vp_entity_type(), "iam::user");
+        let project = ProjectId::new("todo-app").unwrap();
+        assert_eq!(PrincipalRef::vp_entity_type(&project), "todo_app::user");
+    }
+
+    #[test]
+    fn principal_ref_vp_group_entity_type() {
+        let project = ProjectId::new("todo-app").unwrap();
+        assert_eq!(
+            PrincipalRef::vp_group_entity_type(&project),
+            "todo_app::group"
+        );
     }
 
     #[test]
@@ -598,7 +647,7 @@ mod tests {
     fn resource_ref_to_fgrn() {
         let project = ProjectId::new("acme-app").unwrap();
         let tenant = TenantId::new("acme-corp").unwrap();
-        let qa = QualifiedAction::parse("todo:read:list").unwrap();
+        let qa = QualifiedAction::parse("todo:list:read").unwrap();
         let rid = ResourceId::parse("list-123").unwrap();
         let resource = ResourceRef::from_route(&qa, rid);
         let fgrn = resource.to_fgrn(&project, &tenant);

@@ -86,6 +86,17 @@ impl Segment {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// Convert this segment to a Cedar-safe identifier by replacing hyphens
+    /// with underscores.
+    ///
+    /// Every valid `Segment` produces a valid [`CedarIdent`](crate::CedarIdent)
+    /// because:
+    /// - Segments start with `[a-z0-9]`, which is valid for Cedar IDENTs
+    /// - Replacing `-` with `_` keeps all characters in `[_a-zA-Z0-9]`
+    pub fn to_cedar_ident(&self) -> crate::CedarIdent {
+        crate::CedarIdent::from_valid(self.0.replace('-', "_"))
+    }
 }
 
 impl fmt::Display for Segment {

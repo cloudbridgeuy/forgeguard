@@ -48,11 +48,11 @@ impl PatternSegment {
 // ---------------------------------------------------------------------------
 
 /// A pattern that matches qualified actions. Each of the three positions
-/// (namespace, action, entity) can be an exact segment or a wildcard (`*`).
+/// (namespace, entity, action) can be an exact segment or a wildcard (`*`).
 ///
-/// Format: `"namespace:action:entity"` where any part can be `*`.
+/// Format: `"namespace:entity:action"` where any part can be `*`.
 ///
-/// Examples: `"todo:read:list"`, `"todo:*:*"`, `"*:*:*"`
+/// Examples: `"todo:list:read"`, `"todo:*:*"`, `"*:*:*"`
 #[derive(Debug, Clone)]
 pub struct ActionPattern {
     namespace: PatternSegment,
@@ -71,12 +71,12 @@ fn parse_pattern_segment(s: &str) -> Result<PatternSegment> {
 }
 
 impl ActionPattern {
-    /// Parse an action pattern from the canonical format: `"namespace:action:entity"`.
+    /// Parse an action pattern from the canonical format: `"namespace:entity:action"`.
     /// Each segment may be `*` (wildcard) or a valid [`Segment`].
     pub fn parse(s: &str) -> Result<Self> {
         let parts: Vec<&str> = s.splitn(4, ':').collect();
         match parts.as_slice() {
-            [ns, action, entity] => Ok(Self {
+            [ns, entity, action] => Ok(Self {
                 namespace: parse_pattern_segment(ns)?,
                 action: parse_pattern_segment(action)?,
                 entity: parse_pattern_segment(entity)?,
@@ -84,7 +84,7 @@ impl ActionPattern {
             _ => Err(Error::Parse {
                 field: "action_pattern",
                 value: s.to_string(),
-                reason: "expected namespace:action:entity (e.g., 'todo:read:list' or 'todo:*:*')",
+                reason: "expected namespace:entity:action (e.g., 'todo:list:read' or 'todo:*:*')",
             }),
         }
     }
@@ -254,13 +254,16 @@ impl PolicyStatement {
 // Policy
 // ---------------------------------------------------------------------------
 
-/// A named collection of policy statements.
+/// A named collection of policy statements that optionally belongs to one or
+/// more groups.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Policy {
     name: PolicyName,
     #[serde(default)]
     description: Option<String>,
     statements: Vec<PolicyStatement>,
+    #[serde(default)]
+    groups: Vec<GroupName>,
 }
 
 impl Policy {
@@ -278,19 +281,25 @@ impl Policy {
     pub fn statements(&self) -> &[PolicyStatement] {
         &self.statements
     }
+
+    /// The groups this policy belongs to.
+    pub fn groups(&self) -> &[GroupName] {
+        &self.groups
+    }
 }
 
 // ---------------------------------------------------------------------------
 // GroupDefinition
 // ---------------------------------------------------------------------------
 
-/// A named group that references policies and optionally other groups.
+/// A named group with optional description and member groups. Policies declare
+/// which groups they belong to via [`Policy::groups`]; this struct carries only
+/// group metadata and nesting.
 #[derive(Debug, Clone, Deserialize)]
 pub struct GroupDefinition {
     name: GroupName,
     #[serde(default)]
     description: Option<String>,
-    policies: Vec<PolicyName>,
     #[serde(default)]
     member_groups: Vec<GroupName>,
 }
@@ -304,11 +313,6 @@ impl GroupDefinition {
     /// Optional description.
     pub fn description(&self) -> Option<&str> {
         self.description.as_deref()
-    }
-
-    /// Policies attached to this group.
-    pub fn policies(&self) -> &[PolicyName] {
-        &self.policies
     }
 
     /// Other groups that are members of this group.
@@ -330,7 +334,7 @@ mod tests {
 
     #[test]
     fn action_pattern_parse_all_exact() {
-        let ap = ActionPattern::parse("todo:read:list").unwrap();
+        let ap = ActionPattern::parse("todo:list:read").unwrap();
         assert!(matches!(ap.namespace, PatternSegment::Exact(_)));
         assert!(matches!(ap.action, PatternSegment::Exact(_)));
         assert!(matches!(ap.entity, PatternSegment::Exact(_)));
@@ -362,17 +366,17 @@ mod tests {
     #[test]
     fn action_pattern_matches_namespace_wildcard() {
         let ap = ActionPattern::parse("todo:*:*").unwrap();
-        let qa_todo = QualifiedAction::parse("todo:read:list").unwrap();
-        let qa_billing = QualifiedAction::parse("billing:read:invoice").unwrap();
+        let qa_todo = QualifiedAction::parse("todo:list:read").unwrap();
+        let qa_billing = QualifiedAction::parse("billing:invoice:read").unwrap();
         assert!(ap.matches(&qa_todo));
         assert!(!ap.matches(&qa_billing));
     }
 
     #[test]
     fn action_pattern_matches_action_wildcard() {
-        let ap = ActionPattern::parse("*:read:*").unwrap();
-        let qa_read = QualifiedAction::parse("todo:read:list").unwrap();
-        let qa_delete = QualifiedAction::parse("todo:delete:item").unwrap();
+        let ap = ActionPattern::parse("*:*:read").unwrap();
+        let qa_read = QualifiedAction::parse("todo:list:read").unwrap();
+        let qa_delete = QualifiedAction::parse("todo:item:delete").unwrap();
         assert!(ap.matches(&qa_read));
         assert!(!ap.matches(&qa_delete));
     }
@@ -457,7 +461,7 @@ mod tests {
     fn policy_statement_deny_with_except_deserializes() {
         let json = r#"{
             "effect": "deny",
-            "actions": ["todo:delete:*"],
+            "actions": ["todo:*:delete"],
             "except": ["admin"]
         }"#;
         let stmt: PolicyStatement = serde_json::from_str(json).unwrap();
@@ -468,6 +472,41 @@ mod tests {
         assert_eq!(stmt.except()[0].as_str(), "admin");
     }
 
+    // -- Policy serde --------------------------------------------------------
+
+    #[test]
+    fn policy_with_groups_deserializes() {
+        let json = r#"{
+            "name": "todo-read",
+            "description": "Read-only access to todos",
+            "statements": [
+                { "effect": "allow", "actions": ["todo:*:read"] }
+            ],
+            "groups": ["viewer", "editor"]
+        }"#;
+        let p: Policy = serde_json::from_str(json).unwrap();
+        assert_eq!(p.name().as_str(), "todo-read");
+        assert_eq!(p.description(), Some("Read-only access to todos"));
+        assert_eq!(p.statements().len(), 1);
+        assert_eq!(p.groups().len(), 2);
+        assert_eq!(p.groups()[0].as_str(), "viewer");
+        assert_eq!(p.groups()[1].as_str(), "editor");
+    }
+
+    #[test]
+    fn policy_without_groups_defaults_to_empty() {
+        let json = r#"{
+            "name": "todo-read",
+            "statements": [
+                { "effect": "allow", "actions": ["todo:*:read"] }
+            ]
+        }"#;
+        let p: Policy = serde_json::from_str(json).unwrap();
+        assert_eq!(p.name().as_str(), "todo-read");
+        assert!(p.description().is_none());
+        assert!(p.groups().is_empty());
+    }
+
     // -- GroupDefinition serde -----------------------------------------------
 
     #[test]
@@ -475,13 +514,11 @@ mod tests {
         let json = r#"{
             "name": "super-admin",
             "description": "Full access group",
-            "policies": ["todo-admin", "billing-admin"],
             "member_groups": ["admin", "ops"]
         }"#;
         let gd: GroupDefinition = serde_json::from_str(json).unwrap();
         assert_eq!(gd.name().as_str(), "super-admin");
         assert_eq!(gd.description(), Some("Full access group"));
-        assert_eq!(gd.policies().len(), 2);
         assert_eq!(gd.member_groups().len(), 2);
         assert_eq!(gd.member_groups()[0].as_str(), "admin");
         assert_eq!(gd.member_groups()[1].as_str(), "ops");
