@@ -64,20 +64,21 @@ mod tests {
     #[test]
     fn construct_query_without_resource() {
         let principal = PrincipalRef::new(UserId::new("alice").unwrap());
-        let action = QualifiedAction::parse("todo:read:list").unwrap();
+        let action = QualifiedAction::parse("todo:list:read").unwrap();
         let context = PolicyContext::new();
 
         let query = PolicyQuery::new(principal, action, None, context);
 
-        assert_eq!(PrincipalRef::vp_entity_type(), "iam::user");
-        assert_eq!(query.action().to_string(), "todo:read:list");
+        let project = forgeguard_core::ProjectId::new("todo-app").unwrap();
+        assert_eq!(PrincipalRef::vp_entity_type(&project), "todo_app::user");
+        assert_eq!(query.action().to_string(), "todo:list:read");
         assert!(query.resource().is_none());
     }
 
     #[test]
     fn construct_query_with_resource() {
         let principal = PrincipalRef::new(UserId::new("alice").unwrap());
-        let action = QualifiedAction::parse("todo:read:list").unwrap();
+        let action = QualifiedAction::parse("todo:list:read").unwrap();
         let resource_id = ResourceId::parse("my-list").unwrap();
         let resource = ResourceRef::from_route(&action, resource_id);
         let context = PolicyContext::new();
@@ -92,7 +93,7 @@ mod tests {
         use forgeguard_core::{GroupName, TenantId};
 
         let principal = PrincipalRef::new(UserId::new("bob").unwrap());
-        let action = QualifiedAction::parse("admin:write:user").unwrap();
+        let action = QualifiedAction::parse("admin:user:write").unwrap();
         let context = PolicyContext::new()
             .with_tenant(TenantId::new("acme-corp").unwrap())
             .with_groups(vec![GroupName::new("admin").unwrap()])

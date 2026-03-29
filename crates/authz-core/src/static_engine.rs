@@ -30,7 +30,7 @@ impl StaticPolicyEngine {
     }
 
     /// Add a per-action override. The action's `Display` representation
-    /// (e.g., "todo:read:list") is used as the lookup key.
+    /// (e.g., "todo:list:read") is used as the lookup key.
     pub fn with_override(mut self, action: &QualifiedAction, decision: PolicyDecision) -> Self {
         self.overrides.insert(action.to_string(), decision);
         self
@@ -71,7 +71,7 @@ mod tests {
     #[tokio::test]
     async fn default_allow_returns_allow() {
         let engine = StaticPolicyEngine::new(PolicyDecision::Allow);
-        let query = make_query("todo:read:list");
+        let query = make_query("todo:list:read");
 
         let decision = engine.evaluate(&query).await.unwrap();
         assert!(decision.is_allowed());
@@ -82,7 +82,7 @@ mod tests {
         let engine = StaticPolicyEngine::new(PolicyDecision::Deny {
             reason: DenyReason::NoMatchingPolicy,
         });
-        let query = make_query("todo:read:list");
+        let query = make_query("todo:list:read");
 
         let decision = engine.evaluate(&query).await.unwrap();
         assert!(decision.is_denied());
@@ -91,7 +91,7 @@ mod tests {
     #[tokio::test]
     async fn override_takes_precedence_over_default() {
         let engine = StaticPolicyEngine::new(PolicyDecision::Allow).with_override(
-            &QualifiedAction::parse("admin:delete:user").unwrap(),
+            &QualifiedAction::parse("admin:user:delete").unwrap(),
             PolicyDecision::Deny {
                 reason: DenyReason::ExplicitDeny {
                     policy_id: "no-delete-users".into(),
@@ -100,12 +100,12 @@ mod tests {
         );
 
         // Default action → allow
-        let allowed_query = make_query("todo:read:list");
+        let allowed_query = make_query("todo:list:read");
         let decision = engine.evaluate(&allowed_query).await.unwrap();
         assert!(decision.is_allowed());
 
         // Overridden action → deny
-        let denied_query = make_query("admin:delete:user");
+        let denied_query = make_query("admin:user:delete");
         let decision = engine.evaluate(&denied_query).await.unwrap();
         assert!(decision.is_denied());
     }
@@ -116,11 +116,11 @@ mod tests {
             reason: DenyReason::NoMatchingPolicy,
         })
         .with_override(
-            &QualifiedAction::parse("todo:read:list").unwrap(),
+            &QualifiedAction::parse("todo:list:read").unwrap(),
             PolicyDecision::Allow,
         );
 
-        let query = make_query("admin:write:config");
+        let query = make_query("admin:config:write");
         let decision = engine.evaluate(&query).await.unwrap();
         assert!(decision.is_denied());
     }

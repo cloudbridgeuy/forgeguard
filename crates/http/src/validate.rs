@@ -16,7 +16,7 @@ pub fn validate(config: &ProxyConfig) -> (Vec<ValidationError>, Vec<ValidationWa
 
     check_duplicate_routes(config, &mut errors);
     check_feature_gates(config, &mut errors);
-    check_policy_references(config, &mut errors);
+    check_policy_group_references(config, &mut errors);
     check_group_references(config, &mut errors);
     check_circular_group_nesting(config, &mut errors);
     check_public_route_overlap(config, &mut warnings);
@@ -54,24 +54,20 @@ fn check_feature_gates(config: &ProxyConfig, errors: &mut Vec<ValidationError>) 
     }
 }
 
-/// Check that all policy references in groups exist.
-fn check_policy_references(config: &ProxyConfig, errors: &mut Vec<ValidationError>) {
-    let policy_names: HashSet<&str> = config
-        .policies()
-        .iter()
-        .map(|p| p.name().as_str())
-        .collect();
-    for (i, group) in config.groups().iter().enumerate() {
-        for (j, policy_ref) in group.policies().iter().enumerate() {
-            if !policy_names.contains(policy_ref.as_str()) {
+/// Check that all group references in policies exist.
+fn check_policy_group_references(config: &ProxyConfig, errors: &mut Vec<ValidationError>) {
+    let group_names: HashSet<&str> = config.groups().iter().map(|g| g.name().as_str()).collect();
+    for (i, policy) in config.policies().iter().enumerate() {
+        for (j, group_ref) in policy.groups().iter().enumerate() {
+            if !group_names.contains(group_ref.as_str()) {
                 errors.push(ValidationError::new(
                     ValidationErrorKind::InvalidPolicyReference,
                     format!(
-                        "policy '{}' referenced by group '{}' does not exist",
-                        policy_ref.as_str(),
-                        group.name().as_str()
+                        "policy '{}' references undefined group '{}'",
+                        policy.name().as_str(),
+                        group_ref.as_str()
                     ),
-                    format!("groups[{i}].policies[{j}]"),
+                    format!("policies[{i}].groups[{j}]"),
                 ));
             }
         }
@@ -221,7 +217,7 @@ action = "todo:list:user"
 [[routes]]
 method = "GET"
 path = "/users"
-action = "todo:read:user"
+action = "todo:user:read"
 "#,
         )
         .unwrap();
@@ -241,7 +237,7 @@ upstream_url = "http://localhost:3000"
 [[routes]]
 method = "GET"
 path = "/beta"
-action = "todo:read:beta"
+action = "todo:beta:read"
 feature_gate = "nonexistent"
 "#,
         )
@@ -262,7 +258,7 @@ upstream_url = "http://localhost:3000"
 [[routes]]
 method = "GET"
 path = "/beta"
-action = "todo:read:beta"
+action = "todo:beta:read"
 feature_gate = "beta-feature"
 
 [features.flags.beta-feature]
@@ -276,17 +272,19 @@ default = false
     }
 
     #[test]
-    fn invalid_policy_reference_detected() {
+    fn invalid_group_reference_in_policy() {
         let config = parse_config(
             r#"
 project_id = "my-app"
 listen_addr = "127.0.0.1:8080"
 upstream_url = "http://localhost:3000"
 
-[[groups]]
-name = "admin"
-policies = ["nonexistent-policy"]
-member_groups = []
+[[policies]]
+name = "todo-viewer"
+groups = ["nonexistent-group"]
+[[policies.statements]]
+effect = "allow"
+actions = ["todo:list:read"]
 "#,
         )
         .unwrap();
@@ -299,7 +297,7 @@ member_groups = []
     }
 
     #[test]
-    fn valid_policy_reference_passes() {
+    fn valid_group_reference_in_policy_passes() {
         let config = parse_config(
             r#"
 project_id = "my-app"
@@ -308,13 +306,13 @@ upstream_url = "http://localhost:3000"
 
 [[policies]]
 name = "todo-viewer"
+groups = ["admin"]
 [[policies.statements]]
 effect = "allow"
-actions = ["todo:read:list"]
+actions = ["todo:list:read"]
 
 [[groups]]
 name = "admin"
-policies = ["todo-viewer"]
 member_groups = []
 "#,
         )
@@ -333,7 +331,6 @@ upstream_url = "http://localhost:3000"
 
 [[groups]]
 name = "admin"
-policies = []
 member_groups = ["nonexistent"]
 "#,
         )
@@ -356,12 +353,10 @@ upstream_url = "http://localhost:3000"
 
 [[groups]]
 name = "group-a"
-policies = []
 member_groups = ["group-b"]
 
 [[groups]]
 name = "group-b"
-policies = []
 member_groups = ["group-a"]
 "#,
         )
@@ -385,7 +380,6 @@ upstream_url = "http://localhost:3000"
 
 [[groups]]
 name = "loop"
-policies = []
 member_groups = ["loop"]
 "#,
         )
@@ -408,17 +402,14 @@ upstream_url = "http://localhost:3000"
 
 [[groups]]
 name = "super-admin"
-policies = []
 member_groups = ["admin"]
 
 [[groups]]
 name = "admin"
-policies = []
 member_groups = ["users"]
 
 [[groups]]
 name = "users"
-policies = []
 member_groups = []
 "#,
         )
@@ -442,7 +433,7 @@ upstream_url = "http://localhost:3000"
 [[routes]]
 method = "GET"
 path = "/docs"
-action = "todo:read:doc"
+action = "todo:doc:read"
 
 [[public_routes]]
 method = "GET"
@@ -468,18 +459,24 @@ upstream_url = "http://localhost:3000"
 [[routes]]
 method = "GET"
 path = "/beta"
-action = "todo:read:beta"
+action = "todo:beta:read"
 feature_gate = "nonexistent"
+
+[[policies]]
+name = "bad-policy"
+groups = ["missing-group"]
+[[policies.statements]]
+effect = "allow"
+actions = ["todo:beta:read"]
 
 [[groups]]
 name = "admin"
-policies = ["missing-policy"]
-member_groups = ["missing-group"]
+member_groups = ["missing-member"]
 "#,
         )
         .unwrap();
         let (errors, _) = validate(&config);
-        // Should have: undefined feature gate + invalid policy ref + invalid group ref
+        // Should have: undefined feature gate + invalid group ref in policy + invalid member group ref
         assert_eq!(errors.len(), 3);
     }
 }
