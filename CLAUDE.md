@@ -140,7 +140,6 @@ Each crate's `README.md` describes what it owns and its pure/I/O classification.
 | [Linting and Clippy](./.claude/context/linting-and-clippy.md)      | Clippy thresholds, workspace lints, and how they map to design patterns |
 | [Commit and Release](./.claude/context/commit-and-release.md)      | Conventional commits, version bump logic, release flow                  |
 | [xtask lint](./.claude/context/xtask-lint.md)                      | Lint pipeline checks, flags, architecture, adding new checks            |
-| [Scaffolding Decisions](./.claude/designs/scaffolding-patterns.md) | All 36 design decisions with rationale                                  |
 | [Feature Flags](./.claude/context/feature-flags.md)                | Flag types, evaluation order, overrides, debug endpoint, proxy wiring   |
 | [Verified Permissions](./.claude/context/verified-permissions.md)   | VP integration: action format, Cedar types, CLI, config, infrastructure |
 | [Container Builds](./.claude/context/container-builds.md)          | Distroless images, multi-stage builds, SSL strategy, health checks      |
@@ -148,3 +147,7 @@ Each crate's `README.md` describes what it owns and its pure/I/O classification.
 | [Proxy Shaping](./.claude/designs/proxy-shaping.md)                | Proxy design: requirements, shape, breadboard, slices                   |
 | [SaaS Architecture](./.claude/context/saas-architecture.md)        | Control/data plane split, infra stack, worker saga, org domain model    |
 | [Design Documents](./.claude/context/)                             | Full ForgeGuard architecture and technical specifications               |
+
+### Local-Only Documents (MUST NOT commit)
+
+Plans (`.claude/plans/`) and designs (`.claude/designs/`) are **local-only** working documents. They are gitignored and must never be pushed to origin. Only `.claude/context/` and `.claude/commands/` are tracked in git.

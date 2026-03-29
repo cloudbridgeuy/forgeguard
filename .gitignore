@@ -10,7 +10,7 @@
 
 .DS_Store
 
-# Claude Code settings (keep context docs)
+# Claude Code settings (keep context docs and commands only)
 .claude/*
 !.claude/context/
 !.claude/commands/
