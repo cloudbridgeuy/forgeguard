@@ -93,6 +93,7 @@ fn run(app: App) -> color_eyre::Result<()> {
         project_id: config.project_id().clone(),
         auth_providers: config.auth().chain_order().to_vec(),
         debug_mode: opts.debug,
+        cors: config.cors().cloned(),
     });
 
     let mut server =

@@ -6,16 +6,16 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use pingora_core::upstreams::peer::HttpPeer;
 use pingora_core::Result;
-use pingora_http::RequestHeader;
+use pingora_http::{RequestHeader, ResponseHeader};
 use pingora_proxy::{ProxyHttp, Session};
 
 use forgeguard_authn_core::{Identity, IdentityChain};
 use forgeguard_authz_core::PolicyEngine;
 use forgeguard_core::{evaluate_flags, FlagConfig, ProjectId, ResolvedFlags};
 use forgeguard_http::{
-    build_query, evaluate_debug, extract_credential, inject_headers, ClientIpSource, DefaultPolicy,
-    FlagDebugQuery, IdentityProjection, MatchedRoute, PublicMatch, PublicRouteMatcher,
-    RouteMatcher,
+    build_query, evaluate_debug, extract_credential, inject_headers, ClientIpSource, CorsConfig,
+    DefaultPolicy, FlagDebugQuery, IdentityProjection, MatchedRoute, PublicMatch,
+    PublicRouteMatcher, RouteMatcher,
 };
 
 /// Health check path served before any auth logic.
@@ -39,6 +39,7 @@ pub(crate) struct ProxyParams {
     pub project_id: ProjectId,
     pub auth_providers: Vec<String>,
     pub debug_mode: bool,
+    pub cors: Option<CorsConfig>,
 }
 
 /// The Pingora `ProxyHttp` implementation.
@@ -59,6 +60,8 @@ pub(crate) struct ForgeGuardProxy {
     project_id: ProjectId,
     auth_providers: Vec<String>,
     debug_mode: bool,
+    /// Optional CORS configuration for preflight and response header injection.
+    cors: Option<CorsConfig>,
 }
 
 impl ForgeGuardProxy {
@@ -77,6 +80,7 @@ impl ForgeGuardProxy {
             project_id: params.project_id,
             auth_providers: params.auth_providers,
             debug_mode: params.debug_mode,
+            cors: params.cors,
         }
     }
 }
@@ -90,6 +94,8 @@ pub(crate) struct RequestCtx {
     method: String,
     path: String,
     client_ip: Option<IpAddr>,
+    /// Captured Origin header — used by later CORS tasks.
+    cors_origin: Option<String>,
 }
 
 #[async_trait]
@@ -105,6 +111,7 @@ impl ProxyHttp for ForgeGuardProxy {
             method: String::new(),
             path: String::new(),
             client_ip: None,
+            cors_origin: None,
         }
     }
 
@@ -121,13 +128,51 @@ impl ProxyHttp for ForgeGuardProxy {
                 "providers": self.auth_providers,
                 "flags": self.flag_config.flags.len(),
             });
-            let _ = session
-                .respond_error_with_body(200, Bytes::from(body.to_string()))
-                .await;
+            let _ = send_json_response(session, 200, body.to_string().as_bytes(), &[]).await;
             return Ok(true);
         }
 
-        // 1b. Debug endpoint — flag evaluation with reasons (requires --debug)
+        // 1a. CORS — extract Origin header once, reuse for preflight + response injection.
+        let request_origin = session
+            .downstream_session
+            .req_header()
+            .headers
+            .get("origin")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
+
+        if ctx.method == "OPTIONS" {
+            if let Some(cors) = &self.cors {
+                let has_acrm = session
+                    .downstream_session
+                    .req_header()
+                    .headers
+                    .get("access-control-request-method")
+                    .is_some();
+
+                if let (Some(origin), true) = (request_origin.as_deref(), has_acrm) {
+                    if let Some(matched) = cors.matches_origin(origin) {
+                        let headers = cors.preflight_headers(matched);
+                        let _ = send_json_response(session, 204, b"", &headers).await;
+                        return Ok(true);
+                    }
+                    // Origin present + ACRM present but origin not in allowed list.
+                    // Fall through intentionally: rather than returning a CORS-specific 403,
+                    // let normal routing handle it. This avoids leaking "CORS is enabled" to
+                    // arbitrary origins — a non-matching origin sees the same response as any
+                    // other unauthenticated request (401/403 from the auth pipeline).
+                }
+            }
+        }
+
+        // 1b. Set CORS origin for response header injection (preflight already returned above)
+        if let (Some(cors), Some(origin)) = (&self.cors, request_origin.as_deref()) {
+            if cors.matches_origin(origin).is_some() {
+                ctx.cors_origin = Some(origin.to_string());
+            }
+        }
+
+        // 1c. Debug endpoint — flag evaluation with reasons (requires --debug)
         if self.debug_mode && ctx.path == FLAGS_DEBUG_PATH {
             let query_str = req.uri.query().unwrap_or("");
             match FlagDebugQuery::parse(query_str) {
@@ -135,23 +180,20 @@ impl ProxyHttp for ForgeGuardProxy {
                     let result = evaluate_debug(&self.flag_config, &query);
                     match serde_json::to_string(&result) {
                         Ok(json) => {
-                            let _ = session
-                                .respond_error_with_body(200, Bytes::from(json))
-                                .await;
+                            let _ = send_json_response(session, 200, json.as_bytes(), &[]).await;
                         }
                         Err(_) => {
                             let body = serde_json::json!({"error": "Internal Server Error"});
-                            let _ = session
-                                .respond_error_with_body(500, Bytes::from(body.to_string()))
-                                .await;
+                            let _ =
+                                send_json_response(session, 500, body.to_string().as_bytes(), &[])
+                                    .await;
                         }
                     }
                 }
                 Err(e) => {
                     let body = serde_json::json!({"error": format!("{e}")});
-                    let _ = session
-                        .respond_error_with_body(400, Bytes::from(body.to_string()))
-                        .await;
+                    let _ =
+                        send_json_response(session, 400, body.to_string().as_bytes(), &[]).await;
                 }
             }
             return Ok(true);
@@ -179,9 +221,15 @@ impl ProxyHttp for ForgeGuardProxy {
                         }
                         Err(_) if require_credential => {
                             let body = serde_json::json!({"error": "Unauthorized"});
-                            let _ = session
-                                .respond_error_with_body(401, Bytes::from(body.to_string()))
-                                .await;
+                            let headers =
+                                cors_headers(self.cors.as_ref(), ctx.cors_origin.as_deref());
+                            let _ = send_json_response(
+                                session,
+                                401,
+                                body.to_string().as_bytes(),
+                                &headers,
+                            )
+                            .await;
                             return Ok(true);
                         }
                         Err(_) => {
@@ -191,8 +239,8 @@ impl ProxyHttp for ForgeGuardProxy {
                 }
                 None if require_credential => {
                     let body = serde_json::json!({"error": "Unauthorized"});
-                    let _ = session
-                        .respond_error_with_body(401, Bytes::from(body.to_string()))
+                    let headers = cors_headers(self.cors.as_ref(), ctx.cors_origin.as_deref());
+                    let _ = send_json_response(session, 401, body.to_string().as_bytes(), &headers)
                         .await;
                     return Ok(true);
                 }
@@ -225,8 +273,8 @@ impl ProxyHttp for ForgeGuardProxy {
                     .is_some_and(|flags| flags.enabled(&gate.to_string()));
                 if !gate_enabled {
                     let body = serde_json::json!({"error": "Not Found"});
-                    let _ = session
-                        .respond_error_with_body(404, Bytes::from(body.to_string()))
+                    let headers = cors_headers(self.cors.as_ref(), ctx.cors_origin.as_deref());
+                    let _ = send_json_response(session, 404, body.to_string().as_bytes(), &headers)
                         .await;
                     return Ok(true);
                 }
@@ -243,9 +291,15 @@ impl ProxyHttp for ForgeGuardProxy {
                                 "error": "Forbidden",
                                 "action": matched_route.action().to_string(),
                             });
-                            let _ = session
-                                .respond_error_with_body(403, Bytes::from(body.to_string()))
-                                .await;
+                            let headers =
+                                cors_headers(self.cors.as_ref(), ctx.cors_origin.as_deref());
+                            let _ = send_json_response(
+                                session,
+                                403,
+                                body.to_string().as_bytes(),
+                                &headers,
+                            )
+                            .await;
                             return Ok(true);
                         }
                     }
@@ -254,9 +308,10 @@ impl ProxyHttp for ForgeGuardProxy {
                             "error": "Forbidden",
                             "action": matched_route.action().to_string(),
                         });
-                        let _ = session
-                            .respond_error_with_body(403, Bytes::from(body.to_string()))
-                            .await;
+                        let headers = cors_headers(self.cors.as_ref(), ctx.cors_origin.as_deref());
+                        let _ =
+                            send_json_response(session, 403, body.to_string().as_bytes(), &headers)
+                                .await;
                         return Ok(true);
                     }
                 }
@@ -269,8 +324,8 @@ impl ProxyHttp for ForgeGuardProxy {
                 DefaultPolicy::Deny => {
                     let body =
                         serde_json::json!({"error": "Forbidden", "reason": "no matching route"});
-                    let _ = session
-                        .respond_error_with_body(403, Bytes::from(body.to_string()))
+                    let headers = cors_headers(self.cors.as_ref(), ctx.cors_origin.as_deref());
+                    let _ = send_json_response(session, 403, body.to_string().as_bytes(), &headers)
                         .await;
                     return Ok(true);
                 }
@@ -307,6 +362,26 @@ impl ProxyHttp for ForgeGuardProxy {
             let headers = inject_headers(&projection);
             for (name, value) in headers {
                 let _ = upstream_request.insert_header(name, value);
+            }
+        }
+        Ok(())
+    }
+
+    async fn response_filter(
+        &self,
+        _session: &mut Session,
+        upstream_response: &mut ResponseHeader,
+        ctx: &mut Self::CTX,
+    ) -> Result<()>
+    where
+        Self::CTX: Send + Sync,
+    {
+        let headers = cors_headers(self.cors.as_ref(), ctx.cors_origin.as_deref());
+        for (name, value) in headers {
+            if name == "Vary" {
+                let _ = upstream_response.append_header(name, value);
+            } else {
+                let _ = upstream_response.insert_header(name, value);
             }
         }
         Ok(())
@@ -406,5 +481,46 @@ fn extract_client_ip(session: &Session, source: ClientIpSource) -> Option<IpAddr
                 .and_then(|v| v.to_str().ok())
                 .and_then(|v| v.trim().parse().ok())
         }
+    }
+}
+
+/// Send a JSON response with optional extra headers.
+///
+/// Replaces `respond_error_with_body` — supports CORS and other custom headers.
+async fn send_json_response(
+    session: &mut Session,
+    status: u16,
+    body: &[u8],
+    extra_headers: &[(String, String)],
+) -> pingora_core::Result<()> {
+    let no_body = status == 204;
+    // 204 only needs space for extra_headers (CORS); other responses add Content-Type + Content-Length.
+    let base_headers = if no_body { 0 } else { 2 };
+    let mut resp = ResponseHeader::build(status, Some(base_headers + extra_headers.len()))?;
+    if !no_body {
+        resp.insert_header("Content-Type", "application/json")?;
+        resp.set_content_length(body.len())?;
+    }
+    for (name, value) in extra_headers {
+        resp.insert_header(name.clone(), value.clone())?;
+    }
+    session
+        .downstream_session
+        .write_response_header(Box::new(resp))
+        .await?;
+    if !no_body {
+        session
+            .downstream_session
+            .write_response_body(Bytes::from(body.to_vec()), true)
+            .await?;
+    }
+    Ok(())
+}
+
+/// Build CORS response headers, or return an empty `Vec` if CORS is not configured.
+fn cors_headers(cors: Option<&CorsConfig>, cors_origin: Option<&str>) -> Vec<(String, String)> {
+    match (cors, cors_origin) {
+        (Some(config), Some(origin)) => config.response_headers(origin),
+        _ => Vec::new(),
     }
 }
