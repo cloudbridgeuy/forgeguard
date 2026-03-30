@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use crate::method::HttpMethod;
-use crate::route::normalize_path;
+use crate::route::{normalize_path, normalize_pattern};
 use crate::Result;
 
 // ---------------------------------------------------------------------------
@@ -101,7 +101,7 @@ impl PublicRouteMatcher {
         let mut any_router = matchit::Router::new();
 
         for route in routes {
-            let pattern = normalize_path(route.path_pattern());
+            let pattern = normalize_pattern(&normalize_path(route.path_pattern()));
 
             if route.method() == HttpMethod::Any {
                 any_router
@@ -244,6 +244,24 @@ mod tests {
         let routes = vec![make_public("GET", "/health", PublicAuthMode::Anonymous)];
         let matcher = PublicRouteMatcher::new(&routes).unwrap();
         assert_eq!(matcher.check("OPTIONS", "/health"), PublicMatch::NotPublic);
+    }
+
+    #[test]
+    fn colon_param_in_public_route() {
+        let routes = vec![make_public(
+            "POST",
+            "/webhooks/:provider",
+            PublicAuthMode::Anonymous,
+        )];
+        let matcher = PublicRouteMatcher::new(&routes).unwrap();
+        assert_eq!(
+            matcher.check("POST", "/webhooks/github"),
+            PublicMatch::Anonymous
+        );
+        assert_eq!(
+            matcher.check("POST", "/webhooks/stripe"),
+            PublicMatch::Anonymous
+        );
     }
 
     #[test]

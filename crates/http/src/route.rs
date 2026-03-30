@@ -144,7 +144,7 @@ impl RouteMatcher {
                 feature_gate: route.feature_gate.clone(),
             };
 
-            let pattern = normalize_path(route.path_pattern());
+            let pattern = normalize_pattern(&normalize_path(route.path_pattern()));
 
             if route.method() == HttpMethod::Any {
                 any_router.insert(&pattern, value).map_err(|e| {
@@ -202,6 +202,48 @@ pub(crate) fn normalize_path(path: &str) -> String {
     } else {
         path.to_string()
     }
+}
+
+/// Convert user-facing `:param` path syntax to matchit's `{param}` syntax.
+///
+/// Only applied to route patterns during router construction, never to request paths.
+/// Handles multiple params (`:id`, `:item_id`) and preserves `{param}` if already present.
+///
+/// # Examples
+///
+/// - `/api/lists/:id` → `/api/lists/{id}`
+/// - `/api/lists/:id/items/:item_id` → `/api/lists/{id}/items/{item_id}`
+/// - `/api/lists/{id}` → `/api/lists/{id}` (unchanged)
+/// - `/health` → `/health` (unchanged)
+pub(crate) fn normalize_pattern(pattern: &str) -> String {
+    let mut result = String::with_capacity(pattern.len());
+    let mut chars = pattern.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == ':' {
+            let mut name = String::new();
+            while let Some(&next) = chars.peek() {
+                if next.is_alphanumeric() || next == '_' {
+                    chars.next();
+                    name.push(next);
+                } else {
+                    break;
+                }
+            }
+            if name.is_empty() {
+                // Bare colon with no param name — pass through literally
+                result.push(':');
+            } else {
+                result.push('{');
+                result.push_str(&name);
+                result.push('}');
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+
+    result
 }
 
 /// Build a `MatchedRoute` from a `matchit::Match`.
@@ -353,6 +395,79 @@ mod tests {
         let m = matcher.match_request("GET", "/beta").unwrap();
         assert!(m.feature_gate().is_some());
         assert_eq!(m.feature_gate().unwrap().to_string(), "beta-feature");
+    }
+
+    #[test]
+    fn normalize_pattern_single_param() {
+        assert_eq!(normalize_pattern("/users/:id"), "/users/{id}");
+    }
+
+    #[test]
+    fn normalize_pattern_multiple_params() {
+        assert_eq!(
+            normalize_pattern("/lists/:id/items/:item_id"),
+            "/lists/{id}/items/{item_id}"
+        );
+    }
+
+    #[test]
+    fn normalize_pattern_no_params() {
+        assert_eq!(normalize_pattern("/health"), "/health");
+    }
+
+    #[test]
+    fn normalize_pattern_already_braced() {
+        assert_eq!(normalize_pattern("/users/{id}"), "/users/{id}");
+    }
+
+    #[test]
+    fn normalize_pattern_mixed() {
+        assert_eq!(
+            normalize_pattern("/orgs/:org/projects/{project}"),
+            "/orgs/{org}/projects/{project}"
+        );
+    }
+
+    #[test]
+    fn normalize_pattern_underscore_in_param() {
+        assert_eq!(
+            normalize_pattern("/items/:item_id/complete"),
+            "/items/{item_id}/complete"
+        );
+    }
+
+    #[test]
+    fn normalize_pattern_bare_colon() {
+        assert_eq!(normalize_pattern("/users/:"), "/users/:");
+    }
+
+    #[test]
+    fn colon_param_syntax_matches() {
+        let routes = vec![make_route(
+            "GET",
+            "/users/:id",
+            "todo:read:user",
+            Some("id"),
+        )];
+        let matcher = RouteMatcher::new(&routes).unwrap();
+        let m = matcher.match_request("GET", "/users/alice").unwrap();
+        assert_eq!(m.path_params().get("id").unwrap(), "alice");
+    }
+
+    #[test]
+    fn colon_multi_param_syntax_matches() {
+        let routes = vec![make_route(
+            "GET",
+            "/lists/:id/items/:item_id",
+            "todo:read:item",
+            Some("item_id"),
+        )];
+        let matcher = RouteMatcher::new(&routes).unwrap();
+        let m = matcher
+            .match_request("GET", "/lists/abc/items/xyz")
+            .unwrap();
+        assert_eq!(m.path_params().get("id").unwrap(), "abc");
+        assert_eq!(m.path_params().get("item_id").unwrap(), "xyz");
     }
 
     #[test]
