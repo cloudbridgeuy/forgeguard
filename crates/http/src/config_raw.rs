@@ -5,6 +5,8 @@
 
 use std::collections::HashMap;
 
+use std::fmt;
+
 use serde::Deserialize;
 
 /// Top-level raw config as it appears in `forgeguard.toml`.
@@ -40,6 +42,10 @@ pub(crate) struct RawProxyConfig {
     #[serde(default)]
     pub(crate) cors: Option<crate::cors::RawCorsConfig>,
     #[serde(default)]
+    pub(crate) authn: Option<RawAuthnConfig>,
+    #[serde(default)]
+    pub(crate) api_keys: Vec<RawApiKeyEntry>,
+    #[serde(default)]
     pub(crate) policy_tests: Vec<RawPolicyTest>,
 }
 
@@ -64,6 +70,55 @@ fn default_client_ip_source() -> String {
 pub(crate) struct RawAuthConfig {
     #[serde(default)]
     pub(crate) chain_order: Vec<String>,
+}
+
+/// Raw authentication provider configuration.
+/// Maps the `[authn]` TOML section.
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawAuthnConfig {
+    #[serde(default)]
+    pub(crate) jwt: Option<RawJwtConfig>,
+}
+
+/// Raw JWT resolver configuration.
+/// Maps the `[authn.jwt]` TOML section.
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawJwtConfig {
+    pub(crate) jwks_url: String,
+    pub(crate) issuer: String,
+    #[serde(default)]
+    pub(crate) audience: Option<String>,
+    #[serde(default)]
+    pub(crate) user_id_claim: Option<String>,
+    #[serde(default)]
+    pub(crate) tenant_claim: Option<String>,
+    #[serde(default)]
+    pub(crate) groups_claim: Option<String>,
+    #[serde(default)]
+    pub(crate) cache_ttl_secs: Option<u64>,
+}
+
+/// Raw static API key entry.
+/// Maps each `[[api_keys]]` TOML entry.
+#[derive(Deserialize)]
+pub(crate) struct RawApiKeyEntry {
+    pub(crate) key: String,
+    pub(crate) user_id: String,
+    #[serde(default)]
+    pub(crate) tenant_id: Option<String>,
+    #[serde(default)]
+    pub(crate) groups: Vec<String>,
+}
+
+impl fmt::Debug for RawApiKeyEntry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RawApiKeyEntry")
+            .field("key", &"[REDACTED]")
+            .field("user_id", &self.user_id)
+            .field("tenant_id", &self.tenant_id)
+            .field("groups", &self.groups)
+            .finish()
+    }
 }
 
 /// Raw authorization config.

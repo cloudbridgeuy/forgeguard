@@ -15,8 +15,8 @@ pub mod route;
 pub mod validate;
 
 pub use config::{
-    apply_overrides, load_config, parse_config, AuthConfig, AuthzConfig, ClientIpSource,
-    ConfigOverrides, DefaultPolicy, MetricsConfig, ProxyConfig,
+    apply_overrides, load_config, parse_config, ApiKeyConfig, AuthConfig, AuthzConfig,
+    ClientIpSource, ConfigOverrides, DefaultPolicy, JwtConfig, MetricsConfig, ProxyConfig,
 };
 pub use config_types::{AwsConfig, EntitySchema, PolicyTest, PolicyTestExpect, SchemaConfig};
 pub use credential::extract_credential;

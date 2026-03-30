@@ -2,6 +2,7 @@
 //!
 //! Two-phase Parse Don't Validate: raw TOML → `RawProxyConfig` → `ProxyConfig`.
 
+use std::fmt;
 use std::net::SocketAddr;
 use std::time::Duration;
 
@@ -74,6 +75,96 @@ impl Default for AuthConfig {
 }
 
 // ---------------------------------------------------------------------------
+// JwtConfig
+// ---------------------------------------------------------------------------
+
+/// Validated JWT resolver configuration.
+#[derive(Debug, Clone)]
+pub struct JwtConfig {
+    jwks_url: Url,
+    issuer: String,
+    audience: Option<String>,
+    user_id_claim: Option<String>,
+    tenant_claim: Option<String>,
+    groups_claim: Option<String>,
+    cache_ttl_secs: Option<u64>,
+}
+
+impl JwtConfig {
+    /// The JWKS endpoint URL.
+    pub fn jwks_url(&self) -> &Url {
+        &self.jwks_url
+    }
+    /// The expected token issuer.
+    pub fn issuer(&self) -> &str {
+        &self.issuer
+    }
+    /// The expected audience claim.
+    pub fn audience(&self) -> Option<&str> {
+        self.audience.as_deref()
+    }
+    /// Claim to extract the user ID from.
+    pub fn user_id_claim(&self) -> Option<&str> {
+        self.user_id_claim.as_deref()
+    }
+    /// Claim to extract the tenant ID from.
+    pub fn tenant_claim(&self) -> Option<&str> {
+        self.tenant_claim.as_deref()
+    }
+    /// Claim to extract group memberships from.
+    pub fn groups_claim(&self) -> Option<&str> {
+        self.groups_claim.as_deref()
+    }
+    /// JWKS cache TTL in seconds.
+    pub fn cache_ttl_secs(&self) -> Option<u64> {
+        self.cache_ttl_secs
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ApiKeyConfig
+// ---------------------------------------------------------------------------
+
+/// Validated static API key configuration.
+#[derive(Clone)]
+pub struct ApiKeyConfig {
+    key: String,
+    user_id: forgeguard_core::UserId,
+    tenant_id: Option<forgeguard_core::TenantId>,
+    groups: Vec<GroupName>,
+}
+
+impl fmt::Debug for ApiKeyConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ApiKeyConfig")
+            .field("key", &"[REDACTED]")
+            .field("user_id", &self.user_id)
+            .field("tenant_id", &self.tenant_id)
+            .field("groups", &self.groups)
+            .finish()
+    }
+}
+
+impl ApiKeyConfig {
+    /// The API key string.
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+    /// The user identity this key maps to.
+    pub fn user_id(&self) -> &forgeguard_core::UserId {
+        &self.user_id
+    }
+    /// The tenant this key belongs to (if any).
+    pub fn tenant_id(&self) -> Option<&forgeguard_core::TenantId> {
+        self.tenant_id.as_ref()
+    }
+    /// The groups this key grants.
+    pub fn groups(&self) -> &[GroupName] {
+        &self.groups
+    }
+}
+
+// ---------------------------------------------------------------------------
 // AuthzConfig
 // ---------------------------------------------------------------------------
 
@@ -140,6 +231,8 @@ pub struct ProxyConfig {
     default_policy: DefaultPolicy,
     client_ip_source: ClientIpSource,
     auth: AuthConfig,
+    jwt_config: Option<JwtConfig>,
+    api_keys: Vec<ApiKeyConfig>,
     authz: Option<AuthzConfig>,
     metrics: MetricsConfig,
     routes: Vec<RouteMapping>,
@@ -171,6 +264,12 @@ impl ProxyConfig {
     }
     pub fn auth(&self) -> &AuthConfig {
         &self.auth
+    }
+    pub fn jwt_config(&self) -> Option<&JwtConfig> {
+        self.jwt_config.as_ref()
+    }
+    pub fn api_keys(&self) -> &[ApiKeyConfig] {
+        &self.api_keys
     }
     pub fn authz(&self) -> Option<&AuthzConfig> {
         self.authz.as_ref()
@@ -289,6 +388,19 @@ impl TryFrom<RawProxyConfig> for ProxyConfig {
             })
             .unwrap_or_default();
 
+        let jwt_config = raw
+            .authn
+            .and_then(|a| a.jwt)
+            .map(parse_jwt_config)
+            .transpose()?;
+
+        let api_keys = raw
+            .api_keys
+            .into_iter()
+            .enumerate()
+            .map(|(i, entry)| parse_api_key(i, entry))
+            .collect::<Result<Vec<_>>>()?;
+
         let authz = raw.authz.map(|a| {
             let ttl = Duration::from_secs(a.cache_ttl_secs);
             AuthzConfig {
@@ -386,6 +498,8 @@ impl TryFrom<RawProxyConfig> for ProxyConfig {
             default_policy,
             client_ip_source,
             auth,
+            jwt_config,
+            api_keys,
             authz,
             metrics,
             routes,
@@ -399,6 +513,57 @@ impl TryFrom<RawProxyConfig> for ProxyConfig {
             cors,
         })
     }
+}
+
+fn parse_jwt_config(raw: crate::config_raw::RawJwtConfig) -> Result<JwtConfig> {
+    let jwks_url = Url::parse(&raw.jwks_url).map_err(|e| {
+        Error::Config(format!(
+            "authn.jwt.jwks_url: invalid URL '{}': {e}",
+            raw.jwks_url
+        ))
+    })?;
+    if raw.issuer.is_empty() {
+        return Err(Error::Config("authn.jwt.issuer: must not be empty".into()));
+    }
+    Ok(JwtConfig {
+        jwks_url,
+        issuer: raw.issuer,
+        audience: raw.audience,
+        user_id_claim: raw.user_id_claim,
+        tenant_claim: raw.tenant_claim,
+        groups_claim: raw.groups_claim,
+        cache_ttl_secs: raw.cache_ttl_secs,
+    })
+}
+
+fn parse_api_key(index: usize, raw: crate::config_raw::RawApiKeyEntry) -> Result<ApiKeyConfig> {
+    if raw.key.is_empty() {
+        return Err(Error::Config(format!(
+            "api_keys[{index}].key: must not be empty"
+        )));
+    }
+    let user_id = forgeguard_core::UserId::new(&raw.user_id)
+        .map_err(|e| Error::Config(format!("api_keys[{index}].user_id: {e}")))?;
+    let tenant_id = raw
+        .tenant_id
+        .map(|t| forgeguard_core::TenantId::new(&t))
+        .transpose()
+        .map_err(|e| Error::Config(format!("api_keys[{index}].tenant_id: {e}")))?;
+    let groups = raw
+        .groups
+        .into_iter()
+        .enumerate()
+        .map(|(gi, g)| {
+            GroupName::new(&g)
+                .map_err(|e| Error::Config(format!("api_keys[{index}].groups[{gi}]: {e}")))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(ApiKeyConfig {
+        key: raw.key,
+        user_id,
+        tenant_id,
+        groups,
+    })
 }
 
 fn parse_default_policy(s: &str) -> Result<DefaultPolicy> {
@@ -538,417 +703,5 @@ pub fn parse_config(toml_str: &str) -> Result<ProxyConfig> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
-mod tests {
-    use super::*;
-
-    const MINIMAL_TOML: &str = r#"
-project_id = "my-app"
-listen_addr = "127.0.0.1:8080"
-upstream_url = "http://localhost:3000"
-"#;
-
-    const FULL_TOML: &str = r#"
-project_id = "my-app"
-listen_addr = "127.0.0.1:8080"
-upstream_url = "http://localhost:3000"
-default_policy = "passthrough"
-client_ip_source = "x-forwarded-for"
-
-[auth]
-chain_order = ["jwt", "api-key"]
-
-[authz]
-policy_store_id = "ps-123"
-cache_ttl_secs = 600
-cache_max_entries = 5000
-
-[metrics]
-enabled = true
-listen_addr = "127.0.0.1:9090"
-
-[[routes]]
-method = "GET"
-path = "/users"
-action = "todo:user:list"
-
-[[routes]]
-method = "GET"
-path = "/users/{id}"
-action = "todo:user:read"
-resource_param = "id"
-
-[[public_routes]]
-method = "GET"
-path = "/health"
-auth_mode = "anonymous"
-"#;
-
-    #[test]
-    fn parse_minimal_config() {
-        let config = parse_config(MINIMAL_TOML).unwrap();
-        assert_eq!(config.project_id().as_str(), "my-app");
-        assert_eq!(config.listen_addr().to_string(), "127.0.0.1:8080");
-        assert_eq!(config.upstream_url().as_str(), "http://localhost:3000/");
-        assert_eq!(config.default_policy(), DefaultPolicy::Deny);
-        assert_eq!(config.client_ip_source(), ClientIpSource::Peer);
-        assert!(config.routes().is_empty());
-        assert!(config.public_routes().is_empty());
-    }
-
-    #[test]
-    fn parse_full_config() {
-        let config = parse_config(FULL_TOML).unwrap();
-        assert_eq!(config.default_policy(), DefaultPolicy::Passthrough);
-        assert_eq!(config.client_ip_source(), ClientIpSource::XForwardedFor);
-        assert_eq!(config.routes().len(), 2);
-        assert_eq!(config.public_routes().len(), 1);
-
-        let authz = config.authz().unwrap();
-        assert_eq!(authz.policy_store_id(), "ps-123");
-        assert_eq!(authz.cache_ttl(), Duration::from_secs(600));
-        assert_eq!(authz.cache_max_entries(), 5000);
-
-        let metrics = config.metrics();
-        assert!(metrics.enabled());
-        assert_eq!(metrics.listen_addr().unwrap().to_string(), "127.0.0.1:9090");
-
-        let auth = config.auth();
-        assert_eq!(auth.chain_order(), &["jwt", "api-key"]);
-    }
-
-    #[test]
-    fn missing_project_id_errors() {
-        let toml = r#"
-listen_addr = "127.0.0.1:8080"
-upstream_url = "http://localhost:3000"
-"#;
-        assert!(parse_config(toml).is_err());
-    }
-
-    #[test]
-    fn invalid_listen_addr_errors() {
-        let toml = r#"
-project_id = "my-app"
-listen_addr = "not-an-addr"
-upstream_url = "http://localhost:3000"
-"#;
-        let err = parse_config(toml).unwrap_err();
-        assert!(err.to_string().contains("listen_addr"));
-    }
-
-    #[test]
-    fn invalid_upstream_url_errors() {
-        let toml = r#"
-project_id = "my-app"
-listen_addr = "127.0.0.1:8080"
-upstream_url = "not a url"
-"#;
-        let err = parse_config(toml).unwrap_err();
-        assert!(err.to_string().contains("upstream_url"));
-    }
-
-    #[test]
-    fn invalid_default_policy_errors() {
-        let toml = r#"
-project_id = "my-app"
-listen_addr = "127.0.0.1:8080"
-upstream_url = "http://localhost:3000"
-default_policy = "yolo"
-"#;
-        let err = parse_config(toml).unwrap_err();
-        assert!(err.to_string().contains("default_policy"));
-    }
-
-    #[test]
-    fn invalid_route_action_errors() {
-        let toml = r#"
-project_id = "my-app"
-listen_addr = "127.0.0.1:8080"
-upstream_url = "http://localhost:3000"
-
-[[routes]]
-method = "GET"
-path = "/users"
-action = "bad-action"
-"#;
-        let err = parse_config(toml).unwrap_err();
-        assert!(err.to_string().contains("routes[0].action"));
-    }
-
-    #[test]
-    fn apply_overrides_changes_listen_addr() {
-        let config = parse_config(MINIMAL_TOML).unwrap();
-        let overrides = ConfigOverrides::new().with_listen_addr("0.0.0.0:9999".parse().unwrap());
-        let config = apply_overrides(config, &overrides);
-        assert_eq!(config.listen_addr().to_string(), "0.0.0.0:9999");
-    }
-
-    #[test]
-    fn apply_overrides_changes_default_policy() {
-        let config = parse_config(MINIMAL_TOML).unwrap();
-        assert_eq!(config.default_policy(), DefaultPolicy::Deny);
-        let overrides = ConfigOverrides::new().with_default_policy(DefaultPolicy::Passthrough);
-        let config = apply_overrides(config, &overrides);
-        assert_eq!(config.default_policy(), DefaultPolicy::Passthrough);
-    }
-
-    #[test]
-    fn apply_overrides_no_change_when_empty() {
-        let config = parse_config(MINIMAL_TOML).unwrap();
-        let addr_before = config.listen_addr();
-        let config = apply_overrides(config, &ConfigOverrides::new());
-        assert_eq!(config.listen_addr(), addr_before);
-    }
-
-    #[test]
-    fn parse_route_with_feature_gate() {
-        let toml = r#"
-project_id = "my-app"
-listen_addr = "127.0.0.1:8080"
-upstream_url = "http://localhost:3000"
-
-[[routes]]
-method = "GET"
-path = "/beta"
-action = "todo:beta:read"
-feature_gate = "beta-feature"
-"#;
-        let config = parse_config(toml).unwrap();
-        let route = &config.routes()[0];
-        assert!(route.feature_gate().is_some());
-        assert_eq!(route.feature_gate().unwrap().to_string(), "beta-feature");
-    }
-
-    #[test]
-    fn parse_client_ip_source_variants() {
-        assert_eq!(
-            parse_client_ip_source("peer").unwrap(),
-            ClientIpSource::Peer
-        );
-        assert_eq!(
-            parse_client_ip_source("x-forwarded-for").unwrap(),
-            ClientIpSource::XForwardedFor
-        );
-        assert_eq!(
-            parse_client_ip_source("cf-connecting-ip").unwrap(),
-            ClientIpSource::CfConnectingIp
-        );
-        assert!(parse_client_ip_source("unknown").is_err());
-    }
-
-    #[test]
-    fn parse_aws_config_present() {
-        let toml = r#"
-project_id = "my-app"
-listen_addr = "127.0.0.1:8080"
-upstream_url = "http://localhost:3000"
-
-[aws]
-region = "us-east-2"
-profile = "admin"
-"#;
-        let config = parse_config(toml).unwrap();
-        assert_eq!(config.aws().region(), Some("us-east-2"));
-        assert_eq!(config.aws().profile(), Some("admin"));
-    }
-
-    #[test]
-    fn parse_aws_config_absent() {
-        let config = parse_config(MINIMAL_TOML).unwrap();
-        assert!(config.aws().region().is_none());
-        assert!(config.aws().profile().is_none());
-    }
-
-    #[test]
-    fn parse_aws_config_partial() {
-        let toml = r#"
-project_id = "my-app"
-listen_addr = "127.0.0.1:8080"
-upstream_url = "http://localhost:3000"
-
-[aws]
-region = "eu-west-1"
-"#;
-        let config = parse_config(toml).unwrap();
-        assert_eq!(config.aws().region(), Some("eu-west-1"));
-        assert!(config.aws().profile().is_none());
-    }
-
-    #[test]
-    fn parse_policy_tests_present() {
-        let toml = r#"
-project_id = "my-app"
-listen_addr = "127.0.0.1:8080"
-upstream_url = "http://localhost:3000"
-
-[[policy_tests]]
-name = "alice can delete"
-principal = "alice"
-groups = ["admin"]
-tenant = "acme-corp"
-action = "todo:list:delete"
-expect = "allow"
-
-[[policy_tests]]
-name = "charlie denied on top-secret"
-principal = "charlie"
-groups = ["viewer"]
-tenant = "acme-corp"
-action = "todo:list:read"
-resource = "todo::list::top-secret"
-expect = "deny"
-"#;
-        let config = parse_config(toml).unwrap();
-        assert_eq!(config.policy_tests().len(), 2);
-
-        let t0 = &config.policy_tests()[0];
-        assert_eq!(t0.name(), "alice can delete");
-        assert_eq!(t0.principal(), "alice");
-        assert_eq!(t0.groups().len(), 1);
-        assert_eq!(t0.groups()[0].as_str(), "admin");
-        assert_eq!(t0.tenant(), "acme-corp");
-        assert_eq!(t0.action().to_string(), "todo:list:delete");
-        assert!(t0.resource().is_none());
-        assert_eq!(t0.expect(), PolicyTestExpect::Allow);
-
-        let t1 = &config.policy_tests()[1];
-        assert_eq!(t1.name(), "charlie denied on top-secret");
-        assert!(t1.resource().is_some());
-        assert_eq!(t1.resource().unwrap().to_string(), "todo::list::top-secret");
-        assert_eq!(t1.expect(), PolicyTestExpect::Deny);
-    }
-
-    #[test]
-    fn parse_policy_tests_absent() {
-        let config = parse_config(MINIMAL_TOML).unwrap();
-        assert!(config.policy_tests().is_empty());
-    }
-
-    #[test]
-    fn parse_policy_test_invalid_action_errors() {
-        let toml = r#"
-project_id = "my-app"
-listen_addr = "127.0.0.1:8080"
-upstream_url = "http://localhost:3000"
-
-[[policy_tests]]
-name = "bad test"
-principal = "alice"
-groups = ["admin"]
-tenant = "acme-corp"
-action = "invalid-action"
-expect = "allow"
-"#;
-        let err = parse_config(toml).unwrap_err();
-        assert!(err.to_string().contains("policy_tests[0].action"));
-    }
-
-    #[test]
-    fn parse_policy_test_invalid_expect_errors() {
-        let toml = r#"
-project_id = "my-app"
-listen_addr = "127.0.0.1:8080"
-upstream_url = "http://localhost:3000"
-
-[[policy_tests]]
-name = "bad test"
-principal = "alice"
-groups = ["admin"]
-tenant = "acme-corp"
-action = "todo:list:read"
-expect = "maybe"
-"#;
-        let err = parse_config(toml).unwrap_err();
-        assert!(err.to_string().contains("policy_tests[0].expect"));
-    }
-
-    #[test]
-    fn parse_schema_config_absent() {
-        let config = parse_config(MINIMAL_TOML).unwrap();
-        assert!(config.schema().entities().is_empty());
-    }
-
-    #[test]
-    fn parse_schema_config_present() {
-        let toml = r#"
-project_id = "my-app"
-listen_addr = "127.0.0.1:8080"
-upstream_url = "http://localhost:3000"
-
-[schema.entities.todo.list]
-member_of = ["todo::project"]
-"#;
-        let config = parse_config(toml).unwrap();
-        let entities = config.schema().entities();
-        assert!(entities.contains_key("todo"));
-        let todo_entities = &entities["todo"];
-        assert!(todo_entities.contains_key("list"));
-        let list = &todo_entities["list"];
-        assert_eq!(list.member_of(), &["todo::project"]);
-        assert!(list.attributes().is_empty());
-    }
-
-    #[test]
-    fn parse_cors_absent() {
-        let config = parse_config(MINIMAL_TOML).unwrap();
-        assert!(config.cors().is_none());
-    }
-
-    #[test]
-    fn parse_cors_enabled() {
-        let toml = r#"
-project_id = "my-app"
-listen_addr = "127.0.0.1:8080"
-upstream_url = "http://localhost:3000"
-
-[cors]
-enabled = true
-allowed_origins = ["https://app.forgeguard.dev", "*.forgeguard.dev"]
-allow_credentials = true
-"#;
-        let config = parse_config(toml).unwrap();
-        let cors = config.cors().unwrap();
-        assert_eq!(
-            cors.matches_origin("https://app.forgeguard.dev"),
-            Some("https://app.forgeguard.dev"),
-        );
-        assert_eq!(
-            cors.matches_origin("https://staging.forgeguard.dev"),
-            Some("https://staging.forgeguard.dev"),
-        );
-        assert_eq!(cors.matches_origin("https://evil.com"), None);
-    }
-
-    #[test]
-    fn parse_cors_disabled() {
-        let toml = r#"
-project_id = "my-app"
-listen_addr = "127.0.0.1:8080"
-upstream_url = "http://localhost:3000"
-
-[cors]
-enabled = false
-"#;
-        let config = parse_config(toml).unwrap();
-        // Disabled CORS parses but matches nothing
-        let cors = config.cors().unwrap();
-        assert_eq!(cors.matches_origin("https://anything.com"), None);
-    }
-
-    #[test]
-    fn parse_cors_wildcard_credentials_rejected() {
-        let toml = r#"
-project_id = "my-app"
-listen_addr = "127.0.0.1:8080"
-upstream_url = "http://localhost:3000"
-
-[cors]
-enabled = true
-allowed_origins = ["*"]
-allow_credentials = true
-"#;
-        let err = parse_config(toml).unwrap_err();
-        assert!(err.to_string().contains("validation failed"));
-    }
-}
+#[path = "config_tests.rs"]
+mod tests;
