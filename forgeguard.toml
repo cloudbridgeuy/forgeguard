@@ -49,11 +49,28 @@ profile = "admin"
 # Values: "jwt", "api-key", "anonymous"
 chain_order = ["jwt"]
 
-# JWT authentication settings (planned -- not yet wired into the proxy).
+# JWT authentication settings.
 # The xtask `dev setup --cognito` command writes these values to forgeguard.dev.toml.
-# [authn.jwt]
-# jwks_url = "https://cognito-idp.<region>.amazonaws.com/<user-pool-id>/.well-known/jwks.json"
-# issuer   = "https://cognito-idp.<region>.amazonaws.com/<user-pool-id>"
+[authn.jwt]
+jwks_url = "https://cognito-idp.<region>.amazonaws.com/<user-pool-id>/.well-known/jwks.json"
+issuer   = "https://cognito-idp.<region>.amazonaws.com/<user-pool-id>"
+# audience = "optional-client-id"
+# user_id_claim = "sub"
+# tenant_claim = "custom:org_id"
+# groups_claim = "cognito:groups"
+# cache_ttl_secs = 3600
+
+# ---------------------------------------------------------------------------
+# Static API Keys (demo / development)
+# ---------------------------------------------------------------------------
+# Each entry maps a key string to an identity. The proxy treats these
+# as pre-authenticated — no external validation. Use only for dev/demo.
+
+# [[api_keys]]
+# key = "sk-test-alice-admin"
+# user_id = "alice"
+# tenant_id = "acme-corp"
+# groups = ["admin"]
 
 # ---------------------------------------------------------------------------
 # Authorization (Amazon Verified Permissions)

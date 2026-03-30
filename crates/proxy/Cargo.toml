@@ -16,6 +16,7 @@ path = "src/main.rs"
 [dependencies]
 forgeguard_core = { workspace = true }
 forgeguard_http = { workspace = true }
+forgeguard_authn = { workspace = true }
 forgeguard_authn_core = { workspace = true }
 forgeguard_authz = { workspace = true }
 forgeguard_authz_core = { workspace = true }

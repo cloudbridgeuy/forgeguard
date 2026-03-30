@@ -3,7 +3,9 @@
 mod cli;
 mod proxy;
 
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use clap::Parser;
 use pingora_core::server::Server;
@@ -111,17 +113,53 @@ fn run(app: App) -> color_eyre::Result<()> {
 fn build_identity_chain(
     config: &forgeguard_http::ProxyConfig,
 ) -> color_eyre::Result<IdentityChain> {
-    let resolvers: Vec<Arc<dyn forgeguard_authn_core::IdentityResolver>> = Vec::new();
+    let mut resolvers: Vec<Arc<dyn forgeguard_authn_core::IdentityResolver>> = Vec::new();
 
     for provider in config.auth().chain_order() {
         match provider.as_str() {
             "jwt" => {
-                tracing::warn!(
-                    "JWT resolver requires JWKS URL — skipping until auth config is extended"
-                );
+                let Some(jwt) = config.jwt_config() else {
+                    tracing::warn!(
+                        "JWT listed in auth.chain_order but no [authn.jwt] config found — skipping"
+                    );
+                    continue;
+                };
+                let mut resolver_config =
+                    forgeguard_authn::JwtResolverConfig::new(jwt.jwks_url().clone(), jwt.issuer());
+                if let Some(aud) = jwt.audience() {
+                    resolver_config = resolver_config.with_audience(aud);
+                }
+                if let Some(claim) = jwt.user_id_claim() {
+                    resolver_config = resolver_config.with_user_id_claim(claim);
+                }
+                if let Some(claim) = jwt.tenant_claim() {
+                    resolver_config = resolver_config.with_tenant_claim(claim);
+                }
+                if let Some(claim) = jwt.groups_claim() {
+                    resolver_config = resolver_config.with_groups_claim(claim);
+                }
+                if let Some(ttl) = jwt.cache_ttl_secs() {
+                    resolver_config = resolver_config.with_cache_ttl(Duration::from_secs(ttl));
+                }
+
+                let resolver = forgeguard_authn::CognitoJwtResolver::new(resolver_config);
+                tracing::info!("JWT resolver configured (issuer={})", jwt.issuer());
+                resolvers.push(Arc::new(resolver));
             }
             "api-key" => {
-                tracing::warn!("API key resolver not yet configured — skipping");
+                if config.api_keys().is_empty() {
+                    tracing::warn!(
+                        "api-key listed in auth.chain_order but no [[api_keys]] defined — skipping"
+                    );
+                    continue;
+                }
+                let keys = build_api_key_map(config.api_keys());
+                let resolver = forgeguard_authn_core::StaticApiKeyResolver::new(keys);
+                tracing::info!(
+                    count = config.api_keys().len(),
+                    "static API key resolver configured"
+                );
+                resolvers.push(Arc::new(resolver));
             }
             other => {
                 tracing::warn!(provider = other, "unknown auth provider — skipping");
@@ -130,6 +168,22 @@ fn build_identity_chain(
     }
 
     Ok(IdentityChain::new(resolvers))
+}
+
+fn build_api_key_map(
+    entries: &[forgeguard_http::ApiKeyConfig],
+) -> HashMap<String, forgeguard_authn_core::static_api_key::ApiKeyEntry> {
+    entries
+        .iter()
+        .map(|entry| {
+            let api_entry = forgeguard_authn_core::static_api_key::ApiKeyEntry::new(
+                entry.user_id().clone(),
+                entry.tenant_id().cloned(),
+                entry.groups().to_vec(),
+            );
+            (entry.key().to_string(), api_entry)
+        })
+        .collect()
 }
 
 fn build_policy_engine(
