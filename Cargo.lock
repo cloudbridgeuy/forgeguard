@@ -1445,6 +1445,7 @@ dependencies = [
  "bytes",
  "clap",
  "color-eyre",
+ "forgeguard_authn",
  "forgeguard_authn_core",
  "forgeguard_authz",
  "forgeguard_authz_core",
