@@ -13,37 +13,27 @@ Proves the proxy works end-to-end: JWT auth, API key auth, public routes, featur
 | `app.py` | FastAPI TODO app — reads `X-ForgeGuard-*` headers only |
 | `forgeguard.toml` | Full demo config exercising every proxy feature |
 | `requirements.txt` | Python dependencies (fastapi, uvicorn) |
-| `docker-compose.yml` | Proxy + app containers |
 | `README.md` | Setup and demo instructions |
 
 ## Running
 
 ```bash
-# Docker (required for macOS — Pingora needs Linux)
-cd examples/todo-app && docker compose up --build
+# Terminal 1: Start the Python app
+cd examples/todo-app
+pip install -r requirements.txt
+uvicorn app:app --port 3000
 
-# Or native Linux
-uvicorn app:app --port 3000 &
+# Terminal 2: Start the proxy (works natively on macOS)
 cargo run --bin forgeguard-proxy -- run --config examples/todo-app/forgeguard.toml --debug
 ```
+
+Requires AWS credentials (`admin` profile) for Cognito JWKS + Verified Permissions.
 
 ## Demo Config Highlights
 
 - **Auth chain:** `["jwt", "api-key"]`
-- **3 API keys:** alice (admin), bob (member), charlie (viewer)
+- **5 API keys:** alice (admin), bob (member), charlie (viewer) @ acme-corp; dave (admin), eve (viewer) @ globex-corp
 - **8 routes** with Cedar actions, resource params, and a feature gate
 - **3 public routes:** health (anonymous), webhooks (anonymous), docs (opportunistic)
 - **4 policies:** admin-full, member-crud, viewer-read, top-secret-deny with `except`
 - **3 feature flags:** maintenance-mode, todo:ai-suggestions (tenant override), todo:sharing (rollout)
-
-## Docker Architecture
-
-```
-docker-compose.yml
-├── app (python:3.12-slim)
-│   └── uvicorn app:app --port 3000
-└── proxy (crates/proxy/Dockerfile)
-    └── forgeguard-proxy run --config /etc/forgeguard/forgeguard.toml
-```
-
-The proxy Dockerfile is a multi-stage build at `crates/proxy/Dockerfile`. The compose file mounts `~/.aws` for VP authorization and the demo `forgeguard.toml`.

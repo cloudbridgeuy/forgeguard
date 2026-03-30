@@ -6,15 +6,21 @@ injected by the proxy to scope all data by tenant.
 
 ## Prerequisites
 
-- Docker + Docker Compose
+- Python 3.12+ with `pip`
+- Rust toolchain (for building the proxy)
 - AWS credentials configured (`~/.aws/credentials` with `admin` profile)
 - ForgeGuard Cognito deployment (`cargo xtask dev setup --cognito`)
 
 ## Quick Start
 
 ```bash
-# From examples/todo-app/
-docker compose up --build
+# Terminal 1: Start the Python app
+cd examples/todo-app
+pip install -r requirements.txt
+uvicorn app:app --port 3000
+
+# Terminal 2: Start the proxy
+cargo run --bin forgeguard-proxy -- run --config examples/todo-app/forgeguard.toml --debug
 ```
 
 The proxy listens on `localhost:8080`, the app on `localhost:3000`.
