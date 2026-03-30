@@ -72,6 +72,16 @@ pub enum PublicMatch {
     Opportunistic,
 }
 
+impl PublicMatch {
+    /// Returns `true` if the request matched a public route (anonymous or opportunistic).
+    ///
+    /// Public routes should bypass route-level policy evaluation and `default_policy`
+    /// when no `[[routes]]` entry matches.
+    pub fn is_public(&self) -> bool {
+        matches!(self, PublicMatch::Anonymous | PublicMatch::Opportunistic)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // PublicRouteMatcher
 // ---------------------------------------------------------------------------
@@ -234,5 +244,20 @@ mod tests {
         let routes = vec![make_public("GET", "/health", PublicAuthMode::Anonymous)];
         let matcher = PublicRouteMatcher::new(&routes).unwrap();
         assert_eq!(matcher.check("OPTIONS", "/health"), PublicMatch::NotPublic);
+    }
+
+    #[test]
+    fn is_public_anonymous() {
+        assert!(PublicMatch::Anonymous.is_public());
+    }
+
+    #[test]
+    fn is_public_opportunistic() {
+        assert!(PublicMatch::Opportunistic.is_public());
+    }
+
+    #[test]
+    fn is_public_not_public() {
+        assert!(!PublicMatch::NotPublic.is_public());
     }
 }
