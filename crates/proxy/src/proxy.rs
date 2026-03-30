@@ -9,6 +9,8 @@ use pingora_core::Result;
 use pingora_http::{RequestHeader, ResponseHeader};
 use pingora_proxy::{ProxyHttp, Session};
 
+use std::sync::LazyLock;
+
 use forgeguard_authn_core::{Identity, IdentityChain};
 use forgeguard_authz_core::PolicyEngine;
 use forgeguard_core::{evaluate_flags, FlagConfig, ProjectId, ResolvedFlags};
@@ -23,6 +25,47 @@ const HEALTH_PATH: &str = "/.well-known/forgeguard/health";
 
 /// Debug endpoint for flag evaluation (requires --debug flag).
 const FLAGS_DEBUG_PATH: &str = "/.well-known/forgeguard/flags";
+
+// ---------------------------------------------------------------------------
+// Prometheus metrics — registered globally, collected by Pingora's PrometheusServer
+// ---------------------------------------------------------------------------
+
+static REQUEST_TOTAL: LazyLock<prometheus::IntCounterVec> = LazyLock::new(|| {
+    prometheus::register_int_counter_vec!(
+        "forgeguard_requests_total",
+        "Total requests by method, path, and status",
+        &["method", "status"]
+    )
+    .unwrap_or_else(|e| panic!("failed to register forgeguard_requests_total: {e}"))
+});
+
+static REQUEST_DURATION: LazyLock<prometheus::HistogramVec> = LazyLock::new(|| {
+    prometheus::register_histogram_vec!(
+        "forgeguard_request_duration_seconds",
+        "Request duration in seconds",
+        &["method"],
+        vec![0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5]
+    )
+    .unwrap_or_else(|e| panic!("failed to register forgeguard_request_duration_seconds: {e}"))
+});
+
+static AUTH_OUTCOMES: LazyLock<prometheus::IntCounterVec> = LazyLock::new(|| {
+    prometheus::register_int_counter_vec!(
+        "forgeguard_auth_outcomes_total",
+        "Authentication outcomes",
+        &["outcome"]
+    )
+    .unwrap_or_else(|e| panic!("failed to register forgeguard_auth_outcomes_total: {e}"))
+});
+
+static POLICY_DECISIONS: LazyLock<prometheus::IntCounterVec> = LazyLock::new(|| {
+    prometheus::register_int_counter_vec!(
+        "forgeguard_policy_decisions_total",
+        "Policy evaluation decisions",
+        &["decision"]
+    )
+    .unwrap_or_else(|e| panic!("failed to register forgeguard_policy_decisions_total: {e}"))
+});
 
 /// Configuration consumed by [`ForgeGuardProxy`] at construction time.
 pub(crate) struct ProxyParams {
@@ -211,9 +254,11 @@ impl ProxyHttp for ForgeGuardProxy {
                 Some(cred) => {
                     match self.identity_chain.resolve(&cred).await {
                         Ok(identity) => {
+                            AUTH_OUTCOMES.with_label_values(&["success"]).inc();
                             ctx.identity = Some(identity);
                         }
                         Err(_) if require_credential => {
+                            AUTH_OUTCOMES.with_label_values(&["rejected"]).inc();
                             let body = serde_json::json!({"error": "Unauthorized"});
                             let headers =
                                 cors_headers(self.cors.as_ref(), ctx.cors_origin.as_deref());
@@ -232,6 +277,7 @@ impl ProxyHttp for ForgeGuardProxy {
                     }
                 }
                 None if require_credential => {
+                    AUTH_OUTCOMES.with_label_values(&["missing"]).inc();
                     let body = serde_json::json!({"error": "Unauthorized"});
                     let headers = cors_headers(self.cors.as_ref(), ctx.cors_origin.as_deref());
                     let _ = send_json_response(session, 401, body.to_string().as_bytes(), &headers)
@@ -281,6 +327,7 @@ impl ProxyHttp for ForgeGuardProxy {
                 match self.policy_engine.evaluate(&query).await {
                     Ok(decision) => {
                         if decision.is_denied() {
+                            POLICY_DECISIONS.with_label_values(&["deny"]).inc();
                             let body = serde_json::json!({
                                 "error": "Forbidden",
                                 "action": matched_route.action().to_string(),
@@ -296,8 +343,10 @@ impl ProxyHttp for ForgeGuardProxy {
                             .await;
                             return Ok(true);
                         }
+                        POLICY_DECISIONS.with_label_values(&["allow"]).inc();
                     }
                     Err(_) => {
+                        POLICY_DECISIONS.with_label_values(&["error"]).inc();
                         let body = serde_json::json!({
                             "error": "Forbidden",
                             "action": matched_route.action().to_string(),
@@ -480,6 +529,14 @@ impl ProxyHttp for ForgeGuardProxy {
                 "request"
             );
         }
+
+        // Record Prometheus metrics
+        REQUEST_TOTAL
+            .with_label_values(&[&ctx.method, &status.to_string()])
+            .inc();
+        REQUEST_DURATION
+            .with_label_values(&[&ctx.method])
+            .observe(ctx.request_start.elapsed().as_secs_f64());
     }
 }
 

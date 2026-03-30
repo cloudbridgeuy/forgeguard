@@ -96,6 +96,9 @@ lru = "0.12"
 # Routing
 matchit = "0.8"
 
+# Metrics
+prometheus = "0.13"
+
 # Pingora reverse proxy framework
 pingora = "0.8"
 pingora-core = "0.8"

@@ -27,6 +27,7 @@ aws-sdk-verifiedpermissions = { workspace = true }
 clap = { workspace = true }
 color-eyre = { workspace = true }
 pingora-core = { workspace = true }
+prometheus = { workspace = true }
 pingora-http = { workspace = true }
 pingora-proxy = { workspace = true }
 serde_json = { workspace = true }

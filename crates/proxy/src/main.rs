@@ -125,6 +125,17 @@ fn run(app: App) -> color_eyre::Result<()> {
     service.add_tcp(&listen_addr);
 
     server.add_service(service);
+
+    if config.metrics().enabled() {
+        if let Some(addr) = config.metrics().listen_addr() {
+            let mut prom_service =
+                pingora_core::services::listening::Service::prometheus_http_service();
+            prom_service.add_tcp(&addr.to_string());
+            server.add_service(prom_service);
+            tracing::info!(listen = %addr, "prometheus metrics endpoint enabled");
+        }
+    }
+
     server.run_forever();
 }
 

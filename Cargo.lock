@@ -1454,6 +1454,7 @@ dependencies = [
  "pingora-core",
  "pingora-http",
  "pingora-proxy",
+ "prometheus",
  "serde_json",
  "tokio",
  "tracing",
