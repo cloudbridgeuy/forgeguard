@@ -144,7 +144,7 @@ action = "bad-action"
 fn apply_overrides_changes_listen_addr() {
     let config = parse_config(MINIMAL_TOML).unwrap();
     let overrides = ConfigOverrides::new().with_listen_addr("0.0.0.0:9999".parse().unwrap());
-    let config = apply_overrides(config, &overrides);
+    let config = apply_overrides(config, &overrides).unwrap();
     assert_eq!(config.listen_addr().to_string(), "0.0.0.0:9999");
 }
 
@@ -153,7 +153,7 @@ fn apply_overrides_changes_default_policy() {
     let config = parse_config(MINIMAL_TOML).unwrap();
     assert_eq!(config.default_policy(), DefaultPolicy::Deny);
     let overrides = ConfigOverrides::new().with_default_policy(DefaultPolicy::Passthrough);
-    let config = apply_overrides(config, &overrides);
+    let config = apply_overrides(config, &overrides).unwrap();
     assert_eq!(config.default_policy(), DefaultPolicy::Passthrough);
 }
 
@@ -161,7 +161,7 @@ fn apply_overrides_changes_default_policy() {
 fn apply_overrides_no_change_when_empty() {
     let config = parse_config(MINIMAL_TOML).unwrap();
     let addr_before = config.listen_addr();
-    let config = apply_overrides(config, &ConfigOverrides::new());
+    let config = apply_overrides(config, &ConfigOverrides::new()).unwrap();
     assert_eq!(config.listen_addr(), addr_before);
 }
 
@@ -543,6 +543,42 @@ enabled = false
 }
 
 #[test]
+fn upstream_target_http() {
+    let config = parse_config(MINIMAL_TOML).unwrap();
+    let target = config.upstream_target();
+    assert_eq!(target.addr(), "localhost:3000");
+    assert!(!target.tls());
+    assert_eq!(target.sni(), "localhost");
+}
+
+#[test]
+fn upstream_target_https() {
+    let toml = r#"
+project_id = "my-app"
+listen_addr = "127.0.0.1:8080"
+upstream_url = "https://api.example.com"
+"#;
+    let config = parse_config(toml).unwrap();
+    let target = config.upstream_target();
+    assert_eq!(target.addr(), "api.example.com:443");
+    assert!(target.tls());
+    assert_eq!(target.sni(), "api.example.com");
+}
+
+#[test]
+fn upstream_target_custom_port() {
+    let toml = r#"
+project_id = "my-app"
+listen_addr = "127.0.0.1:8080"
+upstream_url = "https://api.example.com:9443"
+"#;
+    let config = parse_config(toml).unwrap();
+    let target = config.upstream_target();
+    assert_eq!(target.addr(), "api.example.com:9443");
+    assert!(target.tls());
+}
+
+#[test]
 fn parse_cors_wildcard_credentials_rejected() {
     let toml = r#"
 project_id = "my-app"
@@ -556,4 +592,19 @@ allow_credentials = true
 "#;
     let err = parse_config(toml).unwrap_err();
     assert!(err.to_string().contains("validation failed"));
+}
+
+#[test]
+fn apply_overrides_changes_upstream_url_recomputes_target() {
+    let config = parse_config(MINIMAL_TOML).unwrap();
+    assert_eq!(config.upstream_target().addr(), "localhost:3000");
+    assert!(!config.upstream_target().tls());
+
+    let new_url: url::Url = "https://api.example.com:9443".parse().unwrap();
+    let overrides = ConfigOverrides::new().with_upstream_url(new_url);
+    let config = apply_overrides(config, &overrides).unwrap();
+
+    assert_eq!(config.upstream_target().addr(), "api.example.com:9443");
+    assert!(config.upstream_target().tls());
+    assert_eq!(config.upstream_target().sni(), "api.example.com");
 }

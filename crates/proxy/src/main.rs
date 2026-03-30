@@ -52,7 +52,8 @@ fn run(app: App) -> color_eyre::Result<()> {
     if let Some(policy) = opts.default_policy {
         overrides = overrides.with_default_policy(policy);
     }
-    let config = apply_overrides(config, &overrides);
+    let config = apply_overrides(config, &overrides)
+        .map_err(|e| color_eyre::eyre::eyre!("failed to apply config overrides: {e}"))?;
 
     tracing::info!(
         listen = %config.listen_addr(),

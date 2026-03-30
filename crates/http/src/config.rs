@@ -50,6 +50,58 @@ pub enum ClientIpSource {
 }
 
 // ---------------------------------------------------------------------------
+// UpstreamTarget
+// ---------------------------------------------------------------------------
+
+/// Pre-validated upstream connection target derived from `upstream_url`.
+///
+/// Computed once during config validation (Parse Don't Validate).
+/// The proxy shell consumes this directly — no re-parsing of host:port strings.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct UpstreamTarget {
+    addr: String,
+    tls: bool,
+    sni: String,
+}
+
+impl UpstreamTarget {
+    /// The `host:port` address string for Pingora's `HttpPeer`.
+    pub fn addr(&self) -> &str {
+        &self.addr
+    }
+
+    /// Whether the upstream connection should use TLS.
+    pub fn tls(&self) -> bool {
+        self.tls
+    }
+
+    /// The SNI hostname for TLS connections.
+    pub fn sni(&self) -> &str {
+        &self.sni
+    }
+}
+
+/// Derive an [`UpstreamTarget`] from a validated [`Url`].
+///
+/// Pure function — no I/O. Extracts host, port (with scheme-based defaults),
+/// and TLS flag from the URL.
+fn derive_upstream_target(url: &Url) -> Result<UpstreamTarget> {
+    let tls = url.scheme() == "https";
+    let host = url
+        .host_str()
+        .ok_or_else(|| Error::Config(format!("upstream_url '{}': missing host", url)))?;
+    let port = url
+        .port_or_known_default()
+        .ok_or_else(|| Error::Config(format!("upstream_url '{}': cannot determine port", url)))?;
+
+    Ok(UpstreamTarget {
+        addr: format!("{host}:{port}"),
+        tls,
+        sni: host.to_string(),
+    })
+}
+
+// ---------------------------------------------------------------------------
 // AuthConfig
 // ---------------------------------------------------------------------------
 
@@ -228,6 +280,7 @@ pub struct ProxyConfig {
     project_id: ProjectId,
     listen_addr: SocketAddr,
     upstream_url: Url,
+    upstream_target: UpstreamTarget,
     default_policy: DefaultPolicy,
     client_ip_source: ClientIpSource,
     auth: AuthConfig,
@@ -255,6 +308,9 @@ impl ProxyConfig {
     }
     pub fn upstream_url(&self) -> &Url {
         &self.upstream_url
+    }
+    pub fn upstream_target(&self) -> &UpstreamTarget {
+        &self.upstream_target
     }
     pub fn default_policy(&self) -> DefaultPolicy {
         self.default_policy
@@ -346,17 +402,21 @@ impl ConfigOverrides {
 /// Apply overrides to a config (pure function).
 ///
 /// Precedence: CLI flags / env vars > config file > defaults.
-pub fn apply_overrides(mut config: ProxyConfig, overrides: &ConfigOverrides) -> ProxyConfig {
+pub fn apply_overrides(
+    mut config: ProxyConfig,
+    overrides: &ConfigOverrides,
+) -> Result<ProxyConfig> {
     if let Some(addr) = overrides.listen_addr {
         config.listen_addr = addr;
     }
     if let Some(ref url) = overrides.upstream_url {
         config.upstream_url = url.clone();
+        config.upstream_target = derive_upstream_target(url)?;
     }
     if let Some(policy) = overrides.default_policy {
         config.default_policy = policy;
     }
-    config
+    Ok(config)
 }
 
 // ---------------------------------------------------------------------------
@@ -377,6 +437,7 @@ impl TryFrom<RawProxyConfig> for ProxyConfig {
         let upstream_url = Url::parse(&raw.upstream_url).map_err(|e| {
             Error::Config(format!("invalid upstream_url '{}': {e}", raw.upstream_url))
         })?;
+        let upstream_target = derive_upstream_target(&upstream_url)?;
 
         let default_policy = parse_default_policy(&raw.default_policy)?;
         let client_ip_source = parse_client_ip_source(&raw.client_ip_source)?;
@@ -495,6 +556,7 @@ impl TryFrom<RawProxyConfig> for ProxyConfig {
             project_id,
             listen_addr,
             upstream_url,
+            upstream_target,
             default_policy,
             client_ip_source,
             auth,
