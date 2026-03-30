@@ -311,3 +311,76 @@ groups = ["viewer"]
 tenant = "globex-corp"
 action = "todo:list:read"
 expect = "allow"
+
+[[policy_tests]]
+name = "alice (admin) can read regular list"
+principal = "alice"
+groups = ["admin", "top-secret-readers"]
+tenant = "acme-corp"
+action = "todo:list:read"
+expect = "allow"
+
+[[policy_tests]]
+name = "bob (member) can add items"
+principal = "bob"
+groups = ["member"]
+tenant = "acme-corp"
+action = "todo:item:create"
+expect = "allow"
+
+[[policy_tests]]
+name = "bob (member) can complete items"
+principal = "bob"
+groups = ["member"]
+tenant = "acme-corp"
+action = "todo:item:update"
+expect = "allow"
+
+[[policy_tests]]
+name = "bob (member) cannot delete list"
+principal = "bob"
+groups = ["member"]
+tenant = "acme-corp"
+action = "todo:list:delete"
+expect = "deny"
+
+[[policy_tests]]
+name = "charlie (viewer) can list"
+principal = "charlie"
+groups = ["viewer"]
+tenant = "acme-corp"
+action = "todo:list:list"
+expect = "allow"
+
+[[policy_tests]]
+name = "bob (member, not top-secret-readers) denied on top-secret"
+principal = "bob"
+groups = ["member"]
+tenant = "acme-corp"
+action = "todo:list:read"
+resource = "todo::list::top-secret"
+expect = "deny"
+
+[[policy_tests]]
+name = "alice (admin) can access suggestions"
+principal = "alice"
+groups = ["admin", "top-secret-readers"]
+tenant = "acme-corp"
+action = "todo:list:suggest"
+expect = "allow"
+
+[[policy_tests]]
+name = "charlie (viewer) cannot access suggestions"
+principal = "charlie"
+groups = ["viewer"]
+tenant = "acme-corp"
+action = "todo:list:suggest"
+expect = "deny"
+
+[[policy_tests]]
+name = "alice (admin) can access debug"
+principal = "alice"
+groups = ["admin", "top-secret-readers"]
+tenant = "acme-corp"
+action = "todo:debug:read"
+expect = "allow"

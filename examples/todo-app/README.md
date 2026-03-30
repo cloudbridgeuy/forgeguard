@@ -113,6 +113,75 @@ cargo run --bin forgeguard -- routes --config examples/todo-app/forgeguard.toml
 | `sk-test-dave-admin` | dave | globex-corp | admin |
 | `sk-test-eve-viewer` | eve | globex-corp | viewer |
 
+## Prometheus Metrics + Stress Test
+
+The proxy exposes Pingora metrics at `localhost:9090` when `[metrics] enabled = true`
+in the config (already enabled in `forgeguard.dev.toml`).
+
+### Start Prometheus via Docker
+
+Create a Prometheus config that scrapes the proxy:
+
+```bash
+cat > /tmp/prometheus.yml <<'EOF'
+global:
+  scrape_interval: 5s
+
+scrape_configs:
+  - job_name: forgeguard-proxy
+    static_configs:
+      - targets: ["host.docker.internal:9090"]
+EOF
+```
+
+Run Prometheus:
+
+```bash
+docker run -d \
+  --name forgeguard-prometheus \
+  -p 9091:9090 \
+  -v /tmp/prometheus.yml:/etc/prometheus/prometheus.yml:ro \
+  prom/prometheus:latest
+```
+
+Open `http://localhost:9091` to access the Prometheus UI.
+
+### Stress test with `hey`
+
+Install [hey](https://github.com/rakyll/hey) if you don't have it:
+
+```bash
+brew install hey
+```
+
+Run a stress test against an authenticated endpoint:
+
+```bash
+# 1000 requests, 10 concurrent — tests VP cache effectiveness
+hey -n 1000 -c 10 -H "X-API-Key: sk-test-alice-admin" http://localhost:8080/api/lists
+```
+
+Run against a public endpoint (no auth, no VP):
+
+```bash
+hey -n 5000 -c 50 http://localhost:8080/health
+```
+
+### Useful Prometheus Queries
+
+After the stress test, query in the Prometheus UI (`http://localhost:9091`):
+
+- `rate(pingora_upstream_connect_total[1m])` — upstream connections per second
+- `pingora_upstream_response_latency_bucket` — response latency histogram
+- `pingora_connections_total` — total connections handled
+
+### Cleanup
+
+```bash
+docker rm -f forgeguard-prometheus
+rm /tmp/prometheus.yml
+```
+
 ## Architecture
 
 ```
