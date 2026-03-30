@@ -13,7 +13,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   REGISTRY: ghcr.io
-  IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}/forgegate
+  IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}/forgeguard
 
 jobs:
   build-binaries:
@@ -78,7 +78,7 @@ jobs:
 
       - name: Build binaries
         run: |
-          for bin in forgegate forgegate-control-plane forgegate-agent forgegate-proxy forgegate-back-office; do
+          for bin in forgeguard forgeguard-control-plane forgeguard-agent forgeguard-proxy forgeguard-back-office; do
             cargo build --release --target ${{ matrix.target }} --bin "$bin"
             cp "target/${{ matrix.target }}/release/$bin" "${bin}-${{ matrix.binary_suffix }}" 2>/dev/null || true
           done
@@ -88,7 +88,7 @@ jobs:
         with:
           name: binaries-${{ matrix.binary_suffix }}
           path: |
-            forgegate-*-${{ matrix.binary_suffix }}
+            forgeguard-*-${{ matrix.binary_suffix }}
           if-no-files-found: error
 
   build-docker:
@@ -102,15 +102,15 @@ jobs:
       matrix:
         image:
           - name: control-plane
-            binary: forgegate-control-plane
+            binary: forgeguard-control-plane
           - name: agent
-            binary: forgegate-agent
+            binary: forgeguard-agent
           - name: proxy
-            binary: forgegate-proxy
+            binary: forgeguard-proxy
           - name: back-office
-            binary: forgegate-back-office
+            binary: forgeguard-back-office
           - name: cli
-            binary: forgegate
+            binary: forgeguard
 
     steps:
       - name: Checkout code
@@ -165,7 +165,7 @@ jobs:
       - name: Prepare release assets
         run: |
           mkdir -p release-assets
-          find artifacts -name "forgegate-*" -type f -exec cp {} release-assets/ \;
+          find artifacts -name "forgeguard-*" -type f -exec cp {} release-assets/ \;
           ls -la release-assets/
 
       - name: Extract version from tag
