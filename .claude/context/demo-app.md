@@ -12,7 +12,7 @@ Proves the proxy works end-to-end: JWT auth, API key auth, public routes, featur
 |------|---------|
 | `app.py` | FastAPI TODO app — reads `X-ForgeGuard-*` headers only |
 | `forgeguard.toml` | Full demo config exercising every proxy feature |
-| `requirements.txt` | Python dependencies (fastapi, uvicorn) |
+| `pyproject.toml` | Python dependencies (fastapi, uvicorn) via uv |
 | `README.md` | Setup and demo instructions |
 
 ## Running
@@ -20,8 +20,7 @@ Proves the proxy works end-to-end: JWT auth, API key auth, public routes, featur
 ```bash
 # Terminal 1: Start the Python app
 cd examples/todo-app
-pip install -r requirements.txt
-uvicorn app:app --port 3000
+uv run uvicorn app:app --port 3000
 
 # Terminal 2: Start the proxy (works natively on macOS)
 cargo run --bin forgeguard-proxy -- run --config examples/todo-app/forgeguard.toml --debug

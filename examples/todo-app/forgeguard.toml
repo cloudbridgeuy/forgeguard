@@ -2,16 +2,26 @@
 # ===========================
 # Multi-tenant demo exercising: JWT, API keys, public routes,
 # feature flags, feature gates, policies, and header injection.
+#
+# AWS-specific values (Cognito JWKS, VP policy store) must be filled in
+# after deploying infrastructure:
+#
+#   cargo xtask dev setup --cognito      # creates Cognito user pool
+#   cargo xtask dev setup --permissions  # creates VP policy store
+#
+# The xtask commands write these values to forgeguard.dev.toml.
+# Copy them into the [authn.jwt] and [authz] sections below.
 
 project_id = "todo-demo"
-listen_addr = "0.0.0.0:8080"
+listen_addr = "127.0.0.1:8080"
 upstream_url = "http://127.0.0.1:3000"
 default_policy = "deny"
 client_ip_source = "peer"
 
 # ---------------------------------------------------------------------------
-# AWS (required for VP authorization + Cognito JWT)
+# AWS
 # ---------------------------------------------------------------------------
+# Region and profile for all SDK calls (Cognito JWKS + Verified Permissions).
 
 [aws]
 region = "us-east-2"
@@ -24,9 +34,12 @@ profile = "admin"
 [auth]
 chain_order = ["jwt", "api-key"]
 
-[authn.jwt]
-jwks_url = "https://cognito-idp.us-east-2.amazonaws.com/us-east-2_EeUQS0naJ/.well-known/jwks.json"
-issuer = "https://cognito-idp.us-east-2.amazonaws.com/us-east-2_EeUQS0naJ"
+# JWT settings — fill in from `cargo xtask dev setup --cognito` output
+# or copy from forgeguard.dev.toml after deployment.
+#
+# [authn.jwt]
+# jwks_url = "https://cognito-idp.<region>.amazonaws.com/<pool-id>/.well-known/jwks.json"
+# issuer   = "https://cognito-idp.<region>.amazonaws.com/<pool-id>"
 
 # ---------------------------------------------------------------------------
 # Static API Keys — acme-corp tenant
@@ -69,11 +82,13 @@ groups = ["viewer"]
 # ---------------------------------------------------------------------------
 # Authorization (Amazon Verified Permissions)
 # ---------------------------------------------------------------------------
-
-[authz]
-policy_store_id = "MAXW1HM6abmKJJRVypmFp3"
-cache_ttl_secs = 300
-cache_max_entries = 10000
+# Fill in policy_store_id from `cargo xtask dev setup --permissions` output
+# or copy from forgeguard.dev.toml after deployment.
+#
+# [authz]
+# policy_store_id = "<your-policy-store-id>"
+# cache_ttl_secs = 300
+# cache_max_entries = 10000
 
 # ---------------------------------------------------------------------------
 # Routes
