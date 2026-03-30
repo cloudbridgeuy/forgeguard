@@ -9,6 +9,8 @@
 - **Pre-commit hooks:** `cargo xtask lint --install-hooks`
 - **Commits:** Conventional Commits — see [commit-and-release.md](./.claude/context/commit-and-release.md)
 - **Releases:** `cargo xtask release` — see [commit-and-release.md](./.claude/context/commit-and-release.md)
+- **Rust toolchain:** pinned in `rust-toolchain.toml` to match MSRV
+- **Container images:** distroless, multi-stage — see [container-builds.md](./.claude/context/container-builds.md)
 - **GitHub CLI:** always use `gh auth switch --user cloudbridgeuy` before any `gh` command
 
 ## Unnegotiables
@@ -112,5 +114,6 @@ Each crate's `README.md` describes what it owns and its pure/I/O classification.
 | [Scaffolding Decisions](./.claude/designs/scaffolding-patterns.md) | All 36 design decisions with rationale                                  |
 | [Feature Flags](./.claude/context/feature-flags.md)                | Flag types, evaluation order, overrides, debug endpoint, proxy wiring   |
 | [Verified Permissions](./.claude/context/verified-permissions.md)   | VP integration: action format, Cedar types, CLI, config, infrastructure |
+| [Container Builds](./.claude/context/container-builds.md)          | Distroless images, multi-stage builds, SSL strategy, health checks      |
 | [Proxy Shaping](./.claude/designs/proxy-shaping.md)                | Proxy design: requirements, shape, breadboard, slices                   |
 | [Design Documents](./.claude/context/)                             | Full ForgeGuard architecture and technical specifications               |
