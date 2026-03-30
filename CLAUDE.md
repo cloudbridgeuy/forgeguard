@@ -146,6 +146,9 @@ Each crate's `README.md` describes what it owns and its pure/I/O classification.
 | [CORS](./.claude/context/cors.md)                                  | CORS config, origin matching, request flow, crate placement             |
 | [Proxy Shaping](./.claude/designs/proxy-shaping.md)                | Proxy design: requirements, shape, breadboard, slices                   |
 | [SaaS Architecture](./.claude/context/saas-architecture.md)        | Control/data plane split, infra stack, worker saga, org domain model    |
+| [Authn Wiring](./.claude/context/authn-wiring.md)                  | JWT + API key config, resolver construction, FCIS split                 |
+| [CLI](./.claude/context/cli.md)                                    | `check`, `routes`, `policies` subcommands, FCIS architecture            |
+| [Demo App](./.claude/context/demo-app.md)                          | E2E demo: Python TODO app, Docker, demo config, running instructions    |
 | [Design Documents](./.claude/context/)                             | Full ForgeGuard architecture and technical specifications               |
 
 ### Local-Only Documents (MUST NOT commit)
