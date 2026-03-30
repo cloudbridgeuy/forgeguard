@@ -14,8 +14,9 @@
 .claude/*
 !.claude/context/
 !.claude/commands/
-!.claude/plans/
-!.claude/designs/
+
+# Build logs
+**/xtask-lint.log
 
 # Local development
 .local/
