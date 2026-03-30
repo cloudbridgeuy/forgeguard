@@ -1,0 +1,298 @@
+# ForgeGuard Demo — TODO App
+# ===========================
+# Multi-tenant demo exercising: JWT, API keys, public routes,
+# feature flags, feature gates, policies, and header injection.
+
+project_id = "todo-demo"
+listen_addr = "0.0.0.0:8080"
+upstream_url = "http://127.0.0.1:3000"
+default_policy = "deny"
+client_ip_source = "peer"
+
+# ---------------------------------------------------------------------------
+# AWS (required for VP authorization + Cognito JWT)
+# ---------------------------------------------------------------------------
+
+[aws]
+region = "us-east-2"
+profile = "admin"
+
+# ---------------------------------------------------------------------------
+# Authentication
+# ---------------------------------------------------------------------------
+
+[auth]
+chain_order = ["jwt", "api-key"]
+
+[authn.jwt]
+jwks_url = "https://cognito-idp.us-east-2.amazonaws.com/us-east-2_EeUQS0naJ/.well-known/jwks.json"
+issuer = "https://cognito-idp.us-east-2.amazonaws.com/us-east-2_EeUQS0naJ"
+
+# ---------------------------------------------------------------------------
+# Static API Keys — acme-corp tenant
+# ---------------------------------------------------------------------------
+
+[[api_keys]]
+key = "sk-test-alice-admin"
+user_id = "alice"
+tenant_id = "acme-corp"
+groups = ["admin", "top-secret-readers"]
+
+[[api_keys]]
+key = "sk-test-bob-member"
+user_id = "bob"
+tenant_id = "acme-corp"
+groups = ["member"]
+
+[[api_keys]]
+key = "sk-test-charlie-viewer"
+user_id = "charlie"
+tenant_id = "acme-corp"
+groups = ["viewer"]
+
+# ---------------------------------------------------------------------------
+# Static API Keys — globex-corp tenant
+# ---------------------------------------------------------------------------
+
+[[api_keys]]
+key = "sk-test-dave-admin"
+user_id = "dave"
+tenant_id = "globex-corp"
+groups = ["admin"]
+
+[[api_keys]]
+key = "sk-test-eve-viewer"
+user_id = "eve"
+tenant_id = "globex-corp"
+groups = ["viewer"]
+
+# ---------------------------------------------------------------------------
+# Authorization (Amazon Verified Permissions)
+# ---------------------------------------------------------------------------
+
+[authz]
+policy_store_id = "MAXW1HM6abmKJJRVypmFp3"
+cache_ttl_secs = 300
+cache_max_entries = 10000
+
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
+
+[[routes]]
+method = "GET"
+path = "/api/lists"
+action = "todo:list:list"
+
+[[routes]]
+method = "POST"
+path = "/api/lists"
+action = "todo:list:create"
+
+[[routes]]
+method = "GET"
+path = "/api/lists/:id"
+action = "todo:list:read"
+resource_param = "id"
+
+[[routes]]
+method = "DELETE"
+path = "/api/lists/:id"
+action = "todo:list:delete"
+resource_param = "id"
+
+[[routes]]
+method = "POST"
+path = "/api/lists/:id/items"
+action = "todo:item:create"
+
+[[routes]]
+method = "PATCH"
+path = "/api/lists/:id/items/:item_id/complete"
+action = "todo:item:update"
+
+[[routes]]
+method = "GET"
+path = "/api/lists/:id/suggestions"
+action = "todo:list:suggest"
+feature_gate = "todo:ai-suggestions"
+
+[[routes]]
+method = "GET"
+path = "/debug/context"
+action = "todo:debug:read"
+
+# ---------------------------------------------------------------------------
+# Public Routes
+# ---------------------------------------------------------------------------
+
+[[public_routes]]
+method = "GET"
+path = "/health"
+auth_mode = "anonymous"
+
+[[public_routes]]
+method = "POST"
+path = "/webhooks/:provider"
+auth_mode = "anonymous"
+
+[[public_routes]]
+method = "GET"
+path = "/docs/:page"
+auth_mode = "opportunistic"
+
+# ---------------------------------------------------------------------------
+# Policies
+# ---------------------------------------------------------------------------
+
+[[policies]]
+name = "admin-full-access"
+description = "Admins can do anything."
+groups = ["admin"]
+
+[[policies.statements]]
+effect = "allow"
+actions = ["todo:*:*"]
+
+[[policies]]
+name = "member-crud"
+description = "Members can list, create, read, and add items."
+groups = ["member"]
+
+[[policies.statements]]
+effect = "allow"
+actions = ["todo:list:list", "todo:list:create", "todo:list:read", "todo:item:create", "todo:item:update"]
+
+[[policies]]
+name = "viewer-read-only"
+description = "Viewers can only list and read."
+groups = ["viewer"]
+
+[[policies.statements]]
+effect = "allow"
+actions = ["todo:list:list", "todo:list:read"]
+
+[[policies]]
+name = "top-secret-deny"
+description = "Deny top-secret list unless in top-secret-readers group."
+
+[[policies.statements]]
+effect = "deny"
+actions = ["todo:list:*"]
+resources = ["todo::list::top-secret"]
+except = ["top-secret-readers"]
+
+# ---------------------------------------------------------------------------
+# Groups
+# ---------------------------------------------------------------------------
+
+[[groups]]
+name = "admin"
+description = "Full access to all resources."
+
+[[groups]]
+name = "member"
+description = "Standard CRUD access."
+
+[[groups]]
+name = "viewer"
+description = "Read-only access."
+
+[[groups]]
+name = "top-secret-readers"
+description = "Can access top-secret resources."
+
+# ---------------------------------------------------------------------------
+# Feature Flags
+# ---------------------------------------------------------------------------
+
+[features]
+
+[features.flags."maintenance-mode"]
+type = "boolean"
+default = false
+enabled = true
+
+[features.flags."todo:ai-suggestions"]
+type = "boolean"
+default = false
+enabled = true
+[[features.flags."todo:ai-suggestions".overrides]]
+tenant = "acme-corp"
+value = true
+
+[features.flags."todo:sharing"]
+type = "boolean"
+default = false
+enabled = true
+rollout_percentage = 50
+
+# ---------------------------------------------------------------------------
+# Policy Tests
+# ---------------------------------------------------------------------------
+
+[[policy_tests]]
+name = "alice (admin, acme-corp) can delete list"
+principal = "alice"
+groups = ["admin", "top-secret-readers"]
+tenant = "acme-corp"
+action = "todo:list:delete"
+expect = "allow"
+
+[[policy_tests]]
+name = "bob (member, acme-corp) can create list"
+principal = "bob"
+groups = ["member"]
+tenant = "acme-corp"
+action = "todo:list:create"
+expect = "allow"
+
+[[policy_tests]]
+name = "charlie (viewer, acme-corp) cannot create list"
+principal = "charlie"
+groups = ["viewer"]
+tenant = "acme-corp"
+action = "todo:list:create"
+expect = "deny"
+
+[[policy_tests]]
+name = "charlie denied on top-secret"
+principal = "charlie"
+groups = ["viewer"]
+tenant = "acme-corp"
+action = "todo:list:read"
+resource = "todo::list::top-secret"
+expect = "deny"
+
+[[policy_tests]]
+name = "alice can read top-secret"
+principal = "alice"
+groups = ["admin", "top-secret-readers"]
+tenant = "acme-corp"
+action = "todo:list:read"
+resource = "todo::list::top-secret"
+expect = "allow"
+
+[[policy_tests]]
+name = "dave (admin, globex-corp) can delete list"
+principal = "dave"
+groups = ["admin"]
+tenant = "globex-corp"
+action = "todo:list:delete"
+expect = "allow"
+
+[[policy_tests]]
+name = "eve (viewer, globex-corp) cannot create list"
+principal = "eve"
+groups = ["viewer"]
+tenant = "globex-corp"
+action = "todo:list:create"
+expect = "deny"
+
+[[policy_tests]]
+name = "eve (viewer, globex-corp) can read list"
+principal = "eve"
+groups = ["viewer"]
+tenant = "globex-corp"
+action = "todo:list:read"
+expect = "allow"
