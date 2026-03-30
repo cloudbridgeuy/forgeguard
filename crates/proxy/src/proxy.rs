@@ -312,8 +312,11 @@ impl ProxyHttp for ForgeGuardProxy {
             }
 
             ctx.matched_route = Some(matched_route);
+        } else if public_match.is_public() {
+            // Public route with no [[routes]] entry — passthrough to upstream.
+            // Auth was already handled (skipped for anonymous, optional for opportunistic).
         } else {
-            // No route matched
+            // No route matched and not a public route
             match self.default_policy {
                 DefaultPolicy::Deny => {
                     let body =
