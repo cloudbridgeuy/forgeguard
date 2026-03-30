@@ -47,10 +47,9 @@ pub(crate) fn build_vp_request(
 
     let resource = match query.resource() {
         Some(r) => {
-            let resource_fgrn = r.to_fgrn(project, tenant);
             let entity = EntityIdentifier::builder()
                 .entity_type(r.vp_entity_type(project))
-                .entity_id(resource_fgrn.as_vp_entity_id())
+                .entity_id(r.id().as_str())
                 .build()
                 .map_err(|e| {
                     Error::VerifiedPermissions(format!("building resource entity: {e}"))
@@ -194,10 +193,7 @@ mod tests {
 
         let resource = components.resource.unwrap();
         assert_eq!(resource.entity_type(), "acme_app::todo__list");
-        assert_eq!(
-            resource.entity_id(),
-            "fgrn:acme-app:acme-corp:todo:list:list-001"
-        );
+        assert_eq!(resource.entity_id(), "list-001");
     }
 
     #[test]
