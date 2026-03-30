@@ -15,7 +15,7 @@ use forgeguard_core::{evaluate_flags, FlagConfig, ProjectId, ResolvedFlags};
 use forgeguard_http::{
     build_query, evaluate_debug, extract_credential, inject_headers, ClientIpSource, CorsConfig,
     DefaultPolicy, FlagDebugQuery, IdentityProjection, MatchedRoute, PublicMatch,
-    PublicRouteMatcher, RouteMatcher,
+    PublicRouteMatcher, RouteMatcher, UpstreamTarget,
 };
 
 /// Health check path served before any auth logic.
@@ -31,9 +31,7 @@ pub(crate) struct ProxyParams {
     pub route_matcher: RouteMatcher,
     pub public_matcher: PublicRouteMatcher,
     pub flag_config: FlagConfig,
-    pub upstream_addr: String,
-    pub upstream_tls: bool,
-    pub upstream_sni: String,
+    pub upstream: UpstreamTarget,
     pub default_policy: DefaultPolicy,
     pub client_ip_source: ClientIpSource,
     pub project_id: ProjectId,
@@ -52,9 +50,7 @@ pub(crate) struct ForgeGuardProxy {
     route_matcher: RouteMatcher,
     public_matcher: PublicRouteMatcher,
     flag_config: FlagConfig,
-    upstream_addr: String,
-    upstream_tls: bool,
-    upstream_sni: String,
+    upstream: UpstreamTarget,
     default_policy: DefaultPolicy,
     client_ip_source: ClientIpSource,
     project_id: ProjectId,
@@ -72,9 +68,7 @@ impl ForgeGuardProxy {
             route_matcher: params.route_matcher,
             public_matcher: params.public_matcher,
             flag_config: params.flag_config,
-            upstream_addr: params.upstream_addr,
-            upstream_tls: params.upstream_tls,
-            upstream_sni: params.upstream_sni,
+            upstream: params.upstream,
             default_policy: params.default_policy,
             client_ip_source: params.client_ip_source,
             project_id: params.project_id,
@@ -344,9 +338,9 @@ impl ProxyHttp for ForgeGuardProxy {
         _ctx: &mut Self::CTX,
     ) -> Result<Box<HttpPeer>> {
         let peer = HttpPeer::new(
-            &*self.upstream_addr,
-            self.upstream_tls,
-            self.upstream_sni.clone(),
+            self.upstream.addr(),
+            self.upstream.tls(),
+            self.upstream.sni().to_string(),
         );
         Ok(Box::new(peer))
     }
@@ -385,6 +379,48 @@ impl ProxyHttp for ForgeGuardProxy {
             }
         }
         Ok(())
+    }
+
+    async fn fail_to_proxy(
+        &self,
+        session: &mut Session,
+        e: &pingora_core::Error,
+        ctx: &mut Self::CTX,
+    ) -> pingora_proxy::FailToProxy
+    where
+        Self::CTX: Send + Sync,
+    {
+        use pingora_core::ErrorSource;
+
+        let (code, error_type) = match e.esource() {
+            ErrorSource::Upstream => (502, "upstream_unavailable"),
+            ErrorSource::Downstream => (0, "downstream_error"),
+            ErrorSource::Internal | ErrorSource::Unset => (500, "internal_error"),
+        };
+
+        if code > 0 {
+            tracing::error!(
+                method = %ctx.method,
+                path = %ctx.path,
+                upstream = %self.upstream.addr(),
+                error_type,
+                error = %e,
+                status = code,
+                "proxy error"
+            );
+
+            let body = serde_json::json!({
+                "error": error_type,
+                "status": code,
+            });
+            let headers = cors_headers(self.cors.as_ref(), ctx.cors_origin.as_deref());
+            let _ = send_json_response(session, code, body.to_string().as_bytes(), &headers).await;
+        }
+
+        pingora_proxy::FailToProxy {
+            error_code: code,
+            can_reuse_downstream: false,
+        }
     }
 
     async fn logging(

@@ -75,12 +75,27 @@ fn run(app: App) -> color_eyre::Result<()> {
     let public_matcher = PublicRouteMatcher::new(config.public_routes())
         .map_err(|e| color_eyre::eyre::eyre!("invalid public routes: {e}"))?;
 
-    let upstream_url = config.upstream_url();
-    let tls = upstream_url.scheme() == "https";
-    let host = upstream_url.host_str().unwrap_or("localhost");
-    let port = upstream_url
-        .port_or_known_default()
-        .unwrap_or(if tls { 443 } else { 80 });
+    let target = config.upstream_target().clone();
+
+    match std::net::ToSocketAddrs::to_socket_addrs(&target.addr()) {
+        Ok(mut addrs) => {
+            if let Some(addr) = addrs.next() {
+                match std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(2)) {
+                    Ok(_) => tracing::info!(upstream = %target.addr(), "upstream is reachable"),
+                    Err(e) => tracing::warn!(
+                        upstream = %target.addr(),
+                        error = %e,
+                        "upstream is not reachable — requests will fail until it starts"
+                    ),
+                }
+            }
+        }
+        Err(e) => tracing::warn!(
+            upstream = %target.addr(),
+            error = %e,
+            "could not resolve upstream address — skipping probe"
+        ),
+    }
 
     let proxy = ForgeGuardProxy::new(ProxyParams {
         identity_chain,
@@ -88,9 +103,7 @@ fn run(app: App) -> color_eyre::Result<()> {
         route_matcher,
         public_matcher,
         flag_config: config.features().clone(),
-        upstream_addr: format!("{host}:{port}"),
-        upstream_tls: tls,
-        upstream_sni: host.to_string(),
+        upstream: target,
         default_policy: config.default_policy(),
         client_ip_source: config.client_ip_source(),
         project_id: config.project_id().clone(),
@@ -101,6 +114,10 @@ fn run(app: App) -> color_eyre::Result<()> {
 
     let mut server =
         Server::new(None).map_err(|e| color_eyre::eyre::eyre!("failed to create server: {e}"))?;
+    if let Some(conf) = Arc::get_mut(&mut server.configuration) {
+        conf.grace_period_seconds = Some(3);
+        conf.graceful_shutdown_timeout_seconds = Some(5);
+    }
     server.bootstrap();
 
     let listen_addr = config.listen_addr().to_string();
