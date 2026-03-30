@@ -6,7 +6,7 @@ injected by the proxy to scope all data by tenant.
 
 ## Prerequisites
 
-- Python 3.12+ with `pip`
+- [uv](https://docs.astral.sh/uv/) (Python package manager)
 - Rust toolchain (for building the proxy)
 - AWS credentials configured (`~/.aws/credentials` with `admin` profile)
 - ForgeGuard Cognito deployment (`cargo xtask dev setup --cognito`)
@@ -16,8 +16,7 @@ injected by the proxy to scope all data by tenant.
 ```bash
 # Terminal 1: Start the Python app
 cd examples/todo-app
-pip install -r requirements.txt
-uvicorn app:app --port 3000
+uv run uvicorn app:app --port 3000
 
 # Terminal 2: Start the proxy
 cargo run --bin forgeguard-proxy -- run --config examples/todo-app/forgeguard.toml --debug
