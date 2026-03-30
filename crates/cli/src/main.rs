@@ -1,7 +1,9 @@
 #![deny(clippy::unwrap_used, clippy::expect_used)]
 
 mod aws;
+mod check;
 mod policies;
+mod routes;
 
 use std::path::PathBuf;
 
@@ -32,8 +34,12 @@ enum Command {
     /// Manage Cedar policies: validate, sync, and test.
     Policies {
         #[command(subcommand)]
-        command: PoliciesCommand,
+        command: Box<PoliciesCommand>,
     },
+    /// Validate a ForgeGuard configuration file.
+    Check,
+    /// Display the route table from a configuration file.
+    Routes,
 }
 
 // ---------------------------------------------------------------------------
@@ -51,6 +57,8 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Command::Policies { command } => command.run(&cli.config).await?,
+        Command::Check => check::run(&cli.config)?,
+        Command::Routes => routes::run(&cli.config)?,
     }
 
     Ok(())
