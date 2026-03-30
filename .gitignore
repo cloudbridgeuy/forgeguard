@@ -28,3 +28,12 @@ infra/dev/cdk.out/
 
 # Playwright MCP screenshots
 .playwright-mcp/
+
+# Python
+__pycache__/
+
+# Bacon
+.bacon-locations
+
+# CDK / infra build artifacts
+infra/dev/target/
