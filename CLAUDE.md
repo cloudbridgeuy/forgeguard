@@ -11,6 +11,7 @@
 - **Releases:** `cargo xtask release` — see [commit-and-release.md](./.claude/context/commit-and-release.md)
 - **Rust toolchain:** pinned in `rust-toolchain.toml` to match MSRV
 - **Container images:** distroless, multi-stage — see [container-builds.md](./.claude/context/container-builds.md)
+- **Metrics:** Prometheus via Pingora's `PrometheusServer` — `[metrics] enabled = true` in config
 - **GitHub CLI:** always use `gh auth switch --user cloudbridgeuy` before any `gh` command
 
 ## Unnegotiables
