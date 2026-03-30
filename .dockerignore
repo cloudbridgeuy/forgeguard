@@ -1,0 +1,33 @@
+# Build artifacts
+target/
+
+# Version control
+.git/
+
+# CI/CD
+.github/
+
+# IDE and editor
+.vscode/
+.idea/
+*.swp
+*~
+
+# Documentation and design
+.claude/
+*.md
+LICENSE
+
+# Docker (avoid sending Dockerfiles as build context)
+docker/
+
+# Infrastructure (CDK stacks)
+infra/
+
+# Development configuration
+.env*
+users.toml
+bacon.toml
+cliff.toml
+forgeguard.toml
+forgeguard.dev.toml
