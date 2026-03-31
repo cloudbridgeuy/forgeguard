@@ -60,6 +60,7 @@ fn run(app: App) -> color_eyre::Result<()> {
         upstream = %config.upstream_url(),
         project = %config.project_id(),
         flags = config.features().flags.len(),
+        providers = ?config.auth().chain_order(),
         "starting forgeguard-proxy"
     );
 
