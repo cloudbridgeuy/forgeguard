@@ -4,7 +4,7 @@ use std::future::Future;
 use std::pin::Pin;
 
 use aws_sdk_verifiedpermissions::types::EntitiesDefinition;
-use forgeguard_authz_core::{DenyReason, PolicyDecision, PolicyEngine, PolicyQuery};
+use forgeguard_authz_core::{CacheStats, DenyReason, PolicyDecision, PolicyEngine, PolicyQuery};
 use forgeguard_core::{ProjectId, TenantId};
 
 use crate::cache::{build_cache_key, AuthzCache, CacheKey};
@@ -43,11 +43,6 @@ impl VpPolicyEngine {
             tenant_id,
             cache,
         }
-    }
-
-    /// Borrow the cache for observing metrics.
-    pub fn cache(&self) -> &AuthzCache {
-        &self.cache
     }
 
     /// Internal evaluation: cache check -> VP call -> cache insert.
@@ -128,5 +123,12 @@ impl PolicyEngine for VpPolicyEngine {
         };
 
         Box::pin(async move { Ok(self.call_vp(cache_key, components, entities).await) })
+    }
+
+    fn cache_stats(&self) -> Option<CacheStats> {
+        Some(CacheStats::new(
+            self.cache.cache_hits(),
+            self.cache.cache_misses(),
+        ))
     }
 }

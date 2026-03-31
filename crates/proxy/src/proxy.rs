@@ -160,11 +160,15 @@ impl ProxyHttp for ForgeGuardProxy {
 
         // 1. Health check — respond before any auth
         if ctx.path == HEALTH_PATH {
-            let body = serde_json::json!({
+            let mut body = serde_json::json!({
                 "status": "ok",
                 "providers": self.auth_providers,
                 "flags": self.flag_config.flags.len(),
             });
+            if let Some(stats) = self.policy_engine.cache_stats() {
+                body["cache_hits"] = stats.hits().into();
+                body["cache_misses"] = stats.misses().into();
+            }
             let _ = send_json_response(session, 200, body.to_string().as_bytes(), &[]).await;
             return Ok(true);
         }
