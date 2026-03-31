@@ -12,6 +12,8 @@
 - **Rust toolchain:** pinned in `rust-toolchain.toml` to match MSRV
 - **Container images:** distroless, multi-stage — see [container-builds.md](./.claude/context/container-builds.md)
 - **Metrics:** Prometheus via Pingora's `PrometheusServer` — `[metrics] enabled = true` in config
+- **Integration tests:** `cargo test -p forgeguard_proxy` — see [demo-app.md](./.claude/context/demo-app.md)
+- **Demo app:** native or Docker Compose — see [demo-app.md](./.claude/context/demo-app.md)
 - **GitHub CLI:** always use `gh auth switch --user cloudbridgeuy` before any `gh` command
 
 ## Unnegotiables
