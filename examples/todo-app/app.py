@@ -199,7 +199,8 @@ def suggestions(list_id: str, request: Request):
     feature-flag-driven branching behavior (gate = proxy, branch = app).
     """
     identity = get_identity(request)
-    model = identity["features"].get("todo:premium-ai", "gpt-4o-mini")
+    flags = identity["features"].get("flags", {})
+    model = flags.get("todo:premium-ai", "gpt-4o-mini")
     return {
         "suggestions": ["Buy milk", "Call dentist", "Review PR"],
         "model": model,
