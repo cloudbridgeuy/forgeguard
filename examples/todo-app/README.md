@@ -24,6 +24,28 @@ cargo run --bin forgeguard-proxy -- run --config examples/todo-app/forgeguard.to
 
 The proxy listens on `localhost:8080`, the app on `localhost:3000`.
 
+## Docker Compose (alternative)
+
+If you have Docker installed, you can run the entire demo with a single command:
+
+```bash
+cd examples/todo-app
+docker compose up --build
+```
+
+This builds both the Python app and the ForgeGuard proxy, wiring them together
+automatically. The proxy overrides `upstream_url` via the `FORGEGUARD_UPSTREAM`
+environment variable so it can reach the app container by service name.
+
+Ports are the same as the manual setup: proxy on `localhost:8080`, app on
+`localhost:3000`. All `curl` commands in the demo scenarios below work unchanged.
+
+To tear everything down:
+
+```bash
+docker compose down
+```
+
 ## Demo Scenarios
 
 ### 1. Public routes (no credentials)

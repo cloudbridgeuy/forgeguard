@@ -1,0 +1,30 @@
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+
+  proxy:
+    build:
+      context: ../../
+      dockerfile: docker/proxy.Dockerfile
+    ports:
+      - "8080:8080"
+      - "6150:6150"
+    volumes:
+      - ./forgeguard.toml:/etc/forgeguard/forgeguard.toml:ro
+    depends_on:
+      - app
+    environment:
+      FORGEGUARD_UPSTREAM: "http://app:3000"
+      FORGEGUARD_LISTEN: "0.0.0.0:8080"
+    command: ["run", "--config", "/etc/forgeguard/forgeguard.toml"]
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      - proxy
