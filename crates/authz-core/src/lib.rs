@@ -11,7 +11,7 @@ pub mod static_engine;
 
 pub use context::PolicyContext;
 pub use decision::{DenyReason, PolicyDecision};
-pub use engine::PolicyEngine;
+pub use engine::{CacheStats, PolicyEngine};
 pub use error::{Error, Result};
 pub use query::PolicyQuery;
 
