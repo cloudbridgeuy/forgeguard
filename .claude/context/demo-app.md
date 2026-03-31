@@ -4,7 +4,11 @@ End-to-end demonstration of the ForgeGuard proxy with a Python/FastAPI backend.
 
 ## Purpose
 
-Proves the proxy works end-to-end: JWT auth, API key auth, public routes, feature flags, feature gates, policy evaluation, header injection — all with a language-agnostic upstream that has **zero ForgeGuard imports**.
+Proves the proxy works end-to-end: JWT auth, API key auth, public routes, feature flags, feature gates, feature-driven branching, policy evaluation, header injection — all with a language-agnostic upstream that has **zero ForgeGuard imports**.
+
+Two distinct feature flag mechanisms are demonstrated:
+- **Gate** (`todo:ai-suggestions`): proxy blocks the route entirely when the flag is disabled for a tenant
+- **Branch** (`todo:premium-ai`): app reads the flag value from `X-ForgeGuard-Features` to select the AI model per tenant
 
 ## Files
 

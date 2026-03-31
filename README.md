@@ -76,6 +76,10 @@ cargo test --workspace
 docker compose up -d
 ```
 
+## Demo
+
+See [`examples/todo-app/`](examples/todo-app/) for a working end-to-end demonstration: a Python/FastAPI TODO app running behind the ForgeGuard proxy with JWT auth, API keys, public routes, feature flags, policy evaluation, and header injection.
+
 ## License
 
 MIT

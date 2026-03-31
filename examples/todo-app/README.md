@@ -92,11 +92,16 @@ curl -X POST -H "X-API-Key: sk-test-eve-viewer" http://localhost:8080/api/lists
 
 ```bash
 # AI suggestions — enabled for acme-corp via tenant override
+# Response includes "model": "claude-sonnet" (acme-corp override)
 curl -H "X-API-Key: sk-test-alice-admin" http://localhost:8080/api/lists/default/suggestions
 
-# AI suggestions — disabled for globex-corp (no override)
+# AI suggestions — disabled for globex-corp (no override) → 404
 curl -H "X-API-Key: sk-test-dave-admin" http://localhost:8080/api/lists/default/suggestions
 ```
+
+Two flag mechanisms at work:
+- **Gate** (`todo:ai-suggestions`): proxy blocks the route entirely for globex-corp
+- **Branch** (`todo:premium-ai`): app reads the flag value to select the AI model — acme-corp gets `claude-sonnet`, default is `gpt-4o-mini`
 
 ### 5. Resource-level access
 

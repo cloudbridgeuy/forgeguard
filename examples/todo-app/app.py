@@ -193,10 +193,16 @@ def complete_item(list_id: str, item_id: str, request: Request):
 
 @app.get("/api/lists/{list_id}/suggestions")
 def suggestions(list_id: str, request: Request):
-    """This route is feature-gated behind 'todo:ai-suggestions'."""
+    """This route is feature-gated behind 'todo:ai-suggestions'.
+
+    Reads the 'todo:premium-ai' flag to select the AI model — demonstrates
+    feature-flag-driven branching behavior (gate = proxy, branch = app).
+    """
     identity = get_identity(request)
+    model = identity["features"].get("todo:premium-ai", "gpt-4o-mini")
     return {
         "suggestions": ["Buy milk", "Call dentist", "Review PR"],
+        "model": model,
         "identity": identity,
     }
 
