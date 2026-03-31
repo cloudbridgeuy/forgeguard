@@ -242,6 +242,22 @@ default = false
 enabled = true
 rollout_percentage = 50
 
+[features.flags."todo:max-upload-mb"]
+type = "number"
+default = 50
+enabled = true
+[[features.flags."todo:max-upload-mb".overrides]]
+tenant = "acme-corp"
+value = 100
+
+[features.flags."todo:premium-ai"]
+type = "string"
+default = "gpt-4o-mini"
+enabled = true
+[[features.flags."todo:premium-ai".overrides]]
+tenant = "acme-corp"
+value = "claude-sonnet"
+
 # ---------------------------------------------------------------------------
 # Policy Tests
 # ---------------------------------------------------------------------------
