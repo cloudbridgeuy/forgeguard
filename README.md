@@ -31,7 +31,6 @@ crates/
 │
 │  Binary crates
 ├── control-plane/     forgeguard_control_plane — dashboard API server
-├── agent/             forgeguard_agent — self-hosted data plane
 ├── cli/               forgeguard_cli — developer CLI (binary: forgeguard)
 ├── proxy/             forgeguard_proxy — request interception proxy
 └── back-office/       forgeguard_back_office — internal ops API

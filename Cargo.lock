@@ -1242,24 +1242,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "00b0228411908ca8685dba7fc2cdd70ec9990a6e753e89b6ac91a84c40fbaf4b"
 
 [[package]]
-name = "forgeguard_agent"
-version = "0.0.0"
-dependencies = [
- "axum",
- "color-eyre",
- "forgeguard_audit",
- "forgeguard_audit_core",
- "forgeguard_authz",
- "forgeguard_authz_core",
- "forgeguard_core",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "forgeguard_audit"
 version = "0.0.0"
 dependencies = [

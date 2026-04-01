@@ -78,7 +78,7 @@ jobs:
 
       - name: Build binaries
         run: |
-          for bin in forgeguard forgeguard-control-plane forgeguard-agent forgeguard-proxy forgeguard-back-office; do
+          for bin in forgeguard forgeguard-control-plane forgeguard-proxy forgeguard-back-office; do
             cargo build --release --target ${{ matrix.target }} --bin "$bin"
             cp "target/${{ matrix.target }}/release/$bin" "${bin}-${{ matrix.binary_suffix }}" 2>/dev/null || true
           done
@@ -103,8 +103,6 @@ jobs:
         image:
           - name: control-plane
             binary: forgeguard-control-plane
-          - name: agent
-            binary: forgeguard-agent
           - name: proxy
             binary: forgeguard-proxy
           - name: back-office
