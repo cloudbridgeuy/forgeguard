@@ -80,6 +80,12 @@ docker compose up -d
 
 See [`examples/todo-app/`](examples/todo-app/) for a working end-to-end demonstration: a Python/FastAPI TODO app running behind the ForgeGuard proxy with JWT auth, API keys, public routes, feature flags, policy evaluation, and header injection.
 
+Two setup paths:
+- **API keys + VP** — `cargo xtask dev setup --vp`. No Cognito needed. Exercises everything except JWT auth.
+- **Full stack** — `cargo xtask dev setup --all`. Deploys Cognito + Verified Permissions for the complete experience.
+
+See [`infra/dev/`](infra/dev/) for AWS infrastructure details.
+
 ## License
 
 MIT
