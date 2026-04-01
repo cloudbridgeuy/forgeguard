@@ -80,29 +80,58 @@ See `~/.claude/patterns/` for architectural patterns:
 ## Workspace Structure
 
 ```
+lib/                   Published to crates.io — independent semver, full rustdocs
+└── forgeguard-axum/   forgeguard-axum — Axum middleware (uses proxy-core)
+
 crates/
-│  Pure (no I/O)
-├── core/              forgeguardcore — shared primitives, traits, error types
-├── authn-core/        forgeguardauthn_core — identity resolution types and traits
-├── authz-core/        forgeguardauthz_core — Cedar policy types, permission types
-├── audit-core/        forgeguardaudit_core — event log types, audit trail schema
-├── sdk/               forgeguardsdk — Guard, WebhookHandler (WASM-compatible)
-│  I/O
-├── authn/             forgeguardauthn — Cognito JWT resolver, JWKS caching
-├── authz/             forgeguardauthz — Verified Permissions client, decision caching
-├── http/              forgeguardhttp — route matching, config, HTTP adapter (no Pingora)
-├── audit/             forgeguardaudit — DynamoDB/S3 event log, CloudTrail
-├── ffi-python/        forgeguardffi_python — PyO3 bindings
-├── ffi-wasm/          forgeguardffi_wasm — wasm-bindgen bindings
-│  Binaries
-├── control-plane/     forgeguardcontrol_plane — dashboard API
-├── agent/             forgeguardagent — self-hosted data plane
-├── cli/               forgeguardcli — developer CLI (binary: forgeguard)
-├── proxy/             forgeguardproxy — Pingora auth-enforcing reverse proxy
-└── back-office/       forgeguardback_office — internal ops API
+│  Pure (no I/O) — published to crates.io as transitive deps (lock-step version)
+├── core/              forgeguard_core — shared primitives, traits, error types
+├── authn-core/        forgeguard_authn_core — identity resolution types and traits
+├── authz-core/        forgeguard_authz_core — Cedar policy types, permission types
+├── proxy-core/        forgeguard_proxy_core — auth pipeline, PipelineConfig, PipelineSource
+│  Pure (no I/O) — not published (publish = false)
+├── audit-core/        forgeguard_audit_core — event log types, audit trail schema
+├── sdk/               forgeguard_sdk — Guard, WebhookHandler (WASM-compatible)
+│  I/O — not published (publish = false)
+├── authn/             forgeguard_authn — Cognito JWT resolver, JWKS caching
+├── authz/             forgeguard_authz — Verified Permissions client, decision caching
+├── http/              forgeguard_http — route matching, config, HTTP adapter (no Pingora)
+├── audit/             forgeguard_audit — DynamoDB/S3 event log, CloudTrail
+├── ffi-python/        forgeguard_ffi_python — PyO3 bindings
+├── ffi-wasm/          forgeguard_ffi_wasm — wasm-bindgen bindings
+│  Binaries — not published (publish = false)
+├── control-plane/     forgeguard_control_plane — dashboard API (Lambda, uses forgeguard-axum)
+├── worker/            forgeguard_worker — background Lambda jobs (reconciler, future jobs)
+├── cli/               forgeguard_cli — developer CLI (binary: forgeguard)
+├── proxy/             forgeguard_proxy — BYOC proxy: static + connected modes
+├── proxy-saas/        forgeguard_proxy_saas — SaaS proxy: multi-org, lazy cache
+└── back-office/       forgeguard_back_office — internal ops API
+
+ui/
+└── dashboard/         React + Vite SPA, built with Bun, hosted on CloudFront+S3
 ```
 
 Each crate's `README.md` describes what it owns and its pure/I/O classification.
+
+### Publishing Rules
+
+- **`lib/` crates** — independent semver, own CHANGELOG.md, comprehensive rustdocs, separate GitHub release tags (`forgeguard-axum-v{version}`). Released via `cargo xtask release-lib`.
+- **Published `crates/` deps** (`core`, `authn-core`, `authz-core`, `proxy-core`) — lock-step versioning (all share the same version). Published only when a `lib/` crate releases. Not promoted as standalone products.
+- **Unpublished `crates/`** — `publish = false`, `version = "0.0.0"`. Everything else.
+
+## Glossary
+
+| Term | Definition |
+| --- | --- |
+| **Organization** | A ForgeGuard customer — the company that subscribes to ForgeGuard to protect their application. Each organization gets its own Cognito user pool and VP policy store. Identified by `OrganizationId`. |
+| **Tenant** | An end-user partition within an organization's application. ForgeGuard helps organizations enforce tenant isolation via Cedar policies. Identified by `TenantId`. |
+| **Control Plane** | ForgeGuard-operated SaaS: organization management, policy authoring, dashboard, billing. Contains no customer user data. |
+| **Data Plane** | The runtime enforcement layer: proxy, identity resolution, authorization decisions. In SaaS mode, operated by ForgeGuard. In BYOC mode, deployed in the organization's AWS account. |
+| **BYOC (Bring Your Own Cloud)** | Deployment model where the data plane runs in the organization's AWS account while the control plane remains ForgeGuard SaaS. |
+| **Proxy (local — static)** | Single-organization proxy binary in static mode. Reads TOML config, fully self-contained. No control plane dependency. |
+| **Proxy (local — connected)** | Single-organization proxy binary in connected mode. Fetches routes, flags, and upstream config from the control plane. Organization provides local AWS resource IDs (Cognito pool, VP store) at startup. The control plane syncs Cedar policies to the org's VP store. |
+| **Proxy (SaaS)** | Multi-organization proxy binary operated by ForgeGuard. Resolves organization from request, lazy-loads per-org config via L1 in-memory cache, L2 CloudFront/S3 (SaaS) or authenticated Lambda API (BYOC). |
+| **Worker** | Background Lambda binary (`forgeguard_worker`). Dispatches jobs by `FORGEGUARD_WORKER_JOB` env var. Currently: `reconciler` (sync pending DynamoDB records to S3). |
 
 ## Context Documents
 
@@ -116,4 +145,5 @@ Each crate's `README.md` describes what it owns and its pure/I/O classification.
 | [Verified Permissions](./.claude/context/verified-permissions.md)   | VP integration: action format, Cedar types, CLI, config, infrastructure |
 | [Container Builds](./.claude/context/container-builds.md)          | Distroless images, multi-stage builds, SSL strategy, health checks      |
 | [Proxy Shaping](./.claude/designs/proxy-shaping.md)                | Proxy design: requirements, shape, breadboard, slices                   |
+| [SaaS Architecture](./.claude/context/saas-architecture.md)        | Control/data plane split, infra stack, worker saga, org domain model    |
 | [Design Documents](./.claude/context/)                             | Full ForgeGuard architecture and technical specifications               |
