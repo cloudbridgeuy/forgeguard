@@ -24,6 +24,9 @@ forgeguard.dev.toml
 
 # Control plane org configs (contain tokens and AWS resource IDs)
 **/orgs.json
+
+# Generated signing keys (Ed25519 PEM files)
+**/keys/*.pem
 infra/dev/.env
 infra/dev/users.toml
 infra/dev/node_modules/
