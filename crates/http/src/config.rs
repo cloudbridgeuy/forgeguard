@@ -269,6 +269,53 @@ impl MetricsConfig {
 }
 
 // ---------------------------------------------------------------------------
+// ClusterConfig
+// ---------------------------------------------------------------------------
+
+/// Validated cluster configuration for Redis-backed coordination.
+#[derive(Debug, Clone)]
+pub struct ClusterConfig {
+    redis_url: url::Url,
+    instance_id: String,
+    priority: u8,
+    heartbeat_interval: Duration,
+    min_quorum: usize,
+    listen_cluster_addr: Option<SocketAddr>,
+}
+
+impl ClusterConfig {
+    /// The Redis URL for cluster coordination.
+    pub fn redis_url(&self) -> &url::Url {
+        &self.redis_url
+    }
+
+    /// The unique instance identifier.
+    pub fn instance_id(&self) -> &str {
+        &self.instance_id
+    }
+
+    /// The priority of this instance in the cluster.
+    pub fn priority(&self) -> u8 {
+        self.priority
+    }
+
+    /// The interval between heartbeats.
+    pub fn heartbeat_interval(&self) -> Duration {
+        self.heartbeat_interval
+    }
+
+    /// The minimum number of nodes required for quorum.
+    pub fn min_quorum(&self) -> usize {
+        self.min_quorum
+    }
+
+    /// The address this instance listens on for cluster traffic.
+    pub fn listen_cluster_addr(&self) -> Option<SocketAddr> {
+        self.listen_cluster_addr
+    }
+}
+
+// ---------------------------------------------------------------------------
 // ProxyConfig
 // ---------------------------------------------------------------------------
 
@@ -297,6 +344,7 @@ pub struct ProxyConfig {
     schema: SchemaConfig,
     policy_tests: Vec<PolicyTest>,
     cors: Option<crate::cors::CorsConfig>,
+    cluster: Option<ClusterConfig>,
 }
 
 impl ProxyConfig {
@@ -359,6 +407,10 @@ impl ProxyConfig {
     }
     pub fn cors(&self) -> Option<&crate::cors::CorsConfig> {
         self.cors.as_ref()
+    }
+    /// The cluster configuration, if present.
+    pub fn cluster(&self) -> Option<&ClusterConfig> {
+        self.cluster.as_ref()
     }
 }
 
@@ -552,6 +604,8 @@ impl TryFrom<RawProxyConfig> for ProxyConfig {
             .transpose()
             .map_err(Error::Validation)?;
 
+        let cluster = raw.cluster.as_ref().map(parse_cluster_config).transpose()?;
+
         Ok(ProxyConfig {
             project_id,
             listen_addr,
@@ -573,8 +627,39 @@ impl TryFrom<RawProxyConfig> for ProxyConfig {
             schema,
             policy_tests,
             cors,
+            cluster,
         })
     }
+}
+
+fn parse_cluster_config(raw: &crate::config_raw::RawClusterConfig) -> Result<ClusterConfig> {
+    let redis_url: url::Url = raw.redis_url.parse().map_err(|e| {
+        Error::Config(format!(
+            "cluster.redis_url: invalid URL '{}': {e}",
+            raw.redis_url
+        ))
+    })?;
+
+    let listen_cluster_addr = raw
+        .listen_cluster_addr
+        .as_deref()
+        .map(|s| {
+            s.parse::<SocketAddr>().map_err(|e| {
+                Error::Config(format!(
+                    "cluster.listen_cluster_addr: invalid socket address '{s}': {e}"
+                ))
+            })
+        })
+        .transpose()?;
+
+    Ok(ClusterConfig {
+        redis_url,
+        instance_id: raw.instance_id.clone(),
+        priority: raw.priority,
+        heartbeat_interval: Duration::from_secs(raw.heartbeat_interval_secs),
+        min_quorum: raw.min_quorum,
+        listen_cluster_addr,
+    })
 }
 
 fn parse_jwt_config(raw: crate::config_raw::RawJwtConfig) -> Result<JwtConfig> {

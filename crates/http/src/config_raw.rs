@@ -42,6 +42,8 @@ pub(crate) struct RawProxyConfig {
     #[serde(default)]
     pub(crate) cors: Option<crate::cors::RawCorsConfig>,
     #[serde(default)]
+    pub(crate) cluster: Option<RawClusterConfig>,
+    #[serde(default)]
     pub(crate) authn: Option<RawAuthnConfig>,
     #[serde(default)]
     pub(crate) api_keys: Vec<RawApiKeyEntry>,
@@ -175,6 +177,38 @@ fn default_auth_mode() -> String {
 pub(crate) struct RawAwsConfig {
     pub(crate) region: Option<String>,
     pub(crate) profile: Option<String>,
+}
+
+/// Raw cluster configuration.
+/// Maps the `[cluster]` TOML section.
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawClusterConfig {
+    pub(crate) redis_url: String,
+    #[serde(default = "default_instance_id")]
+    pub(crate) instance_id: String,
+    #[serde(default = "default_priority")]
+    pub(crate) priority: u8,
+    #[serde(default = "default_heartbeat_interval_secs")]
+    pub(crate) heartbeat_interval_secs: u64,
+    #[serde(default = "default_min_quorum")]
+    pub(crate) min_quorum: usize,
+    pub(crate) listen_cluster_addr: Option<String>,
+}
+
+fn default_instance_id() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
+fn default_priority() -> u8 {
+    1
+}
+
+fn default_heartbeat_interval_secs() -> u64 {
+    5
+}
+
+fn default_min_quorum() -> usize {
+    1
 }
 
 /// Raw entity schema definition.

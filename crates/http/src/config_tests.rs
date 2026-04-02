@@ -608,3 +608,67 @@ fn apply_overrides_changes_upstream_url_recomputes_target() {
     assert!(config.upstream_target().tls());
     assert_eq!(config.upstream_target().sni(), "api.example.com");
 }
+
+#[test]
+fn parse_cluster_config_section() {
+    let toml = r#"
+        project_id = "test"
+        listen_addr = "127.0.0.1:8080"
+        upstream_url = "http://127.0.0.1:3000"
+
+        [cluster]
+        redis_url = "redis://127.0.0.1:6379"
+        instance_id = "proxy-1"
+        priority = 3
+        heartbeat_interval_secs = 5
+        min_quorum = 2
+        listen_cluster_addr = "10.0.1.1:8080"
+    "#;
+
+    let config = parse_config(toml).unwrap();
+    let cluster = config.cluster().unwrap();
+    assert_eq!(cluster.redis_url().host_str(), Some("127.0.0.1"));
+    assert_eq!(cluster.instance_id(), "proxy-1");
+    assert_eq!(cluster.priority(), 3);
+    assert_eq!(cluster.heartbeat_interval(), Duration::from_secs(5));
+    assert_eq!(cluster.min_quorum(), 2);
+    assert_eq!(
+        cluster.listen_cluster_addr().unwrap().to_string(),
+        "10.0.1.1:8080"
+    );
+}
+
+#[test]
+fn parse_config_without_cluster_section() {
+    let config = parse_config(MINIMAL_TOML).unwrap();
+    assert!(config.cluster().is_none());
+}
+
+#[test]
+fn parse_cluster_config_invalid_redis_url_errors() {
+    let toml = r#"
+        project_id = "test"
+        listen_addr = "127.0.0.1:8080"
+        upstream_url = "http://127.0.0.1:3000"
+
+        [cluster]
+        redis_url = "not a url"
+    "#;
+    let err = parse_config(toml).unwrap_err();
+    assert!(err.to_string().contains("cluster.redis_url"));
+}
+
+#[test]
+fn parse_cluster_config_invalid_listen_addr_errors() {
+    let toml = r#"
+        project_id = "test"
+        listen_addr = "127.0.0.1:8080"
+        upstream_url = "http://127.0.0.1:3000"
+
+        [cluster]
+        redis_url = "redis://127.0.0.1:6379"
+        listen_cluster_addr = "not-an-addr"
+    "#;
+    let err = parse_config(toml).unwrap_err();
+    assert!(err.to_string().contains("cluster.listen_cluster_addr"));
+}
