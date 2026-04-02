@@ -6,13 +6,82 @@ All data is in-memory (no database). Multi-tenant: data is scoped by tenant.
 
 from __future__ import annotations
 
+import base64
 import json
+import os
 import uuid
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 
 app = FastAPI(title="ForgeGuard TODO Demo", version="0.1.0")
+
+# ---------------------------------------------------------------------------
+# Signature verification (optional)
+# ---------------------------------------------------------------------------
+# Set FORGEGUARD_PUBLIC_KEY to the path of the Ed25519 public key PEM file.
+# When set, every request with signature headers is verified and the result
+# is included in the response as "signature_verified": true/false.
+
+_VERIFYING_KEY = None
+_PUBLIC_KEY_PATH = os.environ.get("FORGEGUARD_PUBLIC_KEY")
+
+if _PUBLIC_KEY_PATH:
+    from cryptography.hazmat.primitives.serialization import load_pem_public_key
+
+    with open(_PUBLIC_KEY_PATH, "rb") as f:
+        _VERIFYING_KEY = load_pem_public_key(f.read())
+
+
+def verify_signature(request: Request) -> dict[str, Any] | None:
+    """Verify the Ed25519 signature on X-ForgeGuard-* headers.
+
+    Returns None if no signature headers are present or no public key is
+    configured. Otherwise returns {"verified": bool, "error": str | None}.
+    """
+    sig_header = request.headers.get("x-forgeguard-signature")
+    if not sig_header or not _VERIFYING_KEY:
+        return None
+
+    try:
+        trace_id = request.headers.get("x-forgeguard-trace-id", "")
+        timestamp = request.headers.get("x-forgeguard-timestamp", "")
+
+        # Collect identity headers (exclude signature-related ones)
+        skip = {
+            "x-forgeguard-signature",
+            "x-forgeguard-timestamp",
+            "x-forgeguard-trace-id",
+            "x-forgeguard-key-id",
+        }
+        identity_headers = sorted(
+            (k, v)
+            for k, v in request.headers.items()
+            if k.startswith("x-forgeguard-") and k not in skip
+        )
+
+        # Reconstruct canonical payload (must match Rust CanonicalPayload::new)
+        lines = [
+            "forgeguard-sig-v1",
+            f"trace-id:{trace_id}",
+            f"timestamp:{timestamp}",
+        ]
+        for name, value in identity_headers:
+            lines.append(f"{name}:{value}")
+        canonical = "".join(line + "\n" for line in lines).encode()
+
+        # Parse "v1:{base64}" signature
+        if not sig_header.startswith("v1:"):
+            return {"verified": False, "error": "unknown signature version"}
+        sig_bytes = base64.b64decode(sig_header[3:])
+
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+        assert isinstance(_VERIFYING_KEY, Ed25519PublicKey)
+        _VERIFYING_KEY.verify(sig_bytes, canonical)
+        return {"verified": True, "error": None}
+    except Exception as exc:
+        return {"verified": False, "error": str(exc)}
 
 # ---------------------------------------------------------------------------
 # In-memory store — keyed by tenant
@@ -65,7 +134,7 @@ def get_identity(request: Request) -> dict[str, Any]:
     features = json.loads(features_raw) if features_raw else {}
     client_ip = request.headers.get("x-forgeguard-client-ip")
 
-    return {
+    result = {
         "user_id": user_id,
         "tenant_id": tenant_id,
         "groups": groups,
@@ -73,6 +142,14 @@ def get_identity(request: Request) -> dict[str, Any]:
         "features": features,
         "client_ip": client_ip,
     }
+
+    sig_result = verify_signature(request)
+    if sig_result is not None:
+        result["signature_verified"] = sig_result["verified"]
+        if sig_result["error"]:
+            result["signature_error"] = sig_result["error"]
+
+    return result
 
 
 def get_tenant_store(tenant_id: str | None) -> dict[str, dict[str, Any]]:

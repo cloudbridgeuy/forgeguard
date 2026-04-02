@@ -74,6 +74,40 @@ Use this for the complete experience including Cognito JWT authentication.
    curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/lists
    ```
 
+### Request Signing (optional)
+
+Enable Ed25519 signing of outbound `X-ForgeGuard-*` headers so the upstream
+can cryptographically verify requests came from the proxy.
+
+1. Generate an Ed25519 keypair:
+
+   ```bash
+   cargo run --bin forgeguard -- keygen --out-dir keys
+   ```
+
+   This creates `keys/forgeguard.private.pem` and `keys/forgeguard.public.pem`,
+   and prints a key ID (e.g., `fg-20260401-a1b2c3`).
+
+2. Add a `[signing]` section to `forgeguard.dev.toml`:
+
+   ```toml
+   [signing]
+   key_path = "keys/forgeguard.private.pem"
+   key_id = "fg-20260401-a1b2c3"   # use the key ID from step 1
+   ```
+
+3. Start the proxy normally. Requests to the upstream will now include four
+   extra headers: `X-ForgeGuard-Signature`, `X-ForgeGuard-Timestamp`,
+   `X-ForgeGuard-Trace-Id`, and `X-ForgeGuard-Key-Id`.
+
+4. Verify by hitting the debug context endpoint:
+
+   ```bash
+   curl -s -H "X-API-Key: sk-test-alice-admin" http://localhost:8080/debug/context | jq .forgeguard_headers
+   ```
+
+   You should see the signature headers alongside the identity headers.
+
 ## Quick Start
 
 ```bash
@@ -84,6 +118,16 @@ uv run uvicorn app:app --port 3000
 # Terminal 2: Start the proxy
 cargo run --bin forgeguard-proxy -- run --config forgeguard.dev.toml --debug
 ```
+
+To enable signature verification on the Python app, set `FORGEGUARD_PUBLIC_KEY`:
+
+```bash
+# Terminal 1 (with verification):
+FORGEGUARD_PUBLIC_KEY=keys/forgeguard.public.pem uv run uvicorn app:app --port 3000
+```
+
+When configured, every authenticated response includes `"signature_verified": true`
+in the `identity` object.
 
 The proxy listens on `localhost:8080`, the app on `localhost:3000`.
 
@@ -106,6 +150,28 @@ environment variable so it can reach the app container by service name.
 
 Ports are the same as the manual setup: proxy on `localhost:8080`, app on
 `localhost:3000`. All `curl` commands in the demo scenarios below work unchanged.
+
+### Docker Compose with request signing
+
+To enable request signing in the Docker Compose setup:
+
+1. Generate keys into `examples/todo-app/keys/`:
+
+   ```bash
+   cargo run --bin forgeguard -- keygen --out-dir examples/todo-app/keys
+   ```
+
+2. Uncomment the `[signing]` section in `examples/todo-app/forgeguard.toml` and
+   update the path to the container mount point:
+
+   ```toml
+   [signing]
+   key_path = "/etc/forgeguard/keys/forgeguard.private.pem"
+   key_id = "fg-20260401-a1b2c3"   # use the key ID from step 1
+   ```
+
+3. Run `docker compose up --build` as usual. The `keys/` directory is
+   mounted read-only into the proxy container at `/etc/forgeguard/keys/`.
 
 To tear everything down:
 
@@ -180,14 +246,27 @@ curl -H "X-API-Key: sk-test-alice-admin" http://localhost:8080/api/lists/top-sec
 curl -H "X-API-Key: sk-test-charlie-viewer" http://localhost:8080/api/lists/top-secret
 ```
 
-### 6. Debug context
+### 6. Request signing (requires `[signing]` config)
+
+```bash
+# Hit the debug endpoint — signature headers visible in the response
+curl -s -H "X-API-Key: sk-test-alice-admin" http://localhost:8080/debug/context | jq .forgeguard_headers
+```
+
+When signing is enabled you will see four additional headers:
+- `x-forgeguard-signature` — `v1:{base64}` Ed25519 signature over all identity headers
+- `x-forgeguard-timestamp` — Unix milliseconds when the request was signed
+- `x-forgeguard-trace-id` — UUID v7 unique to this request
+- `x-forgeguard-key-id` — Identifies which signing key was used
+
+### 7. Debug context
 
 ```bash
 # See all injected headers
 curl -H "X-API-Key: sk-test-alice-admin" http://localhost:8080/debug/context
 ```
 
-### 7. CLI commands
+### 8. CLI commands
 
 ```bash
 # Validate config
@@ -294,5 +373,6 @@ Client → proxy:8080 → app:3000
            ├─ Check feature gate
            ├─ Evaluate policy (Verified Permissions)
            ├─ Inject X-ForgeGuard-* headers (user, tenant, groups, features)
+           ├─ Sign headers with Ed25519 (if [signing] configured)
            └─ Proxy to upstream (app scopes data by tenant header)
 ```

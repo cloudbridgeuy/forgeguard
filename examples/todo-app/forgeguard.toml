@@ -36,6 +36,13 @@ profile = "admin"
 # heartbeat_interval_secs = 5
 # min_quorum = 1
 
+# --- Request Signing (optional) ---
+# Uncomment to sign outbound X-ForgeGuard-* headers with Ed25519.
+# Generate keys with: forgeguard keygen --out-dir ./keys
+# [signing]
+# key_path = "./keys/forgeguard.private.pem"
+# key_id = "proxy-dev-01"
+
 # ---------------------------------------------------------------------------
 # Metrics (Prometheus)
 # ---------------------------------------------------------------------------
