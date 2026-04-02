@@ -21,6 +21,9 @@ use axum::Router;
 use serde_json::Value;
 use tempfile::NamedTempFile;
 
+use ed25519_dalek::pkcs8::EncodePrivateKey as _;
+use ed25519_dalek::SigningKey as DalekSigningKey;
+
 // ---------------------------------------------------------------------------
 // Echo upstream
 // ---------------------------------------------------------------------------
@@ -131,6 +134,34 @@ value = true
     )
 }
 
+fn test_config_toml_with_signing(upstream_port: u16, key_path: &str, key_id: &str) -> String {
+    let base = test_config_toml(upstream_port);
+    format!(
+        r#"{base}
+
+[signing]
+key_path = "{key_path}"
+key_id = "{key_id}"
+"#
+    )
+}
+
+/// Generate an Ed25519 keypair and write the private key PEM to a temp file.
+/// Returns (temp_file, dalek_signing_key) — keep the temp_file alive for the test.
+fn generate_test_keypair() -> (NamedTempFile, DalekSigningKey) {
+    let mut rng = rand::thread_rng();
+    let signing_key = DalekSigningKey::generate(&mut rng);
+    let pem = signing_key
+        .to_pkcs8_pem(ed25519_dalek::pkcs8::spki::der::pem::LineEnding::LF)
+        .unwrap();
+
+    let mut key_file = NamedTempFile::new().unwrap();
+    key_file.write_all(pem.as_bytes()).unwrap();
+    key_file.flush().unwrap();
+
+    (key_file, signing_key)
+}
+
 // ---------------------------------------------------------------------------
 // Test harness
 // ---------------------------------------------------------------------------
@@ -140,6 +171,8 @@ struct TestHarness {
     client: reqwest::Client,
     proxy_child: Child,
     _config_file: NamedTempFile,
+    // Keep the key file alive for signing tests
+    _key_file: Option<NamedTempFile>,
 }
 
 impl Drop for TestHarness {
@@ -152,11 +185,22 @@ impl Drop for TestHarness {
 impl TestHarness {
     async fn start() -> Self {
         let upstream_port = start_echo_upstream().await;
+        let config_str = test_config_toml(upstream_port);
+        Self::start_with_config(&config_str, None).await
+    }
 
+    async fn start_with_signing() -> (Self, DalekSigningKey) {
+        let upstream_port = start_echo_upstream().await;
+        let (key_file, signing_key) = generate_test_keypair();
+        let key_path = key_file.path().to_str().unwrap().to_string();
+        let config_str = test_config_toml_with_signing(upstream_port, &key_path, "test-key-001");
+        let harness = Self::start_with_config(&config_str, Some(key_file)).await;
+        (harness, signing_key)
+    }
+
+    async fn start_with_config(config_str: &str, key_file: Option<NamedTempFile>) -> Self {
         let mut config_file = NamedTempFile::new().unwrap();
-        config_file
-            .write_all(test_config_toml(upstream_port).as_bytes())
-            .unwrap();
+        config_file.write_all(config_str.as_bytes()).unwrap();
 
         // Find a free port for the proxy
         let proxy_port = {
@@ -188,6 +232,7 @@ impl TestHarness {
             client,
             proxy_child,
             _config_file: config_file,
+            _key_file: key_file,
         };
 
         harness.wait_for_health().await;
@@ -364,4 +409,87 @@ async fn feature_gate_disabled_returns_404() {
         .await;
 
     assert_eq!(resp.status(), 404);
+}
+
+// ---------------------------------------------------------------------------
+// Signing tests
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn signing_injects_signature_headers() {
+    let (harness, _signing_key) = TestHarness::start_with_signing().await;
+
+    let resp = harness.get_with_key("/api/lists", "sk-test-alice").await;
+
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    let headers = &body["forgeguard_headers"];
+
+    // All four signature headers must be present and non-empty
+    for header_name in [
+        "x-forgeguard-signature",
+        "x-forgeguard-timestamp",
+        "x-forgeguard-trace-id",
+        "x-forgeguard-key-id",
+    ] {
+        let val = headers[header_name].as_str().unwrap_or("");
+        assert!(!val.is_empty(), "{header_name} should be non-empty");
+    }
+
+    assert_eq!(headers["x-forgeguard-key-id"], "test-key-001");
+    assert!(headers["x-forgeguard-signature"]
+        .as_str()
+        .unwrap()
+        .starts_with("v1:"));
+}
+
+#[tokio::test]
+async fn signing_signature_verifies() {
+    let (harness, signing_key) = TestHarness::start_with_signing().await;
+
+    let resp = harness.get_with_key("/api/lists", "sk-test-alice").await;
+
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    let headers = &body["forgeguard_headers"];
+
+    // Extract signature components from the echo response
+    let sig_header = headers["x-forgeguard-signature"].as_str().unwrap();
+    let timestamp_str = headers["x-forgeguard-timestamp"].as_str().unwrap();
+    let trace_id = headers["x-forgeguard-trace-id"].as_str().unwrap();
+
+    // Collect the identity headers (excluding signature-related ones)
+    let identity_headers: Vec<(String, String)> = headers
+        .as_object()
+        .unwrap()
+        .iter()
+        .filter(|(k, _)| {
+            k.starts_with("x-forgeguard-")
+                && *k != "x-forgeguard-signature"
+                && *k != "x-forgeguard-timestamp"
+                && *k != "x-forgeguard-trace-id"
+                && *k != "x-forgeguard-key-id"
+        })
+        .map(|(k, v)| (k.clone(), v.as_str().unwrap().to_string()))
+        .collect();
+
+    // Reconstruct canonical payload
+    let timestamp = forgeguard_authn_core::signing::Timestamp::from_millis(
+        timestamp_str.parse::<u64>().unwrap(),
+    );
+    let payload = forgeguard_authn_core::signing::CanonicalPayload::new(
+        trace_id,
+        timestamp,
+        &identity_headers,
+    );
+
+    // Parse the signature
+    let signature = forgeguard_authn_core::signing::parse_signature_header(sig_header).unwrap();
+
+    // Verify using the public key derived from the test signing key
+    let verifying_key = forgeguard_authn_core::signing::VerifyingKey::from_bytes(
+        signing_key.verifying_key().as_bytes(),
+    )
+    .unwrap();
+    forgeguard_authn_core::signing::verify(&verifying_key, &payload, &signature).unwrap();
 }
