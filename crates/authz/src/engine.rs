@@ -7,8 +7,9 @@ use aws_sdk_verifiedpermissions::types::EntitiesDefinition;
 use forgeguard_authz_core::{CacheStats, DenyReason, PolicyDecision, PolicyEngine, PolicyQuery};
 use forgeguard_core::{ProjectId, TenantId};
 
-use crate::cache::{build_cache_key, AuthzCache, CacheKey};
+use crate::cache::{build_cache_key, CacheKey};
 use crate::config::VpEngineConfig;
+use crate::tiered_cache::TieredCache;
 use crate::translate::{
     build_vp_entities, build_vp_request, translate_vp_decision, VpRequestComponents,
 };
@@ -24,7 +25,7 @@ pub struct VpPolicyEngine {
     policy_store_id: String,
     project_id: ProjectId,
     tenant_id: TenantId,
-    cache: AuthzCache,
+    cache: TieredCache,
 }
 
 impl VpPolicyEngine {
@@ -34,8 +35,8 @@ impl VpPolicyEngine {
         config: &VpEngineConfig,
         project_id: ProjectId,
         tenant_id: TenantId,
+        cache: TieredCache,
     ) -> Self {
-        let cache = AuthzCache::new(config.cache_ttl(), config.cache_max_entries());
         Self {
             client,
             policy_store_id: config.policy_store_id().to_string(),
@@ -74,7 +75,7 @@ impl VpPolicyEngine {
             }
         };
 
-        self.cache.insert(cache_key, decision.clone());
+        self.cache.insert(&cache_key, &decision);
         decision
     }
 }
@@ -85,15 +86,7 @@ impl PolicyEngine for VpPolicyEngine {
         query: &PolicyQuery,
     ) -> Pin<Box<dyn Future<Output = forgeguard_authz_core::Result<PolicyDecision>> + Send + '_>>
     {
-        // Extract everything we need from `query` synchronously so the future
-        // only borrows `&self` (matching the trait's `'_` lifetime).
         let cache_key = build_cache_key(query);
-
-        // Check cache first — return immediately on hit.
-        if let Some(cached) = self.cache.get(&cache_key) {
-            tracing::debug!("cache hit");
-            return Box::pin(std::future::ready(Ok(cached)));
-        }
 
         // Build VP request components (pure translation, no I/O).
         let components = match build_vp_request(query, &self.project_id, &self.tenant_id) {
@@ -122,13 +115,29 @@ impl PolicyEngine for VpPolicyEngine {
             }
         };
 
-        Box::pin(async move { Ok(self.call_vp(cache_key, components, entities).await) })
+        Box::pin(async move {
+            // Check cache (async — may hit L2/Redis)
+            if let Some(cached) = self.cache.get(&cache_key).await {
+                tracing::debug!("cache hit");
+                return Ok(cached);
+            }
+
+            Ok(self.call_vp(cache_key, components, entities).await)
+        })
     }
 
     fn cache_stats(&self) -> Option<CacheStats> {
-        Some(CacheStats::new(
-            self.cache.cache_hits(),
-            self.cache.cache_misses(),
-        ))
+        let mut stats = CacheStats::new(
+            self.cache.l1_hits() + self.cache.l2_hits(),
+            self.cache.l1_misses(),
+        );
+        if self.cache.has_l2() {
+            stats = stats.with_l2(
+                self.cache.l2_hits(),
+                self.cache.l2_misses(),
+                self.cache.l2_errors(),
+            );
+        }
+        Some(stats)
     }
 }

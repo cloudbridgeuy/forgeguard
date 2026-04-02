@@ -18,7 +18,7 @@ use lru::LruCache;
 /// Wraps a `String` built from the query's principal, action, resource,
 /// tenant, and group components. Two queries that produce the same key are
 /// considered equivalent for caching purposes.
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct CacheKey(String);
 
 impl CacheKey {
@@ -38,7 +38,7 @@ impl CacheKey {
 ///
 /// Uses `Display` representations of the typed IDs so we don't need `Hash`
 /// on every core type.
-pub(crate) fn build_cache_key(query: &PolicyQuery) -> CacheKey {
+pub fn build_cache_key(query: &PolicyQuery) -> CacheKey {
     let principal_id = query.principal().user_id().as_str();
     let action = query.action().to_string();
 
