@@ -11,6 +11,7 @@
 - **Releases:** `cargo xtask release` — see [commit-and-release.md](./.claude/context/commit-and-release.md)
 - **Rust toolchain:** pinned in `rust-toolchain.toml` to match MSRV
 - **Container images:** distroless, multi-stage — see [container-builds.md](./.claude/context/container-builds.md)
+- **Request signing:** optional Ed25519 outbound header signing — `[signing]` config, see [request-signing.md](./.claude/context/request-signing.md)
 - **Cluster mode:** optional Redis-backed shared authz cache — `[cluster]` config, see [cluster.md](./.claude/context/cluster.md)
 - **Metrics:** Prometheus via Pingora's `PrometheusServer` — `[metrics] enabled = true` in config
 - **Control plane:** Axum service, file-backed org config — see [control-plane.md](./.claude/context/control-plane.md)
@@ -152,7 +153,8 @@ Each crate's `README.md` describes what it owns and its pure/I/O classification.
 | [Proxy Shaping](./.claude/designs/proxy-shaping.md)                | Proxy design: requirements, shape, breadboard, slices                   |
 | [SaaS Architecture](./.claude/context/saas-architecture.md)        | Control/data plane split, infra stack, worker saga, org domain model    |
 | [Authn Wiring](./.claude/context/authn-wiring.md)                  | JWT + API key config, resolver construction, FCIS split                 |
-| [CLI](./.claude/context/cli.md)                                    | `check`, `routes`, `policies` subcommands, FCIS architecture            |
+| [CLI](./.claude/context/cli.md)                                    | `check`, `routes`, `policies`, `keygen` subcommands, FCIS architecture  |
+| [Request Signing](./.claude/context/request-signing.md)            | Ed25519 signing: canonical payload, config, key rotation, crate layout  |
 | [Demo App](./.claude/context/demo-app.md)                          | E2E demo: Python TODO app, native proxy, demo config, running instructions |
 | [Control Plane](./.claude/context/control-plane.md)                | CP scaffold, proxy-config endpoint, OrgStore trait, auth, ETag, testing |
 | [Cluster Mode](./.claude/context/cluster.md)                       | TieredCache, Redis wiring, config, health stats, future slices          |

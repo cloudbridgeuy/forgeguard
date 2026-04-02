@@ -56,10 +56,11 @@ Starts: Python app (`:3000`), proxy (`:8080`), Prometheus (`:9090`). The proxy o
 - **4 policies:** admin-full, member-crud, viewer-read, top-secret-deny with `except`
 - **5 feature flags:** maintenance-mode, todo:ai-suggestions (tenant override), todo:sharing (rollout), todo:max-upload-mb (number + override), todo:premium-ai (string + override)
 - **Metrics:** Prometheus endpoint on port 6150 (`[metrics] enabled = true`)
+- **Request signing:** optional Ed25519 verification via `FORGEGUARD_PUBLIC_KEY` env var — see [request-signing.md](request-signing.md)
 
 ## Integration Tests
 
-`crates/proxy/tests/integration.rs` — 11 end-to-end tests exercising the proxy binary.
+`crates/proxy/tests/integration.rs` — 13 end-to-end tests exercising the proxy binary.
 
 Run: `cargo test -p forgeguard_proxy`
 
@@ -78,3 +79,5 @@ Tests use a harness that spawns an axum echo upstream + proxy child process per 
 | `opportunistic_with_cred` | Opportunistic route injects headers with creds |
 | `feature_gate_enabled_returns_200` | Feature-gated route passes for enabled tenant |
 | `feature_gate_disabled_returns_404` | Feature-gated route blocked for disabled tenant |
+| `signing_injects_signature_headers` | Signing adds 4 signature headers when configured |
+| `signing_signature_verifies` | Full round-trip: sign, echo, reconstruct, verify |

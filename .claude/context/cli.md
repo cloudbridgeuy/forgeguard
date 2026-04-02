@@ -11,6 +11,7 @@ The developer CLI for config validation, policy management, and route inspection
 | `forgeguard policies validate` | Validate Cedar policies locally | File read only |
 | `forgeguard policies sync` | Sync policies to Verified Permissions | AWS API calls |
 | `forgeguard policies test` | Test authorization decisions against VP | AWS API calls |
+| `forgeguard keygen --out-dir <path>` | Generate Ed25519 signing keypair (PEM) | File write, RNG |
 
 ## Architecture (FCIS)
 
