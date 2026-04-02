@@ -11,6 +11,7 @@ use clap::Parser;
 use pingora_core::server::Server;
 use tracing_subscriber::EnvFilter;
 
+use forgeguard_authn_core::signing::SigningKey;
 use forgeguard_authn_core::IdentityChain;
 use forgeguard_authz::VpEngineConfig;
 use forgeguard_authz::VpPolicyEngine;
@@ -109,6 +110,21 @@ fn run(app: App) -> color_eyre::Result<()> {
         config.auth().chain_order().to_vec(),
     );
 
+    let signing = if let Some(signing_config) = config.signing() {
+        let pem = std::fs::read_to_string(signing_config.key_path()).map_err(|e| {
+            color_eyre::eyre::eyre!(
+                "failed to read signing key at '{}': {e}",
+                signing_config.key_path().display()
+            )
+        })?;
+        let key = SigningKey::from_pkcs8_pem(&pem)
+            .map_err(|e| color_eyre::eyre::eyre!("invalid signing key: {e}"))?;
+        tracing::info!(key_id = %signing_config.key_id(), "request signing enabled");
+        Some((key, signing_config.key_id().clone()))
+    } else {
+        None
+    };
+
     let proxy = ForgeGuardProxy::new(ProxyParams {
         pipeline_config,
         identity_chain,
@@ -116,6 +132,7 @@ fn run(app: App) -> color_eyre::Result<()> {
         upstream: target,
         client_ip_source: config.client_ip_source(),
         cors: config.cors().cloned(),
+        signing,
     });
 
     let mut server =

@@ -11,11 +11,13 @@ use pingora_proxy::{ProxyHttp, Session};
 
 use std::sync::LazyLock;
 
+use forgeguard_authn_core::signing::{KeyId, SigningKey, Timestamp};
 use forgeguard_authn_core::{Identity, IdentityChain};
 use forgeguard_authz_core::PolicyEngine;
 use forgeguard_core::ResolvedFlags;
 use forgeguard_http::{
-    ClientIpSource, CorsConfig, IdentityProjection, MatchedRoute, UpstreamTarget,
+    inject_signed_headers, ClientIpSource, CorsConfig, IdentityProjection, MatchedRoute,
+    UpstreamTarget,
 };
 use forgeguard_proxy_core::{evaluate_pipeline, PipelineConfig, PipelineOutcome, RequestInput};
 
@@ -68,6 +70,7 @@ pub(crate) struct ProxyParams {
     pub upstream: UpstreamTarget,
     pub client_ip_source: ClientIpSource,
     pub cors: Option<CorsConfig>,
+    pub signing: Option<(SigningKey, KeyId)>,
 }
 
 /// The Pingora `ProxyHttp` implementation.
@@ -82,6 +85,8 @@ pub(crate) struct ForgeGuardProxy {
     client_ip_source: ClientIpSource,
     /// Optional CORS configuration for preflight and response header injection.
     cors: Option<CorsConfig>,
+    /// Optional Ed25519 signing key for request signing.
+    signing: Option<(SigningKey, KeyId)>,
 }
 
 impl ForgeGuardProxy {
@@ -93,6 +98,7 @@ impl ForgeGuardProxy {
             upstream: params.upstream,
             client_ip_source: params.client_ip_source,
             cors: params.cors,
+            signing: params.signing,
         }
     }
 }
@@ -225,7 +231,10 @@ impl ProxyHttp for ForgeGuardProxy {
     ) -> Result<()> {
         if let Some(identity) = &ctx.identity {
             let projection = IdentityProjection::new(identity, ctx.flags.as_ref(), ctx.client_ip);
-            let headers = forgeguard_http::inject_headers(&projection);
+            let signing_ref = self.signing.as_ref().map(|(key, id)| (key, id));
+            let trace_id = uuid::Uuid::now_v7().to_string();
+            let now = Timestamp::from_system_time(std::time::SystemTime::now());
+            let headers = inject_signed_headers(&projection, signing_ref, &trace_id, now);
             for (name, value) in headers {
                 let _ = upstream_request.insert_header(name, value);
             }
