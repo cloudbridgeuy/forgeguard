@@ -2,6 +2,7 @@
 
 mod aws;
 mod check;
+mod keygen;
 mod policies;
 mod routes;
 
@@ -40,6 +41,18 @@ enum Command {
     Check,
     /// Display the route table from a configuration file.
     Routes,
+    /// Generate an Ed25519 signing keypair for request signing.
+    Keygen {
+        /// Directory to write the key files to.
+        #[arg(long, default_value = ".")]
+        out_dir: PathBuf,
+        /// Key identifier (auto-generated if omitted).
+        #[arg(long)]
+        key_id: Option<String>,
+        /// Overwrite existing key files.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -59,6 +72,11 @@ async fn main() -> Result<()> {
         Command::Policies { command } => command.run(&cli.config).await?,
         Command::Check => check::run(&cli.config)?,
         Command::Routes => routes::run(&cli.config)?,
+        Command::Keygen {
+            out_dir,
+            key_id,
+            force,
+        } => keygen::run(&out_dir, key_id.as_deref(), force)?,
     }
 
     Ok(())
