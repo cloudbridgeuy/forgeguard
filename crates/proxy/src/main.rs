@@ -235,11 +235,44 @@ fn build_policy_engine(
             .with_cache_ttl(authz.cache_ttl())
             .with_cache_max_entries(authz.cache_max_entries());
 
+        // Build L1 cache
+        let l1 = forgeguard_authz::AuthzCache::new(authz.cache_ttl(), authz.cache_max_entries());
+
+        // Build optional L2 (Redis) cache
+        let l2 = if let Some(cluster) = config.cluster() {
+            match redis::Client::open(cluster.redis_url().as_str()) {
+                Ok(client) => match rt.block_on(client.get_connection_manager()) {
+                    Ok(conn) => {
+                        tracing::info!(url = %cluster.redis_url(), "Redis L2 cache connected");
+                        Some(conn)
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            "Redis L2 cache unavailable — starting with L1 only"
+                        );
+                        None
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "invalid Redis URL — starting with L1 only"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        let cache = forgeguard_authz::TieredCache::new(l1, l2, authz.cache_ttl());
+
         let project_id = config.project_id().clone();
         let tenant_id = forgeguard_core::TenantId::new("default")
             .map_err(|e| color_eyre::eyre::eyre!("invalid default tenant: {e}"))?;
 
-        let engine = VpPolicyEngine::new(vp_client, &engine_config, project_id, tenant_id);
+        let engine = VpPolicyEngine::new(vp_client, &engine_config, project_id, tenant_id, cache);
         Ok(Arc::new(engine))
     } else {
         Ok(Arc::new(AllowAllEngine))

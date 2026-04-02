@@ -11,6 +11,7 @@
 - **Releases:** `cargo xtask release` — see [commit-and-release.md](./.claude/context/commit-and-release.md)
 - **Rust toolchain:** pinned in `rust-toolchain.toml` to match MSRV
 - **Container images:** distroless, multi-stage — see [container-builds.md](./.claude/context/container-builds.md)
+- **Cluster mode:** optional Redis-backed shared authz cache — `[cluster]` config, see [cluster.md](./.claude/context/cluster.md)
 - **Metrics:** Prometheus via Pingora's `PrometheusServer` — `[metrics] enabled = true` in config
 - **Integration tests:** `cargo test -p forgeguard_proxy` — see [demo-app.md](./.claude/context/demo-app.md)
 - **Demo app:** native or Docker Compose — see [demo-app.md](./.claude/context/demo-app.md)
@@ -152,6 +153,7 @@ Each crate's `README.md` describes what it owns and its pure/I/O classification.
 | [Authn Wiring](./.claude/context/authn-wiring.md)                  | JWT + API key config, resolver construction, FCIS split                 |
 | [CLI](./.claude/context/cli.md)                                    | `check`, `routes`, `policies` subcommands, FCIS architecture            |
 | [Demo App](./.claude/context/demo-app.md)                          | E2E demo: Python TODO app, native proxy, demo config, running instructions |
+| [Cluster Mode](./.claude/context/cluster.md)                       | TieredCache, Redis wiring, config, health stats, future slices          |
 | [Design Documents](./.claude/context/)                             | Full ForgeGuard architecture and technical specifications               |
 
 ### Local-Only Documents (MUST NOT commit)

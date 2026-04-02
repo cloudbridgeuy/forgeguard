@@ -168,6 +168,15 @@ impl ProxyHttp for ForgeGuardProxy {
             if let Some(stats) = self.policy_engine.cache_stats() {
                 body["cache_hits"] = stats.hits().into();
                 body["cache_misses"] = stats.misses().into();
+                if let Some(l2_hits) = stats.l2_hits() {
+                    body["l2_cache_hits"] = l2_hits.into();
+                }
+                if let Some(l2_misses) = stats.l2_misses() {
+                    body["l2_cache_misses"] = l2_misses.into();
+                }
+                if let Some(l2_errors) = stats.l2_errors() {
+                    body["l2_cache_errors"] = l2_errors.into();
+                }
             }
             let _ = send_json_response(session, 200, body.to_string().as_bytes(), &[]).await;
             return Ok(true);

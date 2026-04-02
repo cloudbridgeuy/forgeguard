@@ -27,6 +27,15 @@ client_ip_source = "peer"
 region = "us-east-2"
 profile = "admin"
 
+# --- Cluster (optional) ---
+# Uncomment to enable Redis-backed shared authz cache.
+# [cluster]
+# redis_url = "redis://127.0.0.1:6379"
+# instance_id = "proxy-1"
+# priority = 3
+# heartbeat_interval_secs = 5
+# min_quorum = 1
+
 # ---------------------------------------------------------------------------
 # Metrics (Prometheus)
 # ---------------------------------------------------------------------------
