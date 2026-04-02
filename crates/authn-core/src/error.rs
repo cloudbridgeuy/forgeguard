@@ -24,6 +24,21 @@ pub enum Error {
     /// Credential is invalid or unrecognized.
     #[error("invalid credential: {0}")]
     InvalidCredential(String),
+    /// Ed25519 signature verification failed.
+    #[error("signature verification failed")]
+    SignatureInvalid,
+    /// Request timestamp is outside the allowed drift window.
+    #[error("timestamp outside allowed drift window: {0}ms")]
+    TimestampDrift(u64),
+    /// The signing key is invalid or malformed.
+    #[error("invalid signing key: {0}")]
+    InvalidSigningKey(String),
+    /// The verifying key is invalid or malformed.
+    #[error("invalid verifying key: {0}")]
+    InvalidVerifyingKey(String),
+    /// The key ID is empty.
+    #[error("invalid key ID: must be non-empty")]
+    InvalidKeyId,
 }
 
 /// Convenience alias used throughout this crate.

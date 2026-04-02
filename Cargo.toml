@@ -73,15 +73,25 @@ color-eyre = "0.6"
 
 # Environment variables
 dotenvy = "0.15"
+
+# Ed25519 signatures
+ed25519-dalek = { version = "2", features = ["pkcs8", "pem"] }
+
+# Published lib crates
 forgeguard-axum = { version = "0.1.0", path = "lib/forgeguard-axum" }
+
 forgeguard_audit = { version = "0.0.0", path = "crates/audit" }
 forgeguard_audit_core = { version = "0.0.0", path = "crates/audit-core" }
 
 # Internal crates — I/O
 forgeguard_authn = { version = "0.0.0", path = "crates/authn" }
-forgeguard_authn_core = { path = "crates/authn-core", version = "^0.0.0", features = ["test-support"] } #unified
+forgeguard_authn_core = { path = "crates/authn-core", version = "^0.0.0", features = [
+  "test-support",
+] } #unified
 forgeguard_authz = { version = "0.0.0", path = "crates/authz" }
-forgeguard_authz_core = { path = "crates/authz-core", version = "^0.0.0", features = ["test-support"] } #unified
+forgeguard_authz_core = { path = "crates/authz-core", version = "^0.0.0", features = [
+  "test-support",
+] } #unified
 
 # Internal crates — pure
 forgeguard_core = { version = "0.0.0", path = "crates/core" }
@@ -114,6 +124,8 @@ pingora-proxy = "0.8"
 # Metrics
 prometheus = "0.13"
 
+rand = "^0.8.5" #unified
+
 # Redis
 redis = { version = "1.0", features = ["tokio-comp", "connection-manager"] }
 
@@ -144,7 +156,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 url = "2.5"
 
 # UUID
-uuid = { version = "1.0", features = ["v4", "serde"] }
+uuid = { version = "1.0", features = ["v4", "v7", "serde"] }
 
 # Hashing (stable, portable — used for feature flag rollout bucketing)
 xxhash-rust = { version = "0.8", features = ["xxh64"] }

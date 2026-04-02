@@ -17,6 +17,8 @@ path = "src/lib.rs"
 test-support = []
 
 [dependencies]
+base64 = { workspace = true }
+ed25519-dalek = { workspace = true }
 forgeguard_core = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

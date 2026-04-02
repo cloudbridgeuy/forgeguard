@@ -6,6 +6,7 @@ pub mod error;
 pub mod identity;
 pub mod jwt_claims;
 pub mod resolver;
+pub mod signing;
 pub mod static_api_key;
 
 #[cfg(feature = "test-support")]
