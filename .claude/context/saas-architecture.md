@@ -121,6 +121,9 @@ cargo xtask control-plane
 ├── jobs     (status / list / stale / retry)
 ```
 
-## Vertical Slices
+## Vertical Slices and Issue DAG
 
-See `.local/plans/2026-04-01-saas-architecture-design.md` for the full slice table and dependency graph. Key issues: #29, #32-#42, #45-#46.
+- **Design doc:** `.local/plans/2026-04-01-saas-architecture-design.md`
+- **Issue DAG (dependency graph, parallel waves, all decisions):** `.local/plans/2026-04-01-saas-issue-dag.md`
+- **Key issues:** #29, #32-#42, #45-#46
+- **Starting points (no dependencies):** #29, #32, #45. #39 can scaffold in parallel.
