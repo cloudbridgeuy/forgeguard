@@ -44,6 +44,8 @@ pub(crate) struct RawProxyConfig {
     #[serde(default)]
     pub(crate) cluster: Option<RawClusterConfig>,
     #[serde(default)]
+    pub(crate) signing: Option<RawSigningConfig>,
+    #[serde(default)]
     pub(crate) authn: Option<RawAuthnConfig>,
     #[serde(default)]
     pub(crate) api_keys: Vec<RawApiKeyEntry>,
@@ -209,6 +211,14 @@ fn default_heartbeat_interval_secs() -> u64 {
 
 fn default_min_quorum() -> usize {
     1
+}
+
+/// Raw request signing configuration.
+/// Maps the `[signing]` TOML section.
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawSigningConfig {
+    pub(crate) key_path: String,
+    pub(crate) key_id: String,
 }
 
 /// Raw entity schema definition.

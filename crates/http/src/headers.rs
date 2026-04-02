@@ -140,6 +140,51 @@ pub fn inject_headers(projection: &IdentityProjection) -> Vec<(String, String)> 
     headers
 }
 
+/// Produce `X-ForgeGuard-*` headers with an optional Ed25519 signature.
+///
+/// When `signing` is `Some`, the identity headers are signed and four additional
+/// headers are appended: `x-forgeguard-trace-id`, `x-forgeguard-timestamp`,
+/// `x-forgeguard-key-id`, and `x-forgeguard-signature`.
+///
+/// When `signing` is `None`, this is equivalent to [`inject_headers`].
+pub fn inject_signed_headers(
+    projection: &IdentityProjection,
+    signing: Option<(
+        &forgeguard_authn_core::signing::SigningKey,
+        &forgeguard_authn_core::signing::KeyId,
+    )>,
+    trace_id: &str,
+    now: forgeguard_authn_core::signing::Timestamp,
+) -> Vec<(String, String)> {
+    let mut headers = inject_headers(projection);
+
+    if let Some((key, key_id)) = signing {
+        let payload =
+            forgeguard_authn_core::signing::CanonicalPayload::new(trace_id, now, &headers);
+        let signed =
+            forgeguard_authn_core::signing::sign(key, key_id, &payload, now, trace_id.to_string());
+
+        headers.push((
+            "x-forgeguard-trace-id".to_string(),
+            signed.trace_id_header_value().to_string(),
+        ));
+        headers.push((
+            "x-forgeguard-timestamp".to_string(),
+            signed.timestamp_header_value(),
+        ));
+        headers.push((
+            "x-forgeguard-key-id".to_string(),
+            signed.key_id_header_value(),
+        ));
+        headers.push((
+            "x-forgeguard-signature".to_string(),
+            signed.signature_header_value(),
+        ));
+    }
+
+    headers
+}
+
 /// Produce a single client-IP header pair.
 ///
 /// Used for anonymous or failed-opportunistic requests where no identity is available.

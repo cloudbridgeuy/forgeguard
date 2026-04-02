@@ -304,6 +304,46 @@ impl ClusterConfig {
 }
 
 // ---------------------------------------------------------------------------
+// SigningConfig
+// ---------------------------------------------------------------------------
+
+/// Validated request signing configuration.
+pub struct SigningConfig {
+    key_path: std::path::PathBuf,
+    key_id: forgeguard_authn_core::signing::KeyId,
+}
+
+impl SigningConfig {
+    /// Path to the Ed25519 private key (PKCS#8 PEM).
+    pub fn key_path(&self) -> &std::path::Path {
+        &self.key_path
+    }
+
+    /// The key identifier injected into `X-ForgeGuard-Key-Id`.
+    pub fn key_id(&self) -> &forgeguard_authn_core::signing::KeyId {
+        &self.key_id
+    }
+}
+
+impl fmt::Debug for SigningConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SigningConfig")
+            .field("key_path", &self.key_path)
+            .field("key_id", &self.key_id)
+            .finish()
+    }
+}
+
+impl Clone for SigningConfig {
+    fn clone(&self) -> Self {
+        Self {
+            key_path: self.key_path.clone(),
+            key_id: self.key_id.clone(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // ProxyConfig
 // ---------------------------------------------------------------------------
 
@@ -333,6 +373,7 @@ pub struct ProxyConfig {
     policy_tests: Vec<PolicyTest>,
     cors: Option<crate::cors::CorsConfig>,
     cluster: Option<ClusterConfig>,
+    signing: Option<SigningConfig>,
 }
 
 impl ProxyConfig {
@@ -399,6 +440,10 @@ impl ProxyConfig {
     /// The cluster configuration, if present.
     pub fn cluster(&self) -> Option<&ClusterConfig> {
         self.cluster.as_ref()
+    }
+    /// The request signing configuration, if present.
+    pub fn signing(&self) -> Option<&SigningConfig> {
+        self.signing.as_ref()
     }
 }
 
@@ -594,6 +639,8 @@ impl TryFrom<RawProxyConfig> for ProxyConfig {
 
         let cluster = raw.cluster.as_ref().map(parse_cluster_config).transpose()?;
 
+        let signing = raw.signing.map(parse_signing_config).transpose()?;
+
         Ok(ProxyConfig {
             project_id,
             listen_addr,
@@ -616,8 +663,18 @@ impl TryFrom<RawProxyConfig> for ProxyConfig {
             policy_tests,
             cors,
             cluster,
+            signing,
         })
     }
+}
+
+fn parse_signing_config(raw: crate::config_raw::RawSigningConfig) -> Result<SigningConfig> {
+    let key_id = forgeguard_authn_core::signing::KeyId::try_from(raw.key_id)
+        .map_err(|_| Error::Config("signing.key_id must be non-empty".to_string()))?;
+    Ok(SigningConfig {
+        key_path: std::path::PathBuf::from(raw.key_path),
+        key_id,
+    })
 }
 
 fn parse_cluster_config(raw: &crate::config_raw::RawClusterConfig) -> Result<ClusterConfig> {
