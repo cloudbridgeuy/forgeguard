@@ -2,8 +2,10 @@
 
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 /// Why a request was denied.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DenyReason {
     /// No policy matched the query.
     NoMatchingPolicy,
@@ -26,7 +28,7 @@ impl fmt::Display for DenyReason {
 }
 
 /// The outcome of a policy evaluation.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PolicyDecision {
     /// The request is allowed.
     Allow,
@@ -100,5 +102,35 @@ mod tests {
             decision.to_string(),
             "denied: evaluation error: connection timeout"
         );
+    }
+
+    #[test]
+    fn serde_round_trip_allow() {
+        let decision = PolicyDecision::Allow;
+        let json = serde_json::to_string(&decision).unwrap();
+        let decoded: PolicyDecision = serde_json::from_str(&json).unwrap();
+        assert_eq!(decision, decoded);
+    }
+
+    #[test]
+    fn serde_round_trip_deny_explicit() {
+        let decision = PolicyDecision::Deny {
+            reason: DenyReason::ExplicitDeny {
+                policy_id: "pol-1".into(),
+            },
+        };
+        let json = serde_json::to_string(&decision).unwrap();
+        let decoded: PolicyDecision = serde_json::from_str(&json).unwrap();
+        assert_eq!(decision, decoded);
+    }
+
+    #[test]
+    fn serde_round_trip_deny_no_matching() {
+        let decision = PolicyDecision::Deny {
+            reason: DenyReason::NoMatchingPolicy,
+        };
+        let json = serde_json::to_string(&decision).unwrap();
+        let decoded: PolicyDecision = serde_json::from_str(&json).unwrap();
+        assert_eq!(decision, decoded);
     }
 }

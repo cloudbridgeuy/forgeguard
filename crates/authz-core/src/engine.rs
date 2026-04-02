@@ -12,12 +12,29 @@ use crate::query::PolicyQuery;
 pub struct CacheStats {
     hits: u64,
     misses: u64,
+    l2_hits: Option<u64>,
+    l2_misses: Option<u64>,
+    l2_errors: Option<u64>,
 }
 
 impl CacheStats {
     /// Create a new `CacheStats` snapshot.
     pub fn new(hits: u64, misses: u64) -> Self {
-        Self { hits, misses }
+        Self {
+            hits,
+            misses,
+            l2_hits: None,
+            l2_misses: None,
+            l2_errors: None,
+        }
+    }
+
+    /// Attach L2 (tiered) cache counters.
+    pub fn with_l2(mut self, hits: u64, misses: u64, errors: u64) -> Self {
+        self.l2_hits = Some(hits);
+        self.l2_misses = Some(misses);
+        self.l2_errors = Some(errors);
+        self
     }
 
     /// Total cache hits since creation.
@@ -28,6 +45,21 @@ impl CacheStats {
     /// Total cache misses since creation.
     pub fn misses(&self) -> u64 {
         self.misses
+    }
+
+    /// L2 cache hits, if a tiered cache is configured.
+    pub fn l2_hits(&self) -> Option<u64> {
+        self.l2_hits
+    }
+
+    /// L2 cache misses, if a tiered cache is configured.
+    pub fn l2_misses(&self) -> Option<u64> {
+        self.l2_misses
+    }
+
+    /// L2 cache errors, if a tiered cache is configured.
+    pub fn l2_errors(&self) -> Option<u64> {
+        self.l2_errors
     }
 }
 
