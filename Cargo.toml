@@ -59,6 +59,9 @@ base64 = "0.22"
 # HTTP framework
 axum = { version = "0.8", features = ["macros"] }
 
+# HTTP body utilities (testing)
+http-body-util = "0.1"
+
 # Binary data
 bytes = "1"
 
@@ -125,6 +128,8 @@ tempfile = "3"
 tokio = { version = "1.0", features = ["full"] }
 toml = "0.8"
 toml_edit = "0.22"
+# Tower middleware
+tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["cors", "trace", "timeout"] }
 
 # Terminal colors

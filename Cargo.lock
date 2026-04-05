@@ -1449,20 +1449,19 @@ name = "forgeguard_control_plane"
 version = "0.0.0"
 dependencies = [
  "axum",
+ "clap",
  "color-eyre",
- "forgeguard_audit",
- "forgeguard_audit_core",
- "forgeguard_authn",
- "forgeguard_authn_core",
- "forgeguard_authz",
- "forgeguard_authz_core",
  "forgeguard_core",
+ "http-body-util",
  "serde",
  "serde_json",
+ "thiserror 2.0.18",
  "tokio",
+ "tower",
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "xxhash-rust",
 ]
 
 [[package]]
