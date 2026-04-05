@@ -1533,6 +1533,7 @@ dependencies = [
  "forgeguard_authz_core",
  "forgeguard_core",
  "forgeguard_http",
+ "forgeguard_proxy_core",
  "pingora-core",
  "pingora-http",
  "pingora-proxy",
@@ -1545,6 +1546,19 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+]
+
+[[package]]
+name = "forgeguard_proxy_core"
+version = "0.0.0"
+dependencies = [
+ "forgeguard_authn_core",
+ "forgeguard_authz_core",
+ "forgeguard_core",
+ "forgeguard_http",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]

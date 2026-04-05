@@ -27,4 +27,6 @@ pub use permission::{
     ActionPattern, CedarEntityRef, Effect, GroupDefinition, PatternSegment, Policy,
     PolicyStatement, ResourceConstraint,
 };
-pub use segment::{FlowId, GroupName, PolicyName, ProjectId, Segment, TenantId, UserId};
+pub use segment::{
+    FlowId, GroupName, OrganizationId, PolicyName, ProjectId, Segment, TenantId, UserId,
+};

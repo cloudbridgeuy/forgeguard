@@ -85,6 +85,7 @@ forgeguard_authz_core = { version = "0.0.0", path = "crates/authz-core" }
 # Internal crates — pure
 forgeguard_core = { version = "0.0.0", path = "crates/core" }
 forgeguard_http = { version = "0.0.0", path = "crates/http" }
+forgeguard_proxy_core = { version = "0.0.0", path = "crates/proxy-core" }
 forgeguard_sdk = { version = "0.0.0", path = "crates/sdk" }
 
 # JWT

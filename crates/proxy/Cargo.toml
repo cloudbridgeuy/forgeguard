@@ -20,6 +20,7 @@ forgeguard_authn = { workspace = true }
 forgeguard_authn_core = { workspace = true }
 forgeguard_authz = { workspace = true }
 forgeguard_authz_core = { workspace = true }
+forgeguard_proxy_core = { workspace = true }
 async-trait = { workspace = true }
 aws-config = { workspace = true }
 bytes = { workspace = true }

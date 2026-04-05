@@ -195,6 +195,7 @@ define_id!(TenantId);
 define_id!(ProjectId);
 define_id!(GroupName);
 define_id!(PolicyName);
+define_id!(OrganizationId);
 
 // ---------------------------------------------------------------------------
 // FlowId
@@ -365,6 +366,30 @@ mod tests {
         let json = serde_json::to_string(&id).unwrap();
         assert_eq!(json, "\"alice\"");
         let deser: UserId = serde_json::from_str(&json).unwrap();
+        assert_eq!(id, deser);
+    }
+
+    // -- OrganizationId -------------------------------------------------------
+
+    #[test]
+    fn organization_id_valid() {
+        assert!(OrganizationId::new("acme-corp").is_ok());
+        assert!(OrganizationId::new("org123").is_ok());
+    }
+
+    #[test]
+    fn organization_id_rejects_invalid() {
+        assert!(OrganizationId::new("AcmeCorp").is_err());
+        assert!(OrganizationId::new("org_abc").is_err());
+        assert!(OrganizationId::new("").is_err());
+    }
+
+    #[test]
+    fn organization_id_serde_round_trip() {
+        let id = OrganizationId::new("acme-corp").unwrap();
+        let json = serde_json::to_string(&id).unwrap();
+        assert_eq!(json, "\"acme-corp\"");
+        let deser: OrganizationId = serde_json::from_str(&json).unwrap();
         assert_eq!(id, deser);
     }
 

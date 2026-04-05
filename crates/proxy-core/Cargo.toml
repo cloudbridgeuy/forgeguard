@@ -1,0 +1,30 @@
+[package]
+name = "forgeguard_proxy_core"
+version = "0.0.0"
+homepage = "https://github.com/cloudbridgeuy/forgeguard"
+description = "Auth pipeline types and pure logic for ForgeGuard proxy (pure, no I/O)"
+autobins = false
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "forgeguard_proxy_core"
+path = "src/lib.rs"
+
+[dependencies]
+forgeguard_core = { workspace = true }
+forgeguard_http = { workspace = true }
+forgeguard_authn_core = { workspace = true }
+forgeguard_authz_core = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+forgeguard_authn_core = { path = "../authn-core", features = ["test-support"] }
+forgeguard_authz_core = { path = "../authz-core", features = ["test-support"] }
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[lints]
+workspace = true

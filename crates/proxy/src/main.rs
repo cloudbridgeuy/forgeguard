@@ -17,6 +17,7 @@ use forgeguard_authz::VpPolicyEngine;
 use forgeguard_http::{
     apply_overrides, load_config, ConfigOverrides, PublicRouteMatcher, RouteMatcher,
 };
+use forgeguard_proxy_core::PipelineConfig;
 
 use crate::cli::{App, Commands};
 use crate::proxy::{ForgeGuardProxy, ProxyParams};
@@ -98,18 +99,22 @@ fn run(app: App) -> color_eyre::Result<()> {
         ),
     }
 
-    let proxy = ForgeGuardProxy::new(ProxyParams {
-        identity_chain,
-        policy_engine,
+    let pipeline_config = PipelineConfig::new(
         route_matcher,
         public_matcher,
-        flag_config: config.features().clone(),
+        config.features().clone(),
+        config.project_id().clone(),
+        config.default_policy(),
+        opts.debug,
+        config.auth().chain_order().to_vec(),
+    );
+
+    let proxy = ForgeGuardProxy::new(ProxyParams {
+        pipeline_config,
+        identity_chain,
+        policy_engine,
         upstream: target,
-        default_policy: config.default_policy(),
         client_ip_source: config.client_ip_source(),
-        project_id: config.project_id().clone(),
-        auth_providers: config.auth().chain_order().to_vec(),
-        debug_mode: opts.debug,
         cors: config.cors().cloned(),
     });
 

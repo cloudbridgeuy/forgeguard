@@ -13,18 +13,11 @@ use std::sync::LazyLock;
 
 use forgeguard_authn_core::{Identity, IdentityChain};
 use forgeguard_authz_core::PolicyEngine;
-use forgeguard_core::{evaluate_flags, FlagConfig, ProjectId, ResolvedFlags};
+use forgeguard_core::ResolvedFlags;
 use forgeguard_http::{
-    build_query, evaluate_debug, extract_credential, inject_headers, ClientIpSource, CorsConfig,
-    DefaultPolicy, FlagDebugQuery, IdentityProjection, MatchedRoute, PublicMatch,
-    PublicRouteMatcher, RouteMatcher, UpstreamTarget,
+    ClientIpSource, CorsConfig, IdentityProjection, MatchedRoute, UpstreamTarget,
 };
-
-/// Health check path served before any auth logic.
-const HEALTH_PATH: &str = "/.well-known/forgeguard/health";
-
-/// Debug endpoint for flag evaluation (requires --debug flag).
-const FLAGS_DEBUG_PATH: &str = "/.well-known/forgeguard/flags";
+use forgeguard_proxy_core::{evaluate_pipeline, PipelineConfig, PipelineOutcome, RequestInput};
 
 // ---------------------------------------------------------------------------
 // Prometheus metrics — registered globally, collected by Pingora's PrometheusServer
@@ -69,17 +62,11 @@ static POLICY_DECISIONS: LazyLock<prometheus::IntCounterVec> = LazyLock::new(|| 
 
 /// Configuration consumed by [`ForgeGuardProxy`] at construction time.
 pub(crate) struct ProxyParams {
+    pub pipeline_config: PipelineConfig,
     pub identity_chain: IdentityChain,
     pub policy_engine: Arc<dyn PolicyEngine>,
-    pub route_matcher: RouteMatcher,
-    pub public_matcher: PublicRouteMatcher,
-    pub flag_config: FlagConfig,
     pub upstream: UpstreamTarget,
-    pub default_policy: DefaultPolicy,
     pub client_ip_source: ClientIpSource,
-    pub project_id: ProjectId,
-    pub auth_providers: Vec<String>,
-    pub debug_mode: bool,
     pub cors: Option<CorsConfig>,
 }
 
@@ -88,17 +75,11 @@ pub(crate) struct ProxyParams {
 /// Thin imperative shell: all business decisions delegate to pure functions
 /// in domain crates. Pingora I/O stays here.
 pub(crate) struct ForgeGuardProxy {
+    pipeline_config: PipelineConfig,
     identity_chain: IdentityChain,
     policy_engine: Arc<dyn PolicyEngine>,
-    route_matcher: RouteMatcher,
-    public_matcher: PublicRouteMatcher,
-    flag_config: FlagConfig,
     upstream: UpstreamTarget,
-    default_policy: DefaultPolicy,
     client_ip_source: ClientIpSource,
-    project_id: ProjectId,
-    auth_providers: Vec<String>,
-    debug_mode: bool,
     /// Optional CORS configuration for preflight and response header injection.
     cors: Option<CorsConfig>,
 }
@@ -106,17 +87,11 @@ pub(crate) struct ForgeGuardProxy {
 impl ForgeGuardProxy {
     pub(crate) fn new(params: ProxyParams) -> Self {
         Self {
+            pipeline_config: params.pipeline_config,
             identity_chain: params.identity_chain,
             policy_engine: params.policy_engine,
-            route_matcher: params.route_matcher,
-            public_matcher: params.public_matcher,
-            flag_config: params.flag_config,
             upstream: params.upstream,
-            default_policy: params.default_policy,
             client_ip_source: params.client_ip_source,
-            project_id: params.project_id,
-            auth_providers: params.auth_providers,
-            debug_mode: params.debug_mode,
             cors: params.cors,
         }
     }
@@ -158,34 +133,8 @@ impl ProxyHttp for ForgeGuardProxy {
         ctx.path = req.uri.path().to_string();
         ctx.client_ip = extract_client_ip(session, self.client_ip_source);
 
-        // 1. Health check — respond before any auth
-        if ctx.path == HEALTH_PATH {
-            let mut body = serde_json::json!({
-                "status": "ok",
-                "providers": self.auth_providers,
-                "flags": self.flag_config.flags.len(),
-            });
-            if let Some(stats) = self.policy_engine.cache_stats() {
-                body["cache_hits"] = stats.hits().into();
-                body["cache_misses"] = stats.misses().into();
-                if let Some(l2_hits) = stats.l2_hits() {
-                    body["l2_cache_hits"] = l2_hits.into();
-                }
-                if let Some(l2_misses) = stats.l2_misses() {
-                    body["l2_cache_misses"] = l2_misses.into();
-                }
-                if let Some(l2_errors) = stats.l2_errors() {
-                    body["l2_cache_errors"] = l2_errors.into();
-                }
-            }
-            let _ = send_json_response(session, 200, body.to_string().as_bytes(), &[]).await;
-            return Ok(true);
-        }
-
-        // 1a. CORS — extract Origin header once, reuse for preflight + response injection.
-        let request_origin = session
-            .downstream_session
-            .req_header()
+        // --- CORS (transport concern — stays in adapter) ---
+        let request_origin = req
             .headers
             .get("origin")
             .and_then(|v| v.to_str().ok())
@@ -193,12 +142,7 @@ impl ProxyHttp for ForgeGuardProxy {
 
         if ctx.method == "OPTIONS" {
             if let Some(cors) = &self.cors {
-                let has_acrm = session
-                    .downstream_session
-                    .req_header()
-                    .headers
-                    .get("access-control-request-method")
-                    .is_some();
+                let has_acrm = req.headers.get("access-control-request-method").is_some();
 
                 if let (Some(origin), true) = (request_origin.as_deref(), has_acrm) {
                     if let Some(matched) = cors.matches_origin(origin) {
@@ -206,195 +150,58 @@ impl ProxyHttp for ForgeGuardProxy {
                         let _ = send_json_response(session, 204, b"", &headers).await;
                         return Ok(true);
                     }
-                    // Origin present + ACRM present but origin not in allowed list.
-                    // Fall through intentionally: rather than returning a CORS-specific 403,
-                    // let normal routing handle it. This avoids leaking "CORS is enabled" to
-                    // arbitrary origins — a non-matching origin sees the same response as any
-                    // other unauthenticated request (401/403 from the auth pipeline).
                 }
             }
         }
 
-        // 1b. Set CORS origin for response header injection (preflight already returned above)
         if let (Some(cors), Some(origin)) = (&self.cors, request_origin.as_deref()) {
             if cors.matches_origin(origin).is_some() {
                 ctx.cors_origin = Some(origin.to_string());
             }
         }
 
-        // 1c. Debug endpoint — flag evaluation with reasons (requires --debug)
-        if self.debug_mode && ctx.path == FLAGS_DEBUG_PATH {
-            let query_str = req.uri.query().unwrap_or("");
-            match FlagDebugQuery::parse(query_str) {
-                Ok(query) => {
-                    let result = evaluate_debug(&self.flag_config, &query);
-                    match serde_json::to_string(&result) {
-                        Ok(json) => {
-                            let _ = send_json_response(session, 200, json.as_bytes(), &[]).await;
-                        }
-                        Err(_) => {
-                            let body = serde_json::json!({"error": "Internal Server Error"});
-                            let _ =
-                                send_json_response(session, 500, body.to_string().as_bytes(), &[])
-                                    .await;
-                        }
-                    }
-                }
-                Err(e) => {
-                    let body = serde_json::json!({"error": format!("{e}")});
-                    let _ =
-                        send_json_response(session, 400, body.to_string().as_bytes(), &[]).await;
-                }
+        // --- Convert Session to RequestInput ---
+        let input = request_input_from_session(session, ctx.client_ip);
+
+        // --- Evaluate the pure pipeline ---
+        let outcome = evaluate_pipeline(
+            &self.pipeline_config,
+            &input,
+            &self.identity_chain,
+            self.policy_engine.as_ref(),
+        )
+        .await;
+
+        // --- Translate PipelineOutcome to Pingora response ---
+        let cors_hdrs = cors_headers(self.cors.as_ref(), ctx.cors_origin.as_deref());
+
+        match outcome {
+            PipelineOutcome::Health(body) | PipelineOutcome::Debug(body) => {
+                let _ = send_json_response(session, 200, body.as_bytes(), &cors_hdrs).await;
+                Ok(true)
             }
-            return Ok(true);
-        }
-
-        // 2. Public route check
-        let public_match = self.public_matcher.check(&ctx.method, &ctx.path);
-
-        // 3. Auth flow based on public match result
-        let require_credential = matches!(public_match, PublicMatch::NotPublic);
-        let try_credential = matches!(
-            public_match,
-            PublicMatch::NotPublic | PublicMatch::Opportunistic
-        );
-
-        if try_credential {
-            let headers = extract_headers(req);
-            let credential = extract_credential(&headers);
-
-            match credential {
-                Some(cred) => {
-                    match self.identity_chain.resolve(&cred).await {
-                        Ok(identity) => {
-                            AUTH_OUTCOMES.with_label_values(&["success"]).inc();
-                            ctx.identity = Some(identity);
-                        }
-                        Err(_) if require_credential => {
-                            AUTH_OUTCOMES.with_label_values(&["rejected"]).inc();
-                            let body = serde_json::json!({"error": "Unauthorized"});
-                            let headers =
-                                cors_headers(self.cors.as_ref(), ctx.cors_origin.as_deref());
-                            let _ = send_json_response(
-                                session,
-                                401,
-                                body.to_string().as_bytes(),
-                                &headers,
-                            )
-                            .await;
-                            return Ok(true);
-                        }
-                        Err(_) => {
-                            // Opportunistic: resolution failed, continue without identity
-                        }
-                    }
+            PipelineOutcome::Reject { status, body } => {
+                record_outcome_metrics(status);
+                let _ = send_json_response(session, status, body.as_bytes(), &cors_hdrs).await;
+                Ok(true)
+            }
+            PipelineOutcome::Forward {
+                identity,
+                flags,
+                matched_route,
+            } => {
+                if identity.is_some() {
+                    AUTH_OUTCOMES.with_label_values(&["success"]).inc();
                 }
-                None if require_credential => {
-                    AUTH_OUTCOMES.with_label_values(&["missing"]).inc();
-                    let body = serde_json::json!({"error": "Unauthorized"});
-                    let headers = cors_headers(self.cors.as_ref(), ctx.cors_origin.as_deref());
-                    let _ = send_json_response(session, 401, body.to_string().as_bytes(), &headers)
-                        .await;
-                    return Ok(true);
+                if matched_route.is_some() {
+                    POLICY_DECISIONS.with_label_values(&["allow"]).inc();
                 }
-                None => {
-                    // Opportunistic or Anonymous: no credential, continue
-                }
+                ctx.identity = identity;
+                ctx.flags = flags;
+                ctx.matched_route = matched_route.map(|r| *r);
+                Ok(false)
             }
         }
-
-        // 4. Evaluate feature flags (pure, no I/O)
-        if let Some(identity) = &ctx.identity {
-            let resolved = evaluate_flags(
-                &self.flag_config,
-                identity.tenant_id(),
-                identity.user_id(),
-                identity.groups(),
-            );
-            ctx.flags = Some(resolved);
-        }
-
-        // 5. Route matching
-        let matched = self.route_matcher.match_request(&ctx.method, &ctx.path);
-
-        if let Some(matched_route) = matched {
-            // 6. Feature gate check
-            if let Some(gate) = matched_route.feature_gate() {
-                let gate_enabled = ctx
-                    .flags
-                    .as_ref()
-                    .is_some_and(|flags| flags.enabled(&gate.to_string()));
-                if !gate_enabled {
-                    let body = serde_json::json!({"error": "Not Found"});
-                    let headers = cors_headers(self.cors.as_ref(), ctx.cors_origin.as_deref());
-                    let _ = send_json_response(session, 404, body.to_string().as_bytes(), &headers)
-                        .await;
-                    return Ok(true);
-                }
-            }
-
-            // 7. Policy evaluation — only for authenticated requests
-            if let Some(identity) = &ctx.identity {
-                let query = build_query(identity, &matched_route, &self.project_id, ctx.client_ip);
-
-                match self.policy_engine.evaluate(&query).await {
-                    Ok(decision) => {
-                        if decision.is_denied() {
-                            POLICY_DECISIONS.with_label_values(&["deny"]).inc();
-                            let body = serde_json::json!({
-                                "error": "Forbidden",
-                                "action": matched_route.action().to_string(),
-                            });
-                            let headers =
-                                cors_headers(self.cors.as_ref(), ctx.cors_origin.as_deref());
-                            let _ = send_json_response(
-                                session,
-                                403,
-                                body.to_string().as_bytes(),
-                                &headers,
-                            )
-                            .await;
-                            return Ok(true);
-                        }
-                        POLICY_DECISIONS.with_label_values(&["allow"]).inc();
-                    }
-                    Err(_) => {
-                        POLICY_DECISIONS.with_label_values(&["error"]).inc();
-                        let body = serde_json::json!({
-                            "error": "Forbidden",
-                            "action": matched_route.action().to_string(),
-                        });
-                        let headers = cors_headers(self.cors.as_ref(), ctx.cors_origin.as_deref());
-                        let _ =
-                            send_json_response(session, 403, body.to_string().as_bytes(), &headers)
-                                .await;
-                        return Ok(true);
-                    }
-                }
-            }
-
-            ctx.matched_route = Some(matched_route);
-        } else if public_match.is_public() {
-            // Public route with no [[routes]] entry — passthrough to upstream.
-            // Auth was already handled (skipped for anonymous, optional for opportunistic).
-        } else {
-            // No route matched and not a public route
-            match self.default_policy {
-                DefaultPolicy::Deny => {
-                    let body =
-                        serde_json::json!({"error": "Forbidden", "reason": "no matching route"});
-                    let headers = cors_headers(self.cors.as_ref(), ctx.cors_origin.as_deref());
-                    let _ = send_json_response(session, 403, body.to_string().as_bytes(), &headers)
-                        .await;
-                    return Ok(true);
-                }
-                DefaultPolicy::Passthrough => {
-                    // Continue to upstream without authz
-                }
-            }
-        }
-
-        Ok(false)
     }
 
     async fn upstream_peer(
@@ -418,7 +225,7 @@ impl ProxyHttp for ForgeGuardProxy {
     ) -> Result<()> {
         if let Some(identity) = &ctx.identity {
             let projection = IdentityProjection::new(identity, ctx.flags.as_ref(), ctx.client_ip);
-            let headers = inject_headers(&projection);
+            let headers = forgeguard_http::inject_headers(&projection);
             for (name, value) in headers {
                 let _ = upstream_request.insert_header(name, value);
             }
@@ -553,10 +360,27 @@ impl ProxyHttp for ForgeGuardProxy {
     }
 }
 
-/// Convert Pingora `RequestHeader` to the `Vec<(String, String)>` format
-/// that `forgeguard_http::extract_credential` expects.
-fn extract_headers(req: &RequestHeader) -> Vec<(String, String)> {
-    req.headers
+/// Record metrics based on the reject status code.
+fn record_outcome_metrics(status: u16) {
+    match status {
+        401 => AUTH_OUTCOMES.with_label_values(&["rejected"]).inc(),
+        403 => POLICY_DECISIONS.with_label_values(&["deny"]).inc(),
+        _ => {}
+    }
+}
+
+/// Build a [`RequestInput`] from a Pingora `Session`.
+///
+/// Extracts method, path, query string, lowercased headers, and client IP.
+/// The caller supplies the already-resolved `client_ip` so we avoid re-extracting it.
+fn request_input_from_session(session: &Session, client_ip: Option<IpAddr>) -> RequestInput {
+    let req = session.downstream_session.req_header();
+    let method = req.method.as_str();
+    let path = req.uri.path();
+    let query_string = req.uri.query();
+
+    let headers: Vec<(String, String)> = req
+        .headers
         .iter()
         .map(|(name, value)| {
             (
@@ -564,7 +388,25 @@ fn extract_headers(req: &RequestHeader) -> Vec<(String, String)> {
                 value.to_str().unwrap_or("").to_string(),
             )
         })
-        .collect()
+        .collect();
+
+    // method and path come from a valid HTTP request so this should not fail.
+    let mut input = match RequestInput::new(method, path, headers, client_ip) {
+        Ok(input) => input,
+        Err(e) => {
+            tracing::error!(error = %e, "failed to build RequestInput from session");
+            // Fall back to a minimal valid input so the pipeline can reject it.
+            #[allow(clippy::expect_used)]
+            RequestInput::new("GET", "/", vec![], None)
+                .expect("fallback RequestInput must be valid")
+        }
+    };
+
+    if let Some(qs) = query_string {
+        input = input.with_query_string(qs);
+    }
+
+    input
 }
 
 /// Extract the client IP from the session based on the configured source.
