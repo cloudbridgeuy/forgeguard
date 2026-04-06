@@ -21,6 +21,9 @@
 # Local development
 .local/
 forgeguard.dev.toml
+
+# Control plane org configs (contain tokens and AWS resource IDs)
+**/orgs.json
 infra/dev/.env
 infra/dev/users.toml
 infra/dev/node_modules/

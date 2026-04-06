@@ -1,0 +1,39 @@
+# ForgeGuard Dogfooding — Control Plane Protection
+# =================================================
+# This config runs a BYOC proxy in static mode in front of the control plane.
+# It demonstrates ForgeGuard protecting its own API.
+#
+# Usage:
+#   1. Start the control plane (terminal 1):
+#      cargo run -p forgeguard_control_plane -- --config examples/control-plane/orgs.test.json
+#
+#   2. Start the proxy in front of it (terminal 2):
+#      cargo run -p forgeguard_proxy -- run --config examples/control-plane/proxy.toml
+#
+#   3. Test through the proxy (terminal 3):
+#      curl -si -H "Authorization: Bearer fgt_acme-test-token-do-not-use-in-production" \
+#        http://localhost:8080/api/v1/organizations/org-acme/proxy-config
+
+project_id = "forgeguard-cp"
+listen_addr = "127.0.0.1:8080"
+upstream_url = "http://127.0.0.1:3001"
+default_policy = "deny"
+client_ip_source = "peer"
+
+# No authn/authz — the control plane handles its own token auth.
+# The proxy only does route-level gating.
+
+[auth]
+chain_order = []
+
+# Health check is public
+[[public_routes]]
+method = "GET"
+path = "/health"
+auth_mode = "anonymous"
+
+# Proxy-config endpoint — passthrough (CP does its own auth)
+[[public_routes]]
+method = "GET"
+path = "/api/v1/organizations/:org_id/proxy-config"
+auth_mode = "anonymous"
