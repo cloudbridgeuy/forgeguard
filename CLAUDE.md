@@ -13,6 +13,7 @@
 - **Container images:** distroless, multi-stage — see [container-builds.md](./.claude/context/container-builds.md)
 - **Cluster mode:** optional Redis-backed shared authz cache — `[cluster]` config, see [cluster.md](./.claude/context/cluster.md)
 - **Metrics:** Prometheus via Pingora's `PrometheusServer` — `[metrics] enabled = true` in config
+- **Control plane:** Axum service, file-backed org config — see [control-plane.md](./.claude/context/control-plane.md)
 - **Integration tests:** `cargo test -p forgeguard_proxy` — see [demo-app.md](./.claude/context/demo-app.md)
 - **Demo app:** native or Docker Compose — see [demo-app.md](./.claude/context/demo-app.md)
 - **GitHub CLI:** always use `gh auth switch --user cloudbridgeuy` before any `gh` command
@@ -104,7 +105,7 @@ crates/
 ├── ffi-python/        forgeguard_ffi_python — PyO3 bindings
 ├── ffi-wasm/          forgeguard_ffi_wasm — wasm-bindgen bindings
 │  Binaries — not published (publish = false)
-├── control-plane/     forgeguard_control_plane — dashboard API (Lambda, uses forgeguard-axum)
+├── control-plane/     forgeguard_control_plane — control plane API (Axum, file-backed org config)
 ├── worker/            forgeguard_worker — background Lambda jobs (reconciler, future jobs)
 ├── cli/               forgeguard_cli — developer CLI (binary: forgeguard)
 ├── proxy/             forgeguard_proxy — BYOC proxy: static + connected modes
@@ -153,6 +154,7 @@ Each crate's `README.md` describes what it owns and its pure/I/O classification.
 | [Authn Wiring](./.claude/context/authn-wiring.md)                  | JWT + API key config, resolver construction, FCIS split                 |
 | [CLI](./.claude/context/cli.md)                                    | `check`, `routes`, `policies` subcommands, FCIS architecture            |
 | [Demo App](./.claude/context/demo-app.md)                          | E2E demo: Python TODO app, native proxy, demo config, running instructions |
+| [Control Plane](./.claude/context/control-plane.md)                | CP scaffold, proxy-config endpoint, OrgStore trait, auth, ETag, testing |
 | [Cluster Mode](./.claude/context/cluster.md)                       | TieredCache, Redis wiring, config, health stats, future slices          |
 | [Design Documents](./.claude/context/)                             | Full ForgeGuard architecture and technical specifications               |
 
