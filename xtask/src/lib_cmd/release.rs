@@ -406,22 +406,22 @@ pub fn run(args: &ReleaseArgs) -> Result<()> {
 
     print_summary(&changes);
 
+    if args.dry_run {
+        println!("Dry run complete. No files were modified.");
+        return Ok(());
+    }
+
     println!("Applying version bumps...");
     apply_version_changes(args, &changes)?;
 
     println!("Updating changelog...");
     update_changelog(&args.crate_name, &changes[0].new)?;
 
-    println!("Running dry-run publish...");
+    println!("Running publish verification...");
     dry_run_publish(&args.crate_name)?;
 
-    if args.dry_run {
-        println!("Dry run complete. No changes committed or published.");
-        return Ok(());
-    }
-
     if !confirm_release()? {
-        println!("Release aborted.");
+        println!("Release aborted. Version bumps are still applied — use `git checkout -- .` to revert.");
         return Ok(());
     }
 
