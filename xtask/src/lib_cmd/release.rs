@@ -77,6 +77,32 @@ fn validate(args: &ReleaseArgs) -> Result<()> {
         eyre::bail!("either --bump or --version must be provided");
     }
 
+    // 5. Crates.io credentials available (skip for dry-run)
+    if !args.dry_run {
+        let has_env_token = std::env::var("CARGO_REGISTRY_TOKEN").is_ok();
+        let home = std::env::var("HOME").unwrap_or_default();
+        let has_credentials = !home.is_empty()
+            && (std::path::Path::new(&format!("{home}/.cargo/credentials.toml")).exists()
+                || std::path::Path::new(&format!("{home}/.cargo/credentials")).exists());
+        if !has_env_token && !has_credentials {
+            eyre::bail!(
+                "no crates.io credentials found — set CARGO_REGISTRY_TOKEN or run `cargo login`"
+            );
+        }
+    }
+
+    // 6. Lint pipeline passes
+    println!("  Running lint checks...");
+    let lint_result = duct::cmd!("cargo", "xtask", "lint")
+        .stderr_to_stdout()
+        .stdout_capture()
+        .unchecked()
+        .run()?;
+    if !lint_result.status.success() {
+        let output = String::from_utf8_lossy(&lint_result.stdout);
+        eyre::bail!("lint checks failed — fix issues before releasing:\n{output}");
+    }
+
     Ok(())
 }
 
@@ -404,6 +430,20 @@ pub fn run(args: &ReleaseArgs) -> Result<()> {
     println!("Computing version changes...");
     let (changes, _bump_level) = compute_version_changes(args)?;
 
+    // Validate: all shared deps' new version >= lib crate's new version
+    let lib_new = &changes[0].new;
+    for change in &changes[1..] {
+        if change.new < *lib_new {
+            eyre::bail!(
+                "shared dep {} would be v{} which is less than lib crate version v{} — \
+                 shared deps must be >= lib version",
+                change.crate_name,
+                change.new,
+                lib_new
+            );
+        }
+    }
+
     print_summary(&changes);
 
     if args.dry_run {
@@ -421,7 +461,9 @@ pub fn run(args: &ReleaseArgs) -> Result<()> {
     dry_run_publish(&args.crate_name)?;
 
     if !confirm_release()? {
-        println!("Release aborted. Version bumps are still applied — use `git checkout -- .` to revert.");
+        println!(
+            "Release aborted. Version bumps are still applied — use `git checkout -- .` to revert."
+        );
         return Ok(());
     }
 

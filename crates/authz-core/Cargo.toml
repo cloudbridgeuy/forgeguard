@@ -2,7 +2,7 @@
 name = "forgeguard_authz_core"
 version = "0.0.0"
 homepage = "https://github.com/cloudbridgeuy/forgeguard"
-description = "Authorization domain types, Cedar policy types, and permission definitions (pure)"
+description = "Authorization domain types, Cedar policy types, and permission definitions (pure). Internal dep — use forgeguard-axum for the public API."
 autobins = false
 
 authors.workspace = true

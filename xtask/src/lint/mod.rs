@@ -1,7 +1,7 @@
 pub mod hooks;
 
 use clap::Args;
-use color_eyre::eyre::Result;
+use color_eyre::eyre::{self, Result};
 use duct::cmd;
 use std::fs;
 use std::io::Write;
@@ -19,6 +19,7 @@ enum CheckId {
     Test,
     Rail,
     FileLength,
+    PublishVersion,
     TypeScript,
 }
 
@@ -73,6 +74,10 @@ pub struct LintArgs {
     /// Skip file-length check
     #[arg(long)]
     pub no_file_length: bool,
+
+    /// Skip publish-version invariant check
+    #[arg(long)]
+    pub no_publish_version: bool,
 
     /// Skip TypeScript compilation check (infra/dev)
     #[arg(long)]
@@ -153,6 +158,13 @@ const CHECKS: &[Check] = &[
         optional: false,
     },
     Check {
+        id: CheckId::PublishVersion,
+        name: "publish=false => version 0.0.0",
+        program: "__builtin__",
+        args: &[],
+        optional: false,
+    },
+    Check {
         id: CheckId::TypeScript,
         name: "tsc --noEmit (infra/dev)",
         program: "__builtin__",
@@ -170,6 +182,7 @@ fn should_skip(id: CheckId, args: &LintArgs) -> bool {
         CheckId::Test => args.no_test,
         CheckId::Rail => args.no_rail,
         CheckId::FileLength => args.no_file_length,
+        CheckId::PublishVersion => args.no_publish_version,
         CheckId::TypeScript => args.no_typescript,
     }
 }
@@ -264,6 +277,30 @@ fn evaluate_file_lengths(files: &[(String, usize)], max_lines: usize) -> CheckOu
     }
 }
 
+/// Validate that all crates with `publish = false` have `version = "0.0.0"`.
+fn evaluate_publish_versions(entries: &[(String, bool, String)]) -> CheckOutcome {
+    let violations: Vec<String> = entries
+        .iter()
+        .filter(|(_, publish_false, version)| *publish_false && version != "0.0.0")
+        .map(|(path, _, version)| {
+            format!("  {path}: publish = false but version = \"{version}\" (expected \"0.0.0\")")
+        })
+        .collect();
+
+    if violations.is_empty() {
+        CheckOutcome::Passed {
+            output: String::new(),
+        }
+    } else {
+        CheckOutcome::Failed {
+            output: format!(
+                "Unpublished crates must use version \"0.0.0\":\n{}\n",
+                violations.join("\n")
+            ),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Imperative Shell — I/O, side effects, orchestration
 // ---------------------------------------------------------------------------
@@ -304,6 +341,12 @@ pub fn run(args: &LintArgs) -> Result<()> {
             CheckResult {
                 name: check.name.to_string(),
                 outcome: evaluate_file_lengths(&files, 1000),
+            }
+        } else if check.id == CheckId::PublishVersion {
+            let entries = collect_publish_versions()?;
+            CheckResult {
+                name: check.name.to_string(),
+                outcome: evaluate_publish_versions(&entries),
             }
         } else if check.id == CheckId::TypeScript {
             CheckResult {
@@ -402,17 +445,46 @@ fn run_typescript_check() -> CheckOutcome {
     }
 }
 
-/// Collect (path, line_count) for every `.rs` file under `crates/*/src/`.
+/// Collect (path, line_count) for every `.rs` file under `crates/*/src/` and `lib/*/src/`.
 fn collect_file_lengths() -> Result<Vec<(String, usize)>> {
     let mut results = Vec::new();
-    for entry in glob::glob("crates/*/src/**/*.rs")
-        .into_iter()
-        .flatten()
-        .flatten()
-    {
-        let content = fs::read_to_string(&entry)?;
-        let line_count = content.lines().count();
-        results.push((entry.display().to_string(), line_count));
+    let patterns = &["crates/*/src/**/*.rs", "lib/*/src/**/*.rs"];
+    for pattern in patterns {
+        for entry in glob::glob(pattern).into_iter().flatten().flatten() {
+            let content = fs::read_to_string(&entry)?;
+            let line_count = content.lines().count();
+            results.push((entry.display().to_string(), line_count));
+        }
+    }
+    Ok(results)
+}
+
+/// Collect (path, publish_false, version) for every crate Cargo.toml under `crates/` and `lib/`.
+fn collect_publish_versions() -> Result<Vec<(String, bool, String)>> {
+    let mut results = Vec::new();
+    let patterns = &["crates/*/Cargo.toml", "lib/*/Cargo.toml"];
+    for pattern in patterns {
+        for entry in glob::glob(pattern).into_iter().flatten().flatten() {
+            let content = fs::read_to_string(&entry)?;
+            let doc: toml_edit::DocumentMut = content
+                .parse()
+                .map_err(|e| eyre::eyre!("failed to parse {}: {e}", entry.display()))?;
+            let pkg = match doc.get("package") {
+                Some(p) => p,
+                None => continue,
+            };
+            let publish_false = pkg
+                .get("publish")
+                .and_then(|v| v.as_bool())
+                .map(|b| !b)
+                .unwrap_or(false);
+            let version = pkg
+                .get("version")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            results.push((entry.display().to_string(), publish_false, version));
+        }
     }
     Ok(results)
 }
@@ -522,6 +594,7 @@ mod tests {
         assert!(!should_skip(CheckId::Test, &base));
         assert!(!should_skip(CheckId::Rail, &base));
         assert!(!should_skip(CheckId::FileLength, &base));
+        assert!(!should_skip(CheckId::PublishVersion, &base));
         assert!(!should_skip(CheckId::TypeScript, &base));
     }
 
@@ -562,6 +635,7 @@ mod tests {
         assert!(fix_args(CheckId::Check).is_none());
         assert!(fix_args(CheckId::Test).is_none());
         assert!(fix_args(CheckId::FileLength).is_none());
+        assert!(fix_args(CheckId::PublishVersion).is_none());
         assert!(fix_args(CheckId::TypeScript).is_none());
     }
 
@@ -638,6 +712,66 @@ mod tests {
         assert_eq!(check_display_name("typos", &[]), "typos");
     }
 
+    // --- evaluate_publish_versions ---
+
+    #[test]
+    fn publish_version_all_compliant() {
+        let entries = vec![
+            (
+                "crates/foo/Cargo.toml".to_string(),
+                true,
+                "0.0.0".to_string(),
+            ),
+            (
+                "crates/bar/Cargo.toml".to_string(),
+                false,
+                "0.1.0".to_string(),
+            ),
+        ];
+        assert!(matches!(
+            evaluate_publish_versions(&entries),
+            CheckOutcome::Passed { .. }
+        ));
+    }
+
+    #[test]
+    fn publish_version_violation() {
+        let entries = vec![(
+            "crates/foo/Cargo.toml".to_string(),
+            true,
+            "0.1.0".to_string(),
+        )];
+        let outcome = evaluate_publish_versions(&entries);
+        match outcome {
+            CheckOutcome::Failed { output } => {
+                assert!(output.contains("crates/foo/Cargo.toml"));
+                assert!(output.contains("0.1.0"));
+            }
+            _ => panic!("expected failure"),
+        }
+    }
+
+    #[test]
+    fn publish_version_published_crate_any_version_ok() {
+        let entries = vec![(
+            "crates/core/Cargo.toml".to_string(),
+            false,
+            "1.2.3".to_string(),
+        )];
+        assert!(matches!(
+            evaluate_publish_versions(&entries),
+            CheckOutcome::Passed { .. }
+        ));
+    }
+
+    #[test]
+    fn publish_version_empty_list() {
+        assert!(matches!(
+            evaluate_publish_versions(&[]),
+            CheckOutcome::Passed { .. }
+        ));
+    }
+
     /// Helper: build a LintArgs with all flags defaulted to false.
     fn default_lint_args() -> LintArgs {
         LintArgs {
@@ -648,6 +782,7 @@ mod tests {
             no_test: false,
             no_rail: false,
             no_file_length: false,
+            no_publish_version: false,
             no_typescript: false,
             fix: false,
             staged_only: false,

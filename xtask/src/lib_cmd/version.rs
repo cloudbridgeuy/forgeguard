@@ -3,7 +3,7 @@ use std::fmt;
 use color_eyre::eyre::{self, Result};
 
 /// A simple semver version (major.minor.patch).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct Version {
     major: u32,
     minor: u32,
@@ -157,5 +157,18 @@ mod tests {
     #[test]
     fn apply_bump_invalid() {
         assert!(Version::parse("1.0.0").unwrap().apply_bump("huge").is_err());
+    }
+
+    #[test]
+    fn version_ordering() {
+        let v010 = Version::parse("0.1.0").unwrap();
+        let v020 = Version::parse("0.2.0").unwrap();
+        let v011 = Version::parse("0.1.1").unwrap();
+        let v001 = Version::parse("0.0.1").unwrap();
+        assert!(v010 < v020);
+        assert!(v010 < v011);
+        assert!(v020 > v011);
+        assert!(v001 < v010);
+        assert_eq!(v010, Version::parse("0.1.0").unwrap());
     }
 }

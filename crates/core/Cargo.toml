@@ -2,7 +2,7 @@
 name = "forgeguard_core"
 version = "0.0.0"
 homepage = "https://github.com/cloudbridgeuy/forgeguard"
-description = "Shared primitives, traits, and error types for ForgeGuard"
+description = "Shared primitives, traits, and error types for ForgeGuard. Internal dep — use forgeguard-axum for the public API."
 autobins = false
 
 authors.workspace = true

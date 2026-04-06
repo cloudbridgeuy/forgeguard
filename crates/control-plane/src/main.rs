@@ -53,7 +53,11 @@ async fn run(cli: Cli) -> color_eyre::Result<()> {
     // out of this list.
     let route_matcher = RouteMatcher::new(&[])?;
     let public_routes = vec![
-        PublicRoute::new("GET".parse()?, "/health".to_string(), PublicAuthMode::Anonymous),
+        PublicRoute::new(
+            "GET".parse()?,
+            "/health".to_string(),
+            PublicAuthMode::Anonymous,
+        ),
         PublicRoute::new(
             "GET".parse()?,
             "/api/v1/organizations/{org_id}/proxy-config".to_string(),

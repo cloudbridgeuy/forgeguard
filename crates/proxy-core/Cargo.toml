@@ -2,7 +2,7 @@
 name = "forgeguard_proxy_core"
 version = "0.0.0"
 homepage = "https://github.com/cloudbridgeuy/forgeguard"
-description = "Auth pipeline types and pure logic for ForgeGuard proxy (pure, no I/O)"
+description = "Auth pipeline types and pure logic for ForgeGuard proxy (pure, no I/O). Internal dep — use forgeguard-axum for the public API."
 autobins = false
 
 authors.workspace = true
