@@ -1,6 +1,7 @@
 [package]
 name = "forgeguard_ffi_python"
 version = "0.0.0"
+publish = false
 homepage = "https://github.com/cloudbridgeuy/forgeguard"
 description = "ForgeGuard Python SDK — PyO3 bindings"
 autobins = false

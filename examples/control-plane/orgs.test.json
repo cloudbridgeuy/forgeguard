@@ -1,7 +1,6 @@
 {
   "organizations": {
     "org-acme": {
-      "token": "fgt_acme-test-token-do-not-use-in-production",
       "config": {
         "organization_id": "org-acme",
         "cognito_pool_id": "us-east-1_TestPool",
@@ -22,7 +21,6 @@
       }
     },
     "org-globex": {
-      "token": "fgt_globex-test-token-do-not-use-in-production",
       "config": {
         "organization_id": "org-globex",
         "cognito_pool_id": "us-east-1_GlobexPool",

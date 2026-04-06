@@ -1,0 +1,26 @@
+[package]
+name = "forgeguard-axum"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "ForgeGuard authentication and authorization middleware for Axum"
+
+[dependencies]
+axum = { workspace = true }
+forgeguard_authn_core = { workspace = true }
+forgeguard_authz_core = { workspace = true }
+forgeguard_core = { workspace = true }
+forgeguard_proxy_core = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+forgeguard_authn_core = { workspace = true } #unified
+forgeguard_authz_core = { workspace = true } #unified
+forgeguard_core = { path = "../../crates/core" }
+forgeguard_http = { path = "../../crates/http" }
+http-body-util = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }
+tower = { workspace = true }

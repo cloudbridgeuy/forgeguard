@@ -14,16 +14,16 @@ name = "forgeguard_proxy_core"
 path = "src/lib.rs"
 
 [dependencies]
-forgeguard_core = { workspace = true }
-forgeguard_http = { workspace = true }
 forgeguard_authn_core = { workspace = true }
 forgeguard_authz_core = { workspace = true }
+forgeguard_core = { workspace = true }
+forgeguard_http = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
-forgeguard_authn_core = { path = "../authn-core", features = ["test-support"] }
-forgeguard_authz_core = { path = "../authz-core", features = ["test-support"] }
+forgeguard_authn_core = { workspace = true } #unified
+forgeguard_authz_core = { workspace = true } #unified
 tokio = { workspace = true, features = ["macros", "rt"] }
 
 [lints]

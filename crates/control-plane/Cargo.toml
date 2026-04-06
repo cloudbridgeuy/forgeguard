@@ -1,6 +1,7 @@
 [package]
 name = "forgeguard_control_plane"
 version = "0.0.0"
+publish = false
 homepage = "https://github.com/cloudbridgeuy/forgeguard"
 description = "ForgeGuard control plane — dashboard API server"
 autobins = false
@@ -17,7 +18,12 @@ path = "src/main.rs"
 axum = { workspace = true }
 clap = { workspace = true }
 color-eyre = { workspace = true }
+forgeguard-axum = { workspace = true }
+forgeguard_authn_core = { workspace = true }
+forgeguard_authz_core = { workspace = true }
 forgeguard_core = { workspace = true }
+forgeguard_http = { workspace = true }
+forgeguard_proxy_core = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

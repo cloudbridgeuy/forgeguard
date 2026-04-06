@@ -1,5 +1,5 @@
 [workspace]
-members = ["xtask/", "crates/*"]
+members = ["xtask/", "crates/*", "lib/*"]
 resolver = "2"
 
 [workspace.package]
@@ -53,14 +53,11 @@ aws-sdk-cloudformation = "1"
 aws-sdk-cognitoidentityprovider = "1"
 aws-sdk-verifiedpermissions = "1"
 
-# Binary data encoding
-base64 = "0.22"
-
 # HTTP framework
 axum = { version = "0.8", features = ["macros"] }
 
-# HTTP body utilities (testing)
-http-body-util = "0.1"
+# Binary data encoding
+base64 = "0.22"
 
 # Binary data
 bytes = "1"
@@ -76,20 +73,24 @@ color-eyre = "0.6"
 
 # Environment variables
 dotenvy = "0.15"
+forgeguard-axum = { version = "0.1.0", path = "lib/forgeguard-axum" }
 forgeguard_audit = { version = "0.0.0", path = "crates/audit" }
 forgeguard_audit_core = { version = "0.0.0", path = "crates/audit-core" }
 
 # Internal crates — I/O
 forgeguard_authn = { version = "0.0.0", path = "crates/authn" }
-forgeguard_authn_core = { version = "0.0.0", path = "crates/authn-core" }
+forgeguard_authn_core = { path = "crates/authn-core", version = "^0.0.0", features = ["test-support"] } #unified
 forgeguard_authz = { version = "0.0.0", path = "crates/authz" }
-forgeguard_authz_core = { version = "0.0.0", path = "crates/authz-core" }
+forgeguard_authz_core = { path = "crates/authz-core", version = "^0.0.0", features = ["test-support"] } #unified
 
 # Internal crates — pure
 forgeguard_core = { version = "0.0.0", path = "crates/core" }
 forgeguard_http = { version = "0.0.0", path = "crates/http" }
 forgeguard_proxy_core = { version = "0.0.0", path = "crates/proxy-core" }
 forgeguard_sdk = { version = "0.0.0", path = "crates/sdk" }
+
+# HTTP body utilities (testing)
+http-body-util = "0.1"
 
 # JWT
 jsonwebtoken = "9.3"
@@ -100,8 +101,8 @@ lru = "0.12"
 # Routing
 matchit = "0.8"
 
-# Metrics
-prometheus = "0.13"
+# Terminal colors
+owo-colors = { version = "4", features = ["supports-colors"] }
 
 # Pingora reverse proxy framework
 pingora = "0.8"
@@ -109,6 +110,9 @@ pingora-core = "0.8"
 pingora-error = "0.8"
 pingora-http = "0.8"
 pingora-proxy = "0.8"
+
+# Metrics
+prometheus = "0.13"
 
 # Redis
 redis = { version = "1.0", features = ["tokio-comp", "connection-manager"] }
@@ -119,10 +123,10 @@ reqwest = { version = "0.12", features = ["json"] }
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-thiserror = "2.0"
 
 # Temp files (testing)
 tempfile = "3"
+thiserror = "2.0"
 
 # Async runtime
 tokio = { version = "1.0", features = ["full"] }
@@ -131,9 +135,6 @@ toml_edit = "0.22"
 # Tower middleware
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["cors", "trace", "timeout"] }
-
-# Terminal colors
-owo-colors = { version = "4", features = ["supports-colors"] }
 
 # Logging / tracing
 tracing = "0.1"

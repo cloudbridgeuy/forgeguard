@@ -1,6 +1,7 @@
 [package]
 name = "forgeguard_ffi_wasm"
 version = "0.0.0"
+publish = false
 homepage = "https://github.com/cloudbridgeuy/forgeguard"
 description = "ForgeGuard TypeScript SDK — WASM bindings"
 autobins = false

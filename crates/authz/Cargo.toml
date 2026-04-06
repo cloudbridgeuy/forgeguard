@@ -1,6 +1,7 @@
 [package]
 name = "forgeguard_authz"
 version = "0.0.0"
+publish = false
 homepage = "https://github.com/cloudbridgeuy/forgeguard"
 description = "Authorization I/O — Verified Permissions client, Cedar policy sync, caching"
 autobins = false

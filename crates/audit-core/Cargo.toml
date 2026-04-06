@@ -1,6 +1,7 @@
 [package]
 name = "forgeguard_audit_core"
 version = "0.0.0"
+publish = false
 homepage = "https://github.com/cloudbridgeuy/forgeguard"
 description = "Auditing domain types, event log schema, and metric definitions (pure)"
 autobins = false

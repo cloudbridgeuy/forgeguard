@@ -9,6 +9,7 @@
 //! alias in `.cargo/config`.
 
 mod dev;
+mod lib_cmd;
 mod lint;
 
 use clap::{Parser, Subcommand};
@@ -27,6 +28,8 @@ enum Commands {
     Lint(lint::LintArgs),
     /// Development infrastructure commands
     Dev(dev::DevArgs),
+    /// Library crate management commands
+    Lib(lib_cmd::LibArgs),
 }
 
 #[tokio::main]
@@ -37,5 +40,6 @@ async fn main() -> Result<()> {
     match app.command {
         Commands::Lint(args) => lint::run(&args),
         Commands::Dev(args) => dev::run(&args).await,
+        Commands::Lib(args) => lib_cmd::run(&args),
     }
 }

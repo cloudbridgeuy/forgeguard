@@ -1,6 +1,7 @@
 [package]
 name = "forgeguard_http"
 version = "0.0.0"
+publish = false
 homepage = "https://github.com/cloudbridgeuy/forgeguard"
 description = "HTTP adapter types: route matching, config parsing, credential extraction, header injection"
 autobins = false

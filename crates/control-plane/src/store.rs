@@ -18,18 +18,12 @@ pub(crate) trait OrgStore: Send + Sync {
 #[derive(Debug, Clone)]
 pub(crate) struct OrgEntry {
     config: OrgProxyConfig,
-    /// Bearer token for proxy authentication.
-    token: String,
     etag: String,
 }
 
 impl OrgEntry {
     pub(crate) fn config(&self) -> &OrgProxyConfig {
         &self.config
-    }
-
-    pub(crate) fn token(&self) -> &str {
-        &self.token
     }
 
     pub(crate) fn etag(&self) -> &str {
@@ -40,13 +34,9 @@ impl OrgEntry {
 #[cfg(test)]
 impl OrgEntry {
     /// Create a new `OrgEntry`. Computes ETag from the config.
-    pub(crate) fn new(config: OrgProxyConfig, token: String) -> Result<Self> {
+    pub(crate) fn new(config: OrgProxyConfig) -> Result<Self> {
         let etag = compute_etag(&config)?;
-        Ok(Self {
-            config,
-            token,
-            etag,
-        })
+        Ok(Self { config, etag })
     }
 }
 
@@ -78,7 +68,6 @@ struct RawOrgFile {
 
 #[derive(Debug, Deserialize)]
 struct RawOrgEntry {
-    token: String,
     config: OrgProxyConfig,
 }
 
@@ -105,25 +94,12 @@ pub(crate) fn build_org_store(json_str: &str) -> Result<OrgConfigStore> {
             )));
         }
 
-        if raw_entry.token.is_empty() {
-            return Err(Error::Config(format!(
-                "organization {raw_id:?} has an empty token"
-            )));
-        }
-
-        if !raw_entry.token.starts_with("fgt_") {
-            return Err(Error::Config(format!(
-                "organization '{raw_id}': token must start with 'fgt_' prefix"
-            )));
-        }
-
         let etag = compute_etag(&raw_entry.config)?;
 
         orgs.insert(
             org_id,
             OrgEntry {
                 config: raw_entry.config,
-                token: raw_entry.token,
                 etag,
             },
         );
@@ -147,7 +123,6 @@ mod tests {
         r#"{
             "organizations": {
                 "org-acme": {
-                    "token": "fgt_abc123",
                     "config": {
                         "organization_id": "org-acme",
                         "cognito_pool_id": "us-east-1_ABC",
@@ -185,7 +160,6 @@ mod tests {
         let json = r#"{
             "organizations": {
                 "UPPER-CASE": {
-                    "token": "fgt_abc123",
                     "config": {
                         "organization_id": "UPPER-CASE",
                         "cognito_pool_id": "pool",
@@ -203,55 +177,6 @@ mod tests {
     }
 
     #[test]
-    fn build_org_store_empty_token() {
-        let json = r#"{
-            "organizations": {
-                "org-acme": {
-                    "token": "",
-                    "config": {
-                        "organization_id": "org-acme",
-                        "cognito_pool_id": "pool",
-                        "cognito_jwks_url": "https://example.com",
-                        "policy_store_id": "ps",
-                        "project_id": "proj",
-                        "upstream_url": "https://example.com",
-                        "default_policy": "deny"
-                    }
-                }
-            }
-        }"#;
-        let result = build_org_store(json);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn build_org_store_token_missing_prefix() {
-        let json = r#"{
-            "organizations": {
-                "org-acme": {
-                    "token": "mysecret",
-                    "config": {
-                        "organization_id": "org-acme",
-                        "cognito_pool_id": "pool",
-                        "cognito_jwks_url": "https://example.com",
-                        "policy_store_id": "ps",
-                        "project_id": "proj",
-                        "upstream_url": "https://example.com",
-                        "default_policy": "deny"
-                    }
-                }
-            }
-        }"#;
-        let result = build_org_store(json);
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(
-            err.contains("fgt_"),
-            "expected fgt_ prefix error, got: {err}"
-        );
-    }
-
-    #[test]
     fn build_org_store_empty_organizations() {
         let json = r#"{ "organizations": {} }"#;
         let store = build_org_store(json).unwrap();
@@ -264,7 +189,6 @@ mod tests {
         let json = r#"{
             "organizations": {
                 "org-alpha": {
-                    "token": "fgt_alpha",
                     "config": {
                         "organization_id": "org-alpha",
                         "cognito_pool_id": "pool-a",
@@ -276,7 +200,6 @@ mod tests {
                     }
                 },
                 "org-beta": {
-                    "token": "fgt_beta",
                     "config": {
                         "organization_id": "org-beta",
                         "cognito_pool_id": "pool-b",
@@ -317,7 +240,6 @@ mod tests {
         let json = r#"{
             "organizations": {
                 "org-acme": {
-                    "token": "fgt_abc123",
                     "config": {
                         "organization_id": "org-other",
                         "cognito_pool_id": "us-east-1_ABC",

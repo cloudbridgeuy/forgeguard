@@ -1,7 +1,6 @@
 {
   "organizations": {
     "org-acme": {
-      "token": "fgt_replace_me",
       "config": {
         "organization_id": "org-acme",
         "cognito_pool_id": "<your-cognito-pool-id>",
