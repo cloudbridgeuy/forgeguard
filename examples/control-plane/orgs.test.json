@@ -1,0 +1,40 @@
+{
+  "organizations": {
+    "org-acme": {
+      "token": "fgt_acme-test-token-do-not-use-in-production",
+      "config": {
+        "organization_id": "org-acme",
+        "cognito_pool_id": "us-east-1_TestPool",
+        "cognito_jwks_url": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_TestPool/.well-known/jwks.json",
+        "policy_store_id": "ps-test123",
+        "project_id": "todo-demo",
+        "upstream_url": "https://api.acme.test",
+        "default_policy": "deny",
+        "routes": [
+          {"method": "GET", "path": "/api/todos", "action": "todo:list:read"},
+          {"method": "POST", "path": "/api/todos", "action": "todo:list:create"},
+          {"method": "DELETE", "path": "/api/todos/:id", "action": "todo:item:delete", "resource_param": "id"}
+        ],
+        "public_routes": [
+          {"method": "GET", "path": "/health", "auth_mode": "anonymous"}
+        ],
+        "features": {}
+      }
+    },
+    "org-globex": {
+      "token": "fgt_globex-test-token-do-not-use-in-production",
+      "config": {
+        "organization_id": "org-globex",
+        "cognito_pool_id": "us-east-1_GlobexPool",
+        "cognito_jwks_url": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_GlobexPool/.well-known/jwks.json",
+        "policy_store_id": "ps-globex456",
+        "project_id": "globex-app",
+        "upstream_url": "https://api.globex.test",
+        "default_policy": "passthrough",
+        "routes": [],
+        "public_routes": [],
+        "features": {}
+      }
+    }
+  }
+}

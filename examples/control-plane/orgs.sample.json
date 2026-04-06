@@ -1,0 +1,25 @@
+{
+  "organizations": {
+    "org-acme": {
+      "token": "fgt_replace_me",
+      "config": {
+        "organization_id": "org-acme",
+        "cognito_pool_id": "<your-cognito-pool-id>",
+        "cognito_jwks_url": "<your-jwks-url>",
+        "policy_store_id": "<your-policy-store-id>",
+        "project_id": "<your-project-id>",
+        "upstream_url": "https://api.acme.com",
+        "default_policy": "deny",
+        "routes": [
+          {"method": "GET", "path": "/api/todos", "action": "todo:list:read"},
+          {"method": "POST", "path": "/api/todos", "action": "todo:list:create"},
+          {"method": "DELETE", "path": "/api/todos/{id}", "action": "todo:item:delete", "resource_param": "id"}
+        ],
+        "public_routes": [
+          {"method": "GET", "path": "/health", "auth_mode": "anonymous"}
+        ],
+        "features": {}
+      }
+    }
+  }
+}
