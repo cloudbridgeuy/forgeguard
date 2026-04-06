@@ -10,6 +10,7 @@ use forgeguard_core::{
     CedarEntityRef, FlagConfig, FlagName, GroupDefinition, GroupName, Policy, ProjectId,
     QualifiedAction,
 };
+use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::config_raw::RawProxyConfig;
@@ -26,7 +27,8 @@ use crate::{Error, Result};
 // ---------------------------------------------------------------------------
 
 /// What happens when no route matches a request.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum DefaultPolicy {
     /// Allow the request to pass through to upstream.
     Passthrough,

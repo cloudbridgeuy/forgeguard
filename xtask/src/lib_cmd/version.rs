@@ -1,6 +1,38 @@
 use std::fmt;
+use std::str::FromStr;
 
 use color_eyre::eyre::{self, Result};
+
+/// Semver bump level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BumpLevel {
+    Patch,
+    Minor,
+    Major,
+}
+
+impl FromStr for BumpLevel {
+    type Err = color_eyre::eyre::Report;
+
+    fn from_str(s: &str) -> Result<Self> {
+        match s {
+            "patch" => Ok(Self::Patch),
+            "minor" => Ok(Self::Minor),
+            "major" => Ok(Self::Major),
+            _ => eyre::bail!("invalid bump level '{s}': expected patch, minor, or major"),
+        }
+    }
+}
+
+impl fmt::Display for BumpLevel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Patch => write!(f, "patch"),
+            Self::Minor => write!(f, "minor"),
+            Self::Major => write!(f, "major"),
+        }
+    }
+}
 
 /// A simple semver version (major.minor.patch).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -57,13 +89,12 @@ impl Version {
         }
     }
 
-    /// Apply a bump level string ("patch", "minor", "major") to this version.
-    pub(crate) fn apply_bump(self, level: &str) -> Result<Self> {
+    /// Apply a bump level to this version.
+    pub(crate) fn apply_bump(self, level: BumpLevel) -> Self {
         match level {
-            "patch" => Ok(self.bump_patch()),
-            "minor" => Ok(self.bump_minor()),
-            "major" => Ok(self.bump_major()),
-            other => eyre::bail!("unknown bump level '{other}'"),
+            BumpLevel::Patch => self.bump_patch(),
+            BumpLevel::Minor => self.bump_minor(),
+            BumpLevel::Major => self.bump_major(),
         }
     }
 }
@@ -131,8 +162,7 @@ mod tests {
     fn apply_bump_patch() {
         let v = Version::parse("1.0.0")
             .unwrap()
-            .apply_bump("patch")
-            .unwrap();
+            .apply_bump(BumpLevel::Patch);
         assert_eq!(v.to_string(), "1.0.1");
     }
 
@@ -140,8 +170,7 @@ mod tests {
     fn apply_bump_minor() {
         let v = Version::parse("1.0.5")
             .unwrap()
-            .apply_bump("minor")
-            .unwrap();
+            .apply_bump(BumpLevel::Minor);
         assert_eq!(v.to_string(), "1.1.0");
     }
 
@@ -149,14 +178,29 @@ mod tests {
     fn apply_bump_major() {
         let v = Version::parse("1.2.3")
             .unwrap()
-            .apply_bump("major")
-            .unwrap();
+            .apply_bump(BumpLevel::Major);
         assert_eq!(v.to_string(), "2.0.0");
     }
 
     #[test]
-    fn apply_bump_invalid() {
-        assert!(Version::parse("1.0.0").unwrap().apply_bump("huge").is_err());
+    fn bump_level_from_str_valid() {
+        assert_eq!("patch".parse::<BumpLevel>().unwrap(), BumpLevel::Patch);
+        assert_eq!("minor".parse::<BumpLevel>().unwrap(), BumpLevel::Minor);
+        assert_eq!("major".parse::<BumpLevel>().unwrap(), BumpLevel::Major);
+    }
+
+    #[test]
+    fn bump_level_from_str_invalid() {
+        assert!("huge".parse::<BumpLevel>().is_err());
+        assert!("PATCH".parse::<BumpLevel>().is_err());
+        assert!("".parse::<BumpLevel>().is_err());
+    }
+
+    #[test]
+    fn bump_level_display() {
+        assert_eq!(BumpLevel::Patch.to_string(), "patch");
+        assert_eq!(BumpLevel::Minor.to_string(), "minor");
+        assert_eq!(BumpLevel::Major.to_string(), "major");
     }
 
     #[test]

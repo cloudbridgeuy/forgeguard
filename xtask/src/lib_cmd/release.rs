@@ -5,7 +5,7 @@ use clap::Args;
 use color_eyre::eyre::{self, Result};
 use toml_edit::DocumentMut;
 
-use super::version::Version;
+use super::version::{BumpLevel, Version};
 
 /// Arguments for `cargo xtask lib release`.
 #[derive(Args)]
@@ -13,9 +13,9 @@ pub struct ReleaseArgs {
     /// The lib crate to release (e.g., forgeguard-axum)
     pub crate_name: String,
 
-    /// Version bump level
-    #[arg(long, value_parser = ["patch", "minor", "major"])]
-    pub bump: Option<String>,
+    /// Version bump level (patch, minor, major)
+    #[arg(long, value_parser = clap::value_parser!(BumpLevel))]
+    pub bump: Option<BumpLevel>,
 
     /// Set an exact version instead of bumping
     #[arg(long, conflicts_with = "bump")]
@@ -26,12 +26,30 @@ pub struct ReleaseArgs {
     pub dry_run: bool,
 }
 
+/// A shared dependency crate that gets lock-step version bumped alongside lib releases.
+struct SharedDep {
+    crate_name: &'static str,
+    dir: &'static str,
+}
+
 /// Crate name and directory path for the shared deps that get lock-step bumped.
-const SHARED_DEPS: &[(&str, &str)] = &[
-    ("forgeguard_core", "crates/core"),
-    ("forgeguard_authn_core", "crates/authn-core"),
-    ("forgeguard_authz_core", "crates/authz-core"),
-    ("forgeguard_proxy_core", "crates/proxy-core"),
+const SHARED_DEPS: &[SharedDep] = &[
+    SharedDep {
+        crate_name: "forgeguard_core",
+        dir: "crates/core",
+    },
+    SharedDep {
+        crate_name: "forgeguard_authn_core",
+        dir: "crates/authn-core",
+    },
+    SharedDep {
+        crate_name: "forgeguard_authz_core",
+        dir: "crates/authz-core",
+    },
+    SharedDep {
+        crate_name: "forgeguard_proxy_core",
+        dir: "crates/proxy-core",
+    },
 ];
 
 /// Tracks old and new version for one crate.
@@ -165,21 +183,15 @@ fn update_workspace_dep_version(
 }
 
 /// Compute all version changes: the lib crate + 4 shared deps.
-fn compute_version_changes(args: &ReleaseArgs) -> Result<(Vec<VersionChange>, String)> {
+fn compute_version_changes(args: &ReleaseArgs) -> Result<Vec<VersionChange>> {
     let root = workspace_root();
     let mut changes = Vec::new();
 
-    // Determine the bump level string for shared deps
+    // Determine the bump level for shared deps
     let bump_level = match (&args.bump, &args.version) {
-        (Some(level), _) => level.clone(),
-        (None, Some(_)) => {
-            // When --version is used, we still need a bump level for shared deps.
-            // We cannot infer a bump level from an exact version, so we require --bump.
-            // However, clap's conflicts_with prevents both. For --version, we bump shared
-            // deps by patch as a sensible default.
-            "patch".to_string()
-        }
-        (None, None) => unreachable!(), // validated earlier
+        (Some(level), _) => *level,
+        (None, Some(_)) => BumpLevel::Patch, // default for --version mode
+        (None, None) => eyre::bail!("either --bump or --version must be provided"),
     };
 
     // 1. Lib crate version
@@ -187,7 +199,7 @@ fn compute_version_changes(args: &ReleaseArgs) -> Result<(Vec<VersionChange>, St
     let lib_old = read_crate_version(&lib_cargo)?;
     let lib_new = match &args.version {
         Some(v) => Version::parse(v)?,
-        None => lib_old.apply_bump(&bump_level)?,
+        None => lib_old.apply_bump(bump_level),
     };
     changes.push(VersionChange {
         crate_name: args.crate_name.clone(),
@@ -196,18 +208,18 @@ fn compute_version_changes(args: &ReleaseArgs) -> Result<(Vec<VersionChange>, St
     });
 
     // 2. Shared deps — all bumped with the same level
-    for (dep_name, dep_dir) in SHARED_DEPS {
-        let dep_cargo = root.join(dep_dir).join("Cargo.toml");
+    for dep in SHARED_DEPS {
+        let dep_cargo = root.join(dep.dir).join("Cargo.toml");
         let old = read_crate_version(&dep_cargo)?;
-        let new = old.apply_bump(&bump_level)?;
+        let new = old.apply_bump(bump_level);
         changes.push(VersionChange {
-            crate_name: (*dep_name).to_string(),
+            crate_name: dep.crate_name.to_string(),
             old,
             new,
         });
     }
 
-    Ok((changes, bump_level))
+    Ok(changes)
 }
 
 /// Apply all version changes to Cargo.toml files.
@@ -219,8 +231,8 @@ fn apply_version_changes(args: &ReleaseArgs, changes: &[VersionChange]) -> Resul
     write_crate_version(&lib_cargo, &changes[0].new)?;
 
     // 2. Write shared dep versions
-    for (i, (_, dep_dir)) in SHARED_DEPS.iter().enumerate() {
-        let dep_cargo = root.join(dep_dir).join("Cargo.toml");
+    for (i, dep) in SHARED_DEPS.iter().enumerate() {
+        let dep_cargo = root.join(dep.dir).join("Cargo.toml");
         write_crate_version(&dep_cargo, &changes[i + 1].new)?;
     }
 
@@ -235,8 +247,8 @@ fn apply_version_changes(args: &ReleaseArgs, changes: &[VersionChange]) -> Resul
     update_workspace_dep_version(&mut doc, &args.crate_name, &changes[0].new)?;
 
     // Update shared deps
-    for (i, (dep_name, _)) in SHARED_DEPS.iter().enumerate() {
-        update_workspace_dep_version(&mut doc, dep_name, &changes[i + 1].new)?;
+    for (i, dep) in SHARED_DEPS.iter().enumerate() {
+        update_workspace_dep_version(&mut doc, dep.crate_name, &changes[i + 1].new)?;
     }
 
     std::fs::write(&root_cargo, doc.to_string())?;
@@ -248,50 +260,61 @@ fn apply_version_changes(args: &ReleaseArgs, changes: &[VersionChange]) -> Resul
 // Changelog (Task 24 - N23)
 // ---------------------------------------------------------------------------
 
+/// Pure: insert a changelog entry after the `# Changelog` header.
+///
+/// If `existing` has no `# ` header, prepends one.
+fn format_changelog_entry(existing: &str, version: &str, date: &str) -> String {
+    let new_entry = format!("## [{version}] - {date}\n\n- Release {version}\n");
+
+    if existing.is_empty() {
+        return format!("# Changelog\n\n{new_entry}");
+    }
+
+    // Insert the new entry after the first heading line (# Changelog)
+    let mut lines = existing.lines();
+    let mut output = String::new();
+
+    // Find and keep the header
+    let mut found_header = false;
+    for line in &mut lines {
+        output.push_str(line);
+        output.push('\n');
+        if line.starts_with("# ") {
+            found_header = true;
+            output.push('\n');
+            break;
+        }
+    }
+
+    if !found_header {
+        // No header found — prepend header + entry to existing content
+        let mut full = format!("# Changelog\n\n{new_entry}\n");
+        full.push_str(existing);
+        full
+    } else {
+        // Skip any blank lines after the header
+        let rest: String = lines.map(|l| format!("{l}\n")).collect();
+
+        output.push_str(&new_entry);
+        output.push('\n');
+        output.push_str(&rest);
+        output
+    }
+}
+
 fn update_changelog(crate_name: &str, version: &Version) -> Result<()> {
     let root = workspace_root();
     let changelog_path = root.join("lib").join(crate_name).join("CHANGELOG.md");
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
 
-    let today = chrono::Local::now().format("%Y-%m-%d");
-    let new_entry = format!("## [{version}] - {today}\n\n- Release {version}\n");
-
-    if changelog_path.exists() {
-        let existing = std::fs::read_to_string(&changelog_path)?;
-        // Insert the new entry after the first heading line (# Changelog)
-        let mut lines = existing.lines();
-        let mut output = String::new();
-
-        // Find and keep the header
-        let mut found_header = false;
-        for line in &mut lines {
-            output.push_str(line);
-            output.push('\n');
-            if line.starts_with("# ") {
-                found_header = true;
-                output.push('\n');
-                break;
-            }
-        }
-
-        if !found_header {
-            // No header found — prepend header + entry to existing content
-            let mut full = format!("# Changelog\n\n{new_entry}\n");
-            full.push_str(&existing);
-            std::fs::write(&changelog_path, full)?;
-        } else {
-            // Skip any blank lines after the header
-            let rest: String = lines.map(|l| format!("{l}\n")).collect();
-
-            output.push_str(&new_entry);
-            output.push('\n');
-            output.push_str(&rest);
-            std::fs::write(&changelog_path, output)?;
-        }
+    let existing = if changelog_path.exists() {
+        std::fs::read_to_string(&changelog_path)?
     } else {
-        let content = format!("# Changelog\n\n{new_entry}");
-        std::fs::write(&changelog_path, content)?;
-    }
+        String::new()
+    };
 
+    let content = format_changelog_entry(&existing, &version.to_string(), &today);
+    std::fs::write(&changelog_path, content)?;
     Ok(())
 }
 
@@ -316,7 +339,7 @@ fn dry_run_publish(lib_crate_name: &str) -> Result<()> {
 
     // Package the root dep (forgeguard_core) as a smoke test — it has no
     // unpublished workspace deps.
-    let root_dep = SHARED_DEPS[0].0;
+    let root_dep = SHARED_DEPS[0].crate_name;
     println!("  cargo package --allow-dirty -p {root_dep}");
     duct::cmd!("cargo", "package", "--allow-dirty", "-p", root_dep)
         .stderr_to_stdout()
@@ -413,7 +436,7 @@ fn workspace_root() -> PathBuf {
 fn build_publish_order(lib_crate_name: &str) -> Vec<String> {
     let mut order: Vec<String> = SHARED_DEPS
         .iter()
-        .map(|(name, _)| (*name).to_string())
+        .map(|dep| dep.crate_name.to_string())
         .collect();
     order.push(lib_crate_name.to_string());
     order
@@ -428,7 +451,7 @@ pub fn run(args: &ReleaseArgs) -> Result<()> {
     validate(args)?;
 
     println!("Computing version changes...");
-    let (changes, _bump_level) = compute_version_changes(args)?;
+    let changes = compute_version_changes(args)?;
 
     // Validate: all shared deps' new version >= lib crate's new version
     let lib_new = &changes[0].new;
@@ -478,4 +501,58 @@ pub fn run(args: &ReleaseArgs) -> Result<()> {
         args.crate_name, changes[0].new
     );
     Ok(())
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    // --- build_publish_order ---
+
+    #[test]
+    fn publish_order_starts_with_shared_deps() {
+        let order = build_publish_order("forgeguard-axum");
+        assert_eq!(order[0], "forgeguard_core");
+        assert_eq!(order[1], "forgeguard_authn_core");
+        assert_eq!(order[2], "forgeguard_authz_core");
+        assert_eq!(order[3], "forgeguard_proxy_core");
+    }
+
+    #[test]
+    fn publish_order_ends_with_lib_crate() {
+        let order = build_publish_order("forgeguard-axum");
+        assert_eq!(order.last().unwrap(), "forgeguard-axum");
+        assert_eq!(order.len(), SHARED_DEPS.len() + 1);
+    }
+
+    // --- format_changelog_entry ---
+
+    #[test]
+    fn changelog_new_file_gets_header_and_entry() {
+        let result = format_changelog_entry("", "0.2.0", "2026-04-05");
+        assert!(result.starts_with("# Changelog\n\n"));
+        assert!(result.contains("## [0.2.0] - 2026-04-05"));
+        assert!(result.contains("- Release 0.2.0"));
+    }
+
+    #[test]
+    fn changelog_existing_file_inserts_after_header() {
+        let existing = "# Changelog\n\n## [0.1.0] - 2026-01-01\n\n- Initial release\n";
+        let result = format_changelog_entry(existing, "0.2.0", "2026-04-05");
+        // New entry should appear before the old entry
+        let new_pos = result.find("## [0.2.0]").unwrap();
+        let old_pos = result.find("## [0.1.0]").unwrap();
+        assert!(new_pos < old_pos);
+        assert!(result.starts_with("# Changelog\n"));
+    }
+
+    #[test]
+    fn changelog_file_without_header_gets_header_prepended() {
+        let existing = "Some random content\nwithout a header\n";
+        let result = format_changelog_entry(existing, "0.2.0", "2026-04-05");
+        assert!(result.starts_with("# Changelog\n\n"));
+        assert!(result.contains("## [0.2.0] - 2026-04-05"));
+        assert!(result.contains("Some random content"));
+    }
 }

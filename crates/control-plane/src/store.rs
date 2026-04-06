@@ -87,7 +87,7 @@ pub(crate) fn build_org_store(json_str: &str) -> Result<OrgConfigStore> {
         let org_id = OrganizationId::new(&raw_id)
             .map_err(|e| Error::Config(format!("invalid organization id {raw_id:?}: {e}")))?;
 
-        if raw_id != raw_entry.config.organization_id {
+        if org_id != raw_entry.config.organization_id {
             return Err(Error::Config(format!(
                 "organization key '{raw_id}' does not match config organization_id '{}'",
                 raw_entry.config.organization_id
@@ -145,8 +145,14 @@ mod tests {
         let store = build_org_store(sample_json()).unwrap();
         let org_id = OrganizationId::new("org-acme").unwrap();
         let entry = store.get(&org_id).unwrap();
-        assert_eq!(entry.config().organization_id, "org-acme");
-        assert_eq!(entry.config().default_policy, "deny");
+        assert_eq!(
+            entry.config().organization_id,
+            OrganizationId::new("org-acme").unwrap()
+        );
+        assert_eq!(
+            entry.config().default_policy,
+            forgeguard_http::DefaultPolicy::Deny
+        );
     }
 
     #[test]
@@ -207,7 +213,7 @@ mod tests {
                         "policy_store_id": "ps-b",
                         "project_id": "proj-b",
                         "upstream_url": "https://beta.com",
-                        "default_policy": "allow"
+                        "default_policy": "passthrough"
                     }
                 }
             }
@@ -221,7 +227,10 @@ mod tests {
             store.get(&alpha).unwrap().config().upstream_url,
             "https://alpha.com"
         );
-        assert_eq!(store.get(&beta).unwrap().config().default_policy, "allow");
+        assert_eq!(
+            store.get(&beta).unwrap().config().default_policy,
+            forgeguard_http::DefaultPolicy::Passthrough
+        );
     }
 
     #[test]

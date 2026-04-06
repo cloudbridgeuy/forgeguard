@@ -2,6 +2,8 @@
 
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
+
 use crate::method::HttpMethod;
 use crate::route::{normalize_path, normalize_pattern};
 use crate::Result;
@@ -11,7 +13,8 @@ use crate::Result;
 // ---------------------------------------------------------------------------
 
 /// How authentication is handled for a public route.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum PublicAuthMode {
     /// No authentication attempted at all.
     Anonymous,

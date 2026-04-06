@@ -277,13 +277,23 @@ fn evaluate_file_lengths(files: &[(String, usize)], max_lines: usize) -> CheckOu
     }
 }
 
+/// Entry for the publish-version invariant check.
+struct PublishEntry {
+    path: String,
+    is_unpublished: bool,
+    version: String,
+}
+
 /// Validate that all crates with `publish = false` have `version = "0.0.0"`.
-fn evaluate_publish_versions(entries: &[(String, bool, String)]) -> CheckOutcome {
+fn evaluate_publish_versions(entries: &[PublishEntry]) -> CheckOutcome {
     let violations: Vec<String> = entries
         .iter()
-        .filter(|(_, publish_false, version)| *publish_false && version != "0.0.0")
-        .map(|(path, _, version)| {
-            format!("  {path}: publish = false but version = \"{version}\" (expected \"0.0.0\")")
+        .filter(|e| e.is_unpublished && e.version != "0.0.0")
+        .map(|e| {
+            format!(
+                "  {}: publish = false but version = \"{}\" (expected \"0.0.0\")",
+                e.path, e.version
+            )
         })
         .collect();
 
@@ -459,8 +469,8 @@ fn collect_file_lengths() -> Result<Vec<(String, usize)>> {
     Ok(results)
 }
 
-/// Collect (path, publish_false, version) for every crate Cargo.toml under `crates/` and `lib/`.
-fn collect_publish_versions() -> Result<Vec<(String, bool, String)>> {
+/// Collect publish-version entries for every crate Cargo.toml under `crates/` and `lib/`.
+fn collect_publish_versions() -> Result<Vec<PublishEntry>> {
     let mut results = Vec::new();
     let patterns = &["crates/*/Cargo.toml", "lib/*/Cargo.toml"];
     for pattern in patterns {
@@ -473,7 +483,7 @@ fn collect_publish_versions() -> Result<Vec<(String, bool, String)>> {
                 Some(p) => p,
                 None => continue,
             };
-            let publish_false = pkg
+            let is_unpublished = pkg
                 .get("publish")
                 .and_then(|v| v.as_bool())
                 .map(|b| !b)
@@ -483,7 +493,11 @@ fn collect_publish_versions() -> Result<Vec<(String, bool, String)>> {
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown")
                 .to_string();
-            results.push((entry.display().to_string(), publish_false, version));
+            results.push(PublishEntry {
+                path: entry.display().to_string(),
+                is_unpublished,
+                version,
+            });
         }
     }
     Ok(results)
@@ -717,16 +731,16 @@ mod tests {
     #[test]
     fn publish_version_all_compliant() {
         let entries = vec![
-            (
-                "crates/foo/Cargo.toml".to_string(),
-                true,
-                "0.0.0".to_string(),
-            ),
-            (
-                "crates/bar/Cargo.toml".to_string(),
-                false,
-                "0.1.0".to_string(),
-            ),
+            PublishEntry {
+                path: "crates/foo/Cargo.toml".to_string(),
+                is_unpublished: true,
+                version: "0.0.0".to_string(),
+            },
+            PublishEntry {
+                path: "crates/bar/Cargo.toml".to_string(),
+                is_unpublished: false,
+                version: "0.1.0".to_string(),
+            },
         ];
         assert!(matches!(
             evaluate_publish_versions(&entries),
@@ -736,11 +750,11 @@ mod tests {
 
     #[test]
     fn publish_version_violation() {
-        let entries = vec![(
-            "crates/foo/Cargo.toml".to_string(),
-            true,
-            "0.1.0".to_string(),
-        )];
+        let entries = vec![PublishEntry {
+            path: "crates/foo/Cargo.toml".to_string(),
+            is_unpublished: true,
+            version: "0.1.0".to_string(),
+        }];
         let outcome = evaluate_publish_versions(&entries);
         match outcome {
             CheckOutcome::Failed { output } => {
@@ -753,11 +767,11 @@ mod tests {
 
     #[test]
     fn publish_version_published_crate_any_version_ok() {
-        let entries = vec![(
-            "crates/core/Cargo.toml".to_string(),
-            false,
-            "1.2.3".to_string(),
-        )];
+        let entries = vec![PublishEntry {
+            path: "crates/core/Cargo.toml".to_string(),
+            is_unpublished: false,
+            version: "1.2.3".to_string(),
+        }];
         assert!(matches!(
             evaluate_publish_versions(&entries),
             CheckOutcome::Passed { .. }
