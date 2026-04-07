@@ -10,6 +10,9 @@ pub(crate) enum Error {
     /// The requested resource was not found.
     #[error("not found: {0}")]
     NotFound(String),
+    /// Storage backend error (DynamoDB SDK, serialization, etc.).
+    #[error("store error: {0}")]
+    Store(String),
 }
 
 pub(crate) type Result<T> = std::result::Result<T, Error>;

@@ -171,11 +171,17 @@ pub(crate) async fn update_handler<S: OrgStore>(
     if let Some(name) = body.name {
         org = org.update_name(name, now);
     }
+    org = org.with_updated_at(now);
 
     let config = body.config.unwrap_or_else(|| record.config().clone());
 
     match store.update(&org_id, org, config).await {
         Ok(updated) => (StatusCode::OK, Json(updated.org().clone())).into_response(),
+        Err(crate::error::Error::NotFound(msg)) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": msg})),
+        )
+            .into_response(),
         Err(e) => {
             tracing::error!(org_id = %raw_org_id, error = %e, "update org failed");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()

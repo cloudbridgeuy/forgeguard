@@ -51,6 +51,7 @@ aws-config = "1"
 # AWS SDKs
 aws-sdk-cloudformation = "1"
 aws-sdk-cognitoidentityprovider = "1"
+aws-sdk-dynamodb = "1"
 aws-sdk-verifiedpermissions = "1"
 
 # HTTP framework

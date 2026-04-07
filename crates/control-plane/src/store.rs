@@ -6,12 +6,13 @@ use forgeguard_core::{OrgStatus, Organization, OrganizationId};
 use serde::Deserialize;
 
 use crate::config::OrgConfig;
+use crate::dynamo_store::DynamoOrgStore;
 use crate::error::{Error, Result};
 
 /// Abstraction over organization config storage.
 ///
-/// Implementations: `InMemoryOrgStore` (in-memory, loaded from file or built programmatically).
-/// Future: DynamoDB-backed store for production.
+/// Implementations: `InMemoryOrgStore` (file-backed), `DynamoOrgStore` (DynamoDB).
+/// Runtime dispatch via `AnyOrgStore`.
 pub(crate) trait OrgStore: Send + Sync {
     fn get(
         &self,
@@ -103,8 +104,7 @@ impl OrgStore for InMemoryOrgStore {
 
     async fn list(&self, offset: usize, limit: usize) -> Result<Vec<OrgRecord>> {
         let guard = self.orgs.read().await;
-        let records: Vec<OrgRecord> = guard.values().skip(offset).take(limit).cloned().collect();
-        Ok(records)
+        Ok(guard.values().skip(offset).take(limit).cloned().collect())
     }
 
     async fn update(
@@ -113,6 +113,13 @@ impl OrgStore for InMemoryOrgStore {
         org: Organization,
         config: OrgConfig,
     ) -> Result<OrgRecord> {
+        if org_id != org.org_id() {
+            return Err(Error::Store(format!(
+                "org_id mismatch: path '{}' vs body '{}'",
+                org_id,
+                org.org_id()
+            )));
+        }
         let mut guard = self.orgs.write().await;
         if !guard.contains_key(org_id) {
             return Err(Error::NotFound(format!(
@@ -175,6 +182,61 @@ pub(crate) fn load_config_file(path: &Path) -> color_eyre::Result<InMemoryOrgSto
     let json_str = std::fs::read_to_string(path)?;
     let store = build_org_store(&json_str)?;
     Ok(store)
+}
+
+// ---------------------------------------------------------------------------
+// AnyOrgStore — dispatch enum for runtime store selection
+// ---------------------------------------------------------------------------
+
+/// Enum wrapper that delegates to the active store backend.
+///
+/// The `OrgStore` trait uses RPITIT (`impl Future` in return position), making
+/// it not object-safe. This enum provides static dispatch instead of `dyn`.
+pub(crate) enum AnyOrgStore {
+    Memory(InMemoryOrgStore),
+    DynamoDb(DynamoOrgStore),
+}
+
+impl OrgStore for AnyOrgStore {
+    async fn get(&self, org_id: &OrganizationId) -> Result<Option<OrgRecord>> {
+        match self {
+            Self::Memory(s) => s.get(org_id).await,
+            Self::DynamoDb(s) => s.get(org_id).await,
+        }
+    }
+
+    async fn create(&self, org: Organization, config: OrgConfig) -> Result<OrgRecord> {
+        match self {
+            Self::Memory(s) => s.create(org, config).await,
+            Self::DynamoDb(s) => s.create(org, config).await,
+        }
+    }
+
+    async fn list(&self, offset: usize, limit: usize) -> Result<Vec<OrgRecord>> {
+        match self {
+            Self::Memory(s) => s.list(offset, limit).await,
+            Self::DynamoDb(s) => s.list(offset, limit).await,
+        }
+    }
+
+    async fn update(
+        &self,
+        org_id: &OrganizationId,
+        org: Organization,
+        config: OrgConfig,
+    ) -> Result<OrgRecord> {
+        match self {
+            Self::Memory(s) => s.update(org_id, org, config).await,
+            Self::DynamoDb(s) => s.update(org_id, org, config).await,
+        }
+    }
+
+    async fn delete(&self, org_id: &OrganizationId) -> Result<()> {
+        match self {
+            Self::Memory(s) => s.delete(org_id).await,
+            Self::DynamoDb(s) => s.delete(org_id).await,
+        }
+    }
 }
 
 #[cfg(test)]

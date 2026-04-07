@@ -2,6 +2,7 @@
 
 mod cli;
 mod config;
+mod dynamo_store;
 mod error;
 mod handlers;
 mod store;
@@ -25,11 +26,17 @@ use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
-use crate::cli::Cli;
-use crate::store::OrgStore;
+use crate::cli::{Cli, StoreBackend};
+use crate::dynamo_store::DynamoOrgStore;
+use crate::store::{AnyOrgStore, OrgStore};
 
 #[tokio::main]
 async fn main() {
+    if let Err(e) = color_eyre::install() {
+        eprintln!("failed to install color_eyre: {e}");
+        std::process::exit(1);
+    }
+
     let cli = Cli::parse();
 
     let filter = EnvFilter::try_new(&cli.log_level).unwrap_or_else(|_| EnvFilter::new("info"));
@@ -68,10 +75,32 @@ fn build_router<S: OrgStore + 'static>(store: Arc<S>, fg: Arc<ForgeGuard>) -> Ro
 }
 
 async fn run(cli: Cli) -> color_eyre::Result<()> {
-    color_eyre::install()?;
-
-    let store = Arc::new(store::load_config_file(&cli.config)?);
-    tracing::info!(path = %cli.config.display(), "loaded organization config");
+    let store: Arc<AnyOrgStore> = match cli.store {
+        StoreBackend::Memory => {
+            let config_path = cli.config.ok_or_else(|| {
+                color_eyre::eyre::eyre!("--config is required when --store=memory")
+            })?;
+            let inner = store::load_config_file(&config_path)?;
+            tracing::info!(path = %config_path.display(), "loaded organization config from file");
+            Arc::new(AnyOrgStore::Memory(inner))
+        }
+        StoreBackend::DynamoDb => {
+            let table_name = cli
+                .dynamodb_table
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| {
+                    color_eyre::eyre::eyre!("--dynamodb-table is required when --store=dynamodb")
+                })?;
+            let sdk_config = aws_config::defaults(aws_config::BehaviorVersion::latest())
+                .load()
+                .await;
+            let client = aws_sdk_dynamodb::Client::new(&sdk_config);
+            tracing::info!(%table_name, "using DynamoDB store");
+            Arc::new(AnyOrgStore::DynamoDb(DynamoOrgStore::new(
+                client, table_name,
+            )))
+        }
+    };
 
     // Build ForgeGuard pipeline config for the control plane's own routes.
     // All routes are public (anonymous) for now — no identity resolvers are

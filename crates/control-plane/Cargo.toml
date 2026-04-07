@@ -14,7 +14,12 @@ license.workspace = true
 name = "forgeguard-control-plane"
 path = "src/main.rs"
 
+[features]
+dynamodb-tests = []
+
 [dependencies]
+aws-config = { workspace = true }
+aws-sdk-dynamodb = { workspace = true }
 axum = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
