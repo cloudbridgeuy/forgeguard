@@ -14,7 +14,8 @@
 - **Request signing:** optional Ed25519 outbound header signing — `[signing]` config, see [request-signing.md](./.claude/context/request-signing.md)
 - **Cluster mode:** optional Redis-backed shared authz cache — `[cluster]` config, see [cluster.md](./.claude/context/cluster.md)
 - **Metrics:** Prometheus via Pingora's `PrometheusServer` — `[metrics] enabled = true` in config
-- **Control plane:** Axum service, file-backed org config — see [control-plane.md](./.claude/context/control-plane.md)
+- **Control plane:** Axum service, `--store=memory` (dev) or `--store=dynamodb` (prod) — see [control-plane.md](./.claude/context/control-plane.md)
+- **DynamoDB tests:** `cargo xtask lint --dynamodb-tests` (requires `docker compose up -d dynamodb-local`)
 - **Integration tests:** `cargo test -p forgeguard_proxy` — see [demo-app.md](./.claude/context/demo-app.md)
 - **Demo app:** native or Docker Compose — see [demo-app.md](./.claude/context/demo-app.md)
 - **GitHub CLI:** always use `gh auth switch --user cloudbridgeuy` before any `gh` command

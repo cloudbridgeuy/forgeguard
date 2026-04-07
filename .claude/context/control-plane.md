@@ -35,7 +35,9 @@ pub(crate) trait OrgStore: Send + Sync {
 | Implementation | Backend | Used by |
 |---------------|---------|---------|
 | `InMemoryOrgStore` | In-memory HashMap behind `tokio::sync::RwLock` | File-backed dev mode, tests |
-| (future) | DynamoDB-backed | Production SaaS |
+| `DynamoOrgStore` | DynamoDB-backed | Production SaaS |
+
+Runtime dispatch uses `AnyOrgStore`, a dispatch enum (`Memory` / `DynamoDb`) that implements `OrgStore` via static dispatch (the trait uses `impl Future` returns, making it not object-safe).
 
 Handlers are generic over `S: OrgStore` and take `State<Arc<S>>`. This avoids `dyn` dispatch while still allowing backend substitution.
 
@@ -108,9 +110,22 @@ Store tests use `build_org_store()` with inline JSON to build `InMemoryOrgStore`
 ## Running
 
 ```sh
-# Quick start with test config
+# Quick start with test config (in-memory store)
 cargo run -p forgeguard_control_plane -- --config examples/control-plane/orgs.test.json
+
+# DynamoDB store
+cargo run -p forgeguard_control_plane -- --store dynamodb --dynamodb-table forgeguard-orgs
 ```
+
+### CLI Flags
+
+| Flag | Env | Description |
+|------|-----|-------------|
+| `--store` | `FORGEGUARD_CP_STORE` | Store backend: `memory` (default) or `dynamodb` |
+| `--config` | `FORGEGUARD_CP_CONFIG` | Path to org config JSON file (required when `--store=memory`) |
+| `--dynamodb-table` | `FORGEGUARD_CP_DYNAMODB_TABLE` | DynamoDB table name (required when `--store=dynamodb`) |
+| `--listen` | `FORGEGUARD_CP_LISTEN` | Listen address (default: `127.0.0.1:3001`) |
+| `--log-level` | `FORGEGUARD_CP_LOG_LEVEL` | Log level filter (default: `info`) |
 
 See `crates/control-plane/README.md` for full usage instructions and curl examples.
 
@@ -118,18 +133,18 @@ See `crates/control-plane/README.md` for full usage instructions and curl exampl
 
 ```
 crates/control-plane/src/
-  main.rs       -- entry point, tracing, ForgeGuard setup, server startup (shell)
-  cli.rs        -- clap CLI: --config, --listen, --log-level
-  config.rs     -- OrgConfig (versioned), RouteEntry, PublicRouteEntry (serde DTOs)
-  store.rs      -- OrgStore trait (async), InMemoryOrgStore, OrgRecord, build/load/etag
-  handlers.rs   -- health_handler, proxy_config_handler<S: OrgStore> (shell) + integration tests
-  error.rs      -- Error enum, Result alias
+  main.rs          -- entry point, tracing, ForgeGuard setup, server startup (shell)
+  cli.rs           -- clap CLI: --store, --config, --dynamodb-table, --listen, --log-level
+  config.rs        -- OrgConfig (versioned), RouteEntry, PublicRouteEntry (serde DTOs)
+  store.rs         -- OrgStore trait (async), InMemoryOrgStore, AnyOrgStore, OrgRecord, build/load/etag
+  dynamo_store.rs  -- DynamoOrgStore (DynamoDB-backed OrgStore implementation)
+  handlers.rs      -- health_handler, proxy_config_handler<S: OrgStore> (shell) + integration tests
+  error.rs         -- Error enum, Result alias
 ```
 
 ## What's NOT Here Yet
 
 - CORS middleware (no browser clients -- deferred to #40 dashboard)
 - Cognito JWT auth for production (deferred to #41)
-- DynamoDB/S3 backend (deferred to later slices)
 - Lambda deployment (deferred to #45)
 - Hot-reload of config file

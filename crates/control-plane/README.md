@@ -2,7 +2,7 @@
 
 ForgeGuard control plane API server. This is an **I/O binary crate**.
 
-Serves per-organization proxy configuration to BYOC connected proxies. File-backed config store for development; DynamoDB + S3 in production (future).
+Serves per-organization proxy configuration to BYOC connected proxies. File-backed config store for development; DynamoDB in production.
 
 Authentication and authorization are handled by the `forgeguard-axum` middleware layer. In dev mode, the default configuration uses `DefaultPolicy::Passthrough` with `StaticPolicyEngine::Allow`, so all requests pass through without auth enforcement.
 
@@ -75,7 +75,9 @@ The `orgs.json` file is gitignored (contains AWS resource IDs).
 
 | Flag | Env | Description |
 |------|-----|-------------|
-| `--config` | `FORGEGUARD_CP_CONFIG` | Path to org config JSON file (required) |
+| `--store` | `FORGEGUARD_CP_STORE` | Store backend: `memory` (default) or `dynamodb` |
+| `--config` | `FORGEGUARD_CP_CONFIG` | Path to org config JSON file (required when `--store=memory`) |
+| `--dynamodb-table` | `FORGEGUARD_CP_DYNAMODB_TABLE` | DynamoDB table name (required when `--store=dynamodb`) |
 | `--listen` | `FORGEGUARD_CP_LISTEN` | Listen address (default: `127.0.0.1:3001`) |
 | `--log-level` | `FORGEGUARD_CP_LOG_LEVEL` | Log level filter (default: `info`) |
 
@@ -121,6 +123,8 @@ The control plane uses the `Organization` entity from `forgeguard_core` to repre
 | `OrgRecord` | `store.rs` | Pairs `Organization` + `OrgConfig` + precomputed ETag |
 | `OrgStore` trait | `store.rs` | Async trait for org storage backends |
 | `InMemoryOrgStore` | `store.rs` | In-memory HashMap behind `tokio::sync::RwLock` |
+| `DynamoOrgStore` | `dynamo_store.rs` | DynamoDB-backed organization store for production |
+| `AnyOrgStore` | `store.rs` | Dispatch enum for runtime store selection (`Memory` / `DynamoDb`) |
 
 ## ETag Caching
 
@@ -136,3 +140,5 @@ Every org config response includes an `ETag` header (xxHash64 of the canonical J
 | `tower-http` | Middleware (tracing, timeout) |
 | `xxhash-rust` | ETag computation |
 | `chrono` | Timestamps for `Organization` entity |
+| `aws-sdk-dynamodb` | DynamoDB client for `DynamoOrgStore` |
+| `aws-config` | AWS SDK configuration loading |
