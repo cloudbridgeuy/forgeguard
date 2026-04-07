@@ -130,6 +130,32 @@ impl Organization {
         }
     }
 
+    /// Set the optional AWS resource fields (cognito pool, JWKS URL, policy store).
+    ///
+    /// Used to reconstruct an `Organization` from persistent storage where
+    /// these fields have already been provisioned.
+    pub fn with_aws_resources(
+        mut self,
+        cognito_pool_id: Option<String>,
+        cognito_jwks_url: Option<String>,
+        policy_store_id: Option<String>,
+    ) -> Self {
+        self.cognito_pool_id = cognito_pool_id;
+        self.cognito_jwks_url = cognito_jwks_url;
+        self.policy_store_id = policy_store_id;
+        self
+    }
+
+    /// Override `updated_at` for reconstruction from persistent storage.
+    ///
+    /// The `new()` constructor sets `created_at` and `updated_at` to the same
+    /// value. This method allows setting `updated_at` independently when
+    /// rebuilding from a store where the two timestamps diverge.
+    pub fn with_updated_at(mut self, updated_at: DateTime<Utc>) -> Self {
+        self.updated_at = updated_at;
+        self
+    }
+
     pub fn org_id(&self) -> &OrganizationId {
         &self.org_id
     }
@@ -333,6 +359,32 @@ mod tests {
         }
     }
 
+    // ── Display / FromStr / serde equivalence (tripwire) ─────────────
+
+    #[test]
+    fn org_status_display_fromstr_serde_equivalence() {
+        let all_statuses = [
+            OrgStatus::Draft,
+            OrgStatus::PendingProvisioning,
+            OrgStatus::Provisioning,
+            OrgStatus::Active,
+            OrgStatus::Suspended,
+            OrgStatus::Deleting,
+            OrgStatus::Deleted,
+            OrgStatus::Failed,
+        ];
+        for status in all_statuses {
+            let display = status.to_string();
+            let from_str: OrgStatus = display.parse().unwrap();
+            let serde = serde_json::to_string(&status)
+                .unwrap()
+                .trim_matches('"')
+                .to_string();
+            assert_eq!(display, serde, "Display vs serde mismatch for {status:?}");
+            assert_eq!(from_str, status, "FromStr round-trip failed for {status:?}");
+        }
+    }
+
     // ── FromStr invalid input ───────────────────────────────────────
 
     #[test]
@@ -408,6 +460,43 @@ mod tests {
         let later = now + chrono::Duration::seconds(1);
         let org = org.update_name("New".to_string(), later);
         assert_eq!(org.name(), "New");
+        assert_eq!(org.updated_at(), later);
+    }
+
+    #[test]
+    fn with_aws_resources_sets_fields() {
+        let now = Utc::now();
+        let org = Organization::new(
+            OrganizationId::new("org-test").unwrap(),
+            "Test".to_string(),
+            OrgStatus::Active,
+            now,
+        )
+        .with_aws_resources(
+            Some("us-east-1_abc".to_string()),
+            Some("https://example.com/.well-known/jwks.json".to_string()),
+            Some("ps-123".to_string()),
+        );
+        assert_eq!(org.cognito_pool_id(), Some("us-east-1_abc"));
+        assert_eq!(
+            org.cognito_jwks_url(),
+            Some("https://example.com/.well-known/jwks.json")
+        );
+        assert_eq!(org.policy_store_id(), Some("ps-123"));
+    }
+
+    #[test]
+    fn with_updated_at_overrides_timestamp() {
+        let now = Utc::now();
+        let later = now + chrono::Duration::seconds(60);
+        let org = Organization::new(
+            OrganizationId::new("org-test").unwrap(),
+            "Test".to_string(),
+            OrgStatus::Draft,
+            now,
+        )
+        .with_updated_at(later);
+        assert_eq!(org.created_at(), now);
         assert_eq!(org.updated_at(), later);
     }
 
