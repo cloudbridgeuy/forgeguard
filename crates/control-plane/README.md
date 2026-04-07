@@ -15,6 +15,11 @@ Authentication and authorization are handled by the `forgeguard-axum` middleware
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/health` | Health check -- returns `{"status": "ok"}` |
+| `POST` | `/api/v1/organizations` | Create organization (status: Draft) |
+| `GET` | `/api/v1/organizations` | List organizations (paginated: `?offset=&limit=`) |
+| `GET` | `/api/v1/organizations/{org_id}` | Get organization details |
+| `PUT` | `/api/v1/organizations/{org_id}` | Update organization name and/or config |
+| `DELETE` | `/api/v1/organizations/{org_id}` | Delete organization |
 | `GET` | `/api/v1/organizations/{org_id}/proxy-config` | Per-org proxy config with ETag caching |
 
 ### Response Codes (proxy-config)
@@ -59,7 +64,7 @@ For real AWS resources, copy the sample and fill in your values:
 
 ```sh
 cp examples/control-plane/orgs.sample.json orgs.json
-# Edit orgs.json -- add your Cognito pool ID, JWKS URL, VP policy store ID, etc.
+# Edit orgs.json -- add your project ID, upstream URL, routes, etc.
 
 cargo run -p forgeguard_control_plane -- --config orgs.json
 ```
@@ -76,22 +81,24 @@ The `orgs.json` file is gitignored (contains AWS resource IDs).
 
 ## Config File Format
 
-JSON file mapping `org_id` to its proxy config:
+JSON file mapping `org_id` to its organization entry. Each entry has a `name` (display name) and a nested `config` object (`OrgConfig`) with a date-based `version` field:
 
 ```json
 {
   "organizations": {
     "org-acme": {
+      "name": "Acme Corp",
       "config": {
-        "organization_id": "org-acme",
-        "cognito_pool_id": "...",
-        "cognito_jwks_url": "...",
-        "policy_store_id": "...",
-        "project_id": "...",
-        "upstream_url": "...",
+        "version": "2026-04-07",
+        "project_id": "todo-demo",
+        "upstream_url": "https://api.acme.com",
         "default_policy": "deny",
-        "routes": [...],
-        "public_routes": [...],
+        "routes": [
+          {"method": "GET", "path": "/api/todos", "action": "todo:list:read"}
+        ],
+        "public_routes": [
+          {"method": "GET", "path": "/health", "auth_mode": "anonymous"}
+        ],
         "features": {}
       }
     }
@@ -99,7 +106,21 @@ JSON file mapping `org_id` to its proxy config:
 }
 ```
 
-The `token` field previously used for bearer auth is no longer needed. Old config files that still contain it will parse without error (serde ignores unknown fields), but the field is unused.
+At load time, each org entry is parsed into an `Organization` domain entity (from `forgeguard_core`) with `OrgStatus::Active` status, paired with the `OrgConfig`. The `Organization` entity tracks lifecycle state (8-variant `OrgStatus` enum) and timestamps.
+
+Unknown fields in the config are ignored by serde, so older config files with extra fields will still parse.
+
+## Domain Model
+
+The control plane uses the `Organization` entity from `forgeguard_core` to represent each org. File-loaded orgs are created with `OrgStatus::Active`. The `OrgStore` trait is async with generic handlers (no `dyn` dispatch):
+
+| Type | Location | Purpose |
+|------|----------|---------|
+| `Organization` | `forgeguard_core` | Domain entity with status lifecycle, timestamps |
+| `OrgConfig` | `config.rs` | Versioned proxy configuration (replaces old `OrgProxyConfig`) |
+| `OrgRecord` | `store.rs` | Pairs `Organization` + `OrgConfig` + precomputed ETag |
+| `OrgStore` trait | `store.rs` | Async trait for org storage backends |
+| `InMemoryOrgStore` | `store.rs` | In-memory HashMap behind `tokio::sync::RwLock` |
 
 ## ETag Caching
 
@@ -109,8 +130,9 @@ Every org config response includes an `ETag` header (xxHash64 of the canonical J
 
 | Crate | Role |
 |-------|------|
-| `forgeguard_core` (pure) | `OrganizationId` validation |
+| `forgeguard_core` (pure) | `OrganizationId`, `Organization`, `OrgStatus`, `DefaultPolicy` |
 | `forgeguard-axum` | Auth middleware (identity + policy) |
 | `axum` | HTTP framework |
 | `tower-http` | Middleware (tracing, timeout) |
 | `xxhash-rust` | ETag computation |
+| `chrono` | Timestamps for `Organization` entity |

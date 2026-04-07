@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::http::StatusCode;
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::Router;
 use clap::Parser;
 use forgeguard_authn_core::IdentityChain;
@@ -26,6 +26,7 @@ use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
 use crate::cli::Cli;
+use crate::store::OrgStore;
 
 #[tokio::main]
 async fn main() {
@@ -40,10 +41,36 @@ async fn main() {
     }
 }
 
+fn build_router<S: OrgStore + 'static>(store: Arc<S>, fg: Arc<ForgeGuard>) -> Router {
+    Router::new()
+        .route("/health", get(handlers::health_handler))
+        .route(
+            "/api/v1/organizations",
+            post(handlers::create_handler::<S>).get(handlers::list_handler::<S>),
+        )
+        .route(
+            "/api/v1/organizations/{org_id}",
+            get(handlers::get_handler::<S>)
+                .put(handlers::update_handler::<S>)
+                .delete(handlers::delete_handler::<S>),
+        )
+        .route(
+            "/api/v1/organizations/{org_id}/proxy-config",
+            get(handlers::proxy_config_handler::<S>),
+        )
+        .with_state(store)
+        .layer(axum::middleware::from_fn_with_state(fg, forgeguard_layer))
+        .layer(TraceLayer::new_for_http())
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            Duration::from_secs(30),
+        ))
+}
+
 async fn run(cli: Cli) -> color_eyre::Result<()> {
     color_eyre::install()?;
 
-    let org_store: Arc<dyn store::OrgStore> = Arc::new(store::load_config_file(&cli.config)?);
+    let store = Arc::new(store::load_config_file(&cli.config)?);
     tracing::info!(path = %cli.config.display(), "loaded organization config");
 
     // Build ForgeGuard pipeline config for the control plane's own routes.
@@ -56,6 +83,31 @@ async fn run(cli: Cli) -> color_eyre::Result<()> {
         PublicRoute::new(
             "GET".parse()?,
             "/health".to_string(),
+            PublicAuthMode::Anonymous,
+        ),
+        PublicRoute::new(
+            "POST".parse()?,
+            "/api/v1/organizations".to_string(),
+            PublicAuthMode::Anonymous,
+        ),
+        PublicRoute::new(
+            "GET".parse()?,
+            "/api/v1/organizations".to_string(),
+            PublicAuthMode::Anonymous,
+        ),
+        PublicRoute::new(
+            "GET".parse()?,
+            "/api/v1/organizations/{org_id}".to_string(),
+            PublicAuthMode::Anonymous,
+        ),
+        PublicRoute::new(
+            "PUT".parse()?,
+            "/api/v1/organizations/{org_id}".to_string(),
+            PublicAuthMode::Anonymous,
+        ),
+        PublicRoute::new(
+            "DELETE".parse()?,
+            "/api/v1/organizations/{org_id}".to_string(),
             PublicAuthMode::Anonymous,
         ),
         PublicRoute::new(
@@ -79,19 +131,7 @@ async fn run(cli: Cli) -> color_eyre::Result<()> {
         Arc::new(StaticPolicyEngine::new(PolicyDecision::Allow));
     let fg = Arc::new(ForgeGuard::new(pipeline_config, chain, engine));
 
-    let app = Router::new()
-        .route("/health", get(handlers::health_handler))
-        .route(
-            "/api/v1/organizations/{org_id}/proxy-config",
-            get(handlers::proxy_config_handler),
-        )
-        .with_state(org_store)
-        .layer(axum::middleware::from_fn_with_state(fg, forgeguard_layer))
-        .layer(TraceLayer::new_for_http())
-        .layer(TimeoutLayer::with_status_code(
-            StatusCode::REQUEST_TIMEOUT,
-            Duration::from_secs(30),
-        ));
+    let app = build_router(store, fg);
 
     let listener = tokio::net::TcpListener::bind(cli.listen).await?;
     tracing::info!(listen = %cli.listen, "starting forgeguard-control-plane");

@@ -3,9 +3,11 @@
 pub mod action;
 pub mod cedar;
 pub mod cedar_ident;
+pub mod default_policy;
 pub mod error;
 pub mod features;
 pub mod fgrn;
+pub mod org;
 pub mod permission;
 pub mod segment;
 
@@ -17,12 +19,14 @@ pub use cedar::{
     EntitySchemaConfig,
 };
 pub use cedar_ident::{CedarEntityType, CedarIdent, CedarNamespace};
+pub use default_policy::DefaultPolicy;
 pub use error::{Error, Result};
 pub use features::{
     evaluate_flags, evaluate_flags_detailed, DetailedResolvedFlags, FlagConfig, FlagDefinition,
     FlagName, FlagOverride, FlagType, FlagValue, ResolutionReason, ResolvedFlag, ResolvedFlags,
 };
 pub use fgrn::{Fgrn, FgrnSegment};
+pub use org::{OrgStatus, Organization};
 pub use permission::{
     ActionPattern, CedarEntityRef, Effect, GroupDefinition, PatternSegment, Policy,
     PolicyStatement, ResourceConstraint,

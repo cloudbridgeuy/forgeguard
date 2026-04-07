@@ -2,7 +2,27 @@
 
 Shared primitives, traits, and error types for the ForgeGuard workspace. This is a **pure crate** — it contains no I/O dependencies and can be depended on by any crate in the workspace.
 
-Owns domain-level identifiers (TenantId, UserId, PolicyId), common trait definitions for storage and cache abstractions, and shared error types.
+Owns domain-level identifiers (TenantId, UserId, PolicyId), domain entities (Organization), common trait definitions for storage and cache abstractions, and shared error types.
+
+## Domain Types
+
+| Type | Module | Purpose |
+|------|--------|---------|
+| `DefaultPolicy` | `default_policy` | What happens when no route matches: `Passthrough` or `Deny`. Moved here from `forgeguard_http` so all crates can reference it without an I/O dependency. |
+| `OrgStatus` | `org` | 8-variant lifecycle enum for organizations: `Draft`, `PendingProvisioning`, `Provisioning`, `Active`, `Suspended`, `Deleting`, `Deleted`, `Failed`. Includes `can_transition_to()` for validated state transitions. |
+| `Organization` | `org` | Domain entity with private fields, constructor (`new()`), and methods for status transitions (`transition_to()`) and name updates (`update_name()`). AWS resource fields (`cognito_pool_id`, `policy_store_id`, etc.) are `Option` -- populated after provisioning. |
+
+### OrgStatus Lifecycle
+
+```text
+Draft -> PendingProvisioning -> Provisioning -> Active -> Suspended -> Deleting -> Deleted
+                                     |                        |
+                                   Failed                   Failed
+                                     |
+                                   Draft (recovery)
+```
+
+Valid transitions are enforced by `OrgStatus::can_transition_to()`. `Organization::transition_to()` returns `Err` for invalid transitions.
 
 ## Cedar types
 

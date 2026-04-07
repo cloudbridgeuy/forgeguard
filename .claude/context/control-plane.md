@@ -7,7 +7,7 @@ The control plane (`forgeguard_control_plane`) is an Axum HTTP service that serv
 ```
 File (orgs.json)               Control Plane (Axum)           BYOC Proxy
      |                              |                              |
-     +-- load at startup -->  OrgConfigStore (in-memory)           |
+     +-- load at startup -->  InMemoryOrgStore (async, RwLock)     |
                                     |                              |
                               forgeguard-axum middleware            |
                               (auth pipeline, identity resolution)  |
@@ -21,50 +21,62 @@ File (orgs.json)               Control Plane (Axum)           BYOC Proxy
 
 ## OrgStore Trait
 
-The store is trait-based to support multiple backends:
+The store is trait-based with async methods and generic handlers (no `dyn` dispatch):
 
 ```rust
 pub(crate) trait OrgStore: Send + Sync {
-    fn get(&self, org_id: &OrganizationId) -> Option<&OrgEntry>;
+    fn get(
+        &self,
+        org_id: &OrganizationId,
+    ) -> impl std::future::Future<Output = Result<Option<OrgRecord>>> + Send;
 }
 ```
 
 | Implementation | Backend | Used by |
 |---------------|---------|---------|
-| `OrgConfigStore` | In-memory HashMap | File-backed dev mode, tests |
-| (future) | S3-backed | Production SaaS |
+| `InMemoryOrgStore` | In-memory HashMap behind `tokio::sync::RwLock` | File-backed dev mode, tests |
+| (future) | DynamoDB-backed | Production SaaS |
 
-The handler uses `Arc<dyn OrgStore>` — backends are swappable without touching handler code.
+Handlers are generic over `S: OrgStore` and take `State<Arc<S>>`. This avoids `dyn` dispatch while still allowing backend substitution.
+
+### OrgRecord
+
+Each stored entry is an `OrgRecord` containing:
+- `Organization` -- domain entity from `forgeguard_core` (org_id, name, status, timestamps)
+- `OrgConfig` -- versioned proxy configuration (routes, upstream, default policy)
+- `etag` -- precomputed xxHash64 of the serialized config
 
 ## Handler Pipeline
 
 Auth is handled by the `forgeguard-axum` middleware before the handler runs. The handler is pure data retrieval:
 
 ```
-Request → forgeguard_layer (auth) → ForgeGuardIdentity extractor → lookup_org → check_if_none_match → respond
-                                                                      ↓ 404          ↓ 304              ↓ 200
+Request -> forgeguard_layer (auth) -> ForgeGuardIdentity extractor -> lookup_org -> check_if_none_match -> respond
+                                                                        | 404          | 304                | 200
 ```
 
 The handler uses `ForgeGuardIdentity` to receive the resolved identity from the middleware. Org-scoping is a Cedar policy concern evaluated by the pipeline.
 
 ## Config File Format
 
-JSON file mapping `org_id` to config:
+JSON file mapping `org_id` to its org entry. Each entry has a `name` (display name) and a nested `config` object (`OrgConfig`) with a date-based `version` field:
 
 ```json
 {
   "organizations": {
     "org-acme": {
+      "name": "Acme Corp",
       "config": {
-        "organization_id": "org-acme",
-        "cognito_pool_id": "...",
-        "cognito_jwks_url": "...",
-        "policy_store_id": "...",
-        "project_id": "...",
-        "upstream_url": "...",
+        "version": "2026-04-07",
+        "project_id": "todo-demo",
+        "upstream_url": "https://api.acme.com",
         "default_policy": "deny",
-        "routes": [...],
-        "public_routes": [...],
+        "routes": [
+          {"method": "GET", "path": "/api/todos", "action": "todo:list:read"}
+        ],
+        "public_routes": [
+          {"method": "GET", "path": "/health", "auth_mode": "anonymous"}
+        ],
         "features": {}
       }
     }
@@ -74,24 +86,24 @@ JSON file mapping `org_id` to config:
 
 **Validation at load time (Parse Don't Validate):**
 - `OrganizationId` validated via `forgeguard_core::OrganizationId::new()`
-- Map key must match `config.organization_id`
+- Each org entry is parsed into an `Organization` domain entity with `OrgStatus::Active`
 - ETag precomputed as xxHash64 of canonical JSON (deterministic, uses `BTreeMap` for `features`)
+- Unknown fields are ignored by serde for forward compatibility
 
 ## Auth
 
 Auth is handled by the `forgeguard-axum` middleware, which runs the ForgeGuard auth pipeline (`evaluate_pipeline` from proxy-core) before requests reach handlers.
 
-In dev mode, the control plane uses `DefaultPolicy::Passthrough` with an empty `IdentityChain` and `StaticPolicyEngine(Allow)` — all requests pass through without auth enforcement.
+In dev mode, the control plane uses `DefaultPolicy::Passthrough` with an empty `IdentityChain` and `StaticPolicyEngine(Allow)` -- all requests pass through without auth enforcement.
 
 **Not yet implemented:** Cognito JWT auth (#41) for production auth.
 
 ## Testing
 
-**12 tests total:**
-- 8 store tests (`store.rs`) — parsing, validation, ETag determinism
-- 4 handler integration tests (`handlers.rs`) — full HTTP pipeline via `tower::ServiceExt::oneshot` with `forgeguard-axum` middleware layer
+- 8 store tests (`store.rs`) -- parsing, validation, ETag determinism, multiple orgs, unknown fields
+- 4 handler integration tests (`handlers.rs`) -- full HTTP pipeline via `tower::ServiceExt::oneshot` with `forgeguard-axum` middleware layer
 
-Integration tests use `OrgConfigStore::from_entries()` to build in-memory stores programmatically — no files, no network.
+Store tests use `build_org_store()` with inline JSON to build `InMemoryOrgStore` instances. Tests that call `store.get()` use `#[tokio::test]` since the store is async.
 
 ## Running
 
@@ -106,17 +118,17 @@ See `crates/control-plane/README.md` for full usage instructions and curl exampl
 
 ```
 crates/control-plane/src/
-  main.rs       — entry point, tracing, ForgeGuard setup, server startup (shell)
-  cli.rs        — clap CLI: --config, --listen, --log-level
-  config.rs     — OrgProxyConfig, RouteEntry, PublicRouteEntry (serde DTOs)
-  store.rs      — OrgStore trait, OrgConfigStore, build/load/etag (core + shell)
-  handlers.rs   — health_handler, proxy_config_handler (shell) + integration tests
-  error.rs      — Error enum, Result alias
+  main.rs       -- entry point, tracing, ForgeGuard setup, server startup (shell)
+  cli.rs        -- clap CLI: --config, --listen, --log-level
+  config.rs     -- OrgConfig (versioned), RouteEntry, PublicRouteEntry (serde DTOs)
+  store.rs      -- OrgStore trait (async), InMemoryOrgStore, OrgRecord, build/load/etag
+  handlers.rs   -- health_handler, proxy_config_handler<S: OrgStore> (shell) + integration tests
+  error.rs      -- Error enum, Result alias
 ```
 
 ## What's NOT Here Yet
 
-- CORS middleware (no browser clients — deferred to #40 dashboard)
+- CORS middleware (no browser clients -- deferred to #40 dashboard)
 - Cognito JWT auth for production (deferred to #41)
 - DynamoDB/S3 backend (deferred to later slices)
 - Lambda deployment (deferred to #45)

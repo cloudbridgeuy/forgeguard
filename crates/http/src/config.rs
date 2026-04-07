@@ -7,10 +7,10 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use forgeguard_core::{
-    CedarEntityRef, FlagConfig, FlagName, GroupDefinition, GroupName, Policy, ProjectId,
-    QualifiedAction,
+    CedarEntityRef, DefaultPolicy, FlagConfig, FlagName, GroupDefinition, GroupName, Policy,
+    ProjectId, QualifiedAction,
 };
-use serde::{Deserialize, Serialize};
+
 use url::Url;
 
 use crate::config_raw::RawProxyConfig;
@@ -21,20 +21,6 @@ use crate::method::HttpMethod;
 use crate::public::{PublicAuthMode, PublicRoute};
 use crate::route::RouteMapping;
 use crate::{Error, Result};
-
-// ---------------------------------------------------------------------------
-// DefaultPolicy
-// ---------------------------------------------------------------------------
-
-/// What happens when no route matches a request.
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum DefaultPolicy {
-    /// Allow the request to pass through to upstream.
-    Passthrough,
-    /// Deny the request.
-    Deny,
-}
 
 // ---------------------------------------------------------------------------
 // ClientIpSource

@@ -31,7 +31,7 @@ use crate::{Error, Result};
 ///
 /// Examples: "acme-corp", "todo-app", "list", "item-abc123"
 /// Invalid: "AcmeCorp", "my_project", "-leading", "trailing-", "no--double", ""
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct Segment(String);
 
@@ -133,7 +133,7 @@ impl From<Segment> for String {
 /// FromStr, Serialize, Deserialize, Clone, Eq, Hash, and accessor methods.
 macro_rules! define_id {
     ($name:ident) => {
-        #[derive(Debug, Clone, Eq, PartialEq, Hash)]
+        #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
         pub struct $name(Segment);
 
         impl $name {

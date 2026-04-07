@@ -16,13 +16,14 @@ pub mod validate;
 
 pub use config::{
     apply_overrides, load_config, parse_config, ApiKeyConfig, AuthConfig, AuthzConfig,
-    ClientIpSource, ClusterConfig, ConfigOverrides, DefaultPolicy, JwtConfig, MetricsConfig,
-    ProxyConfig, UpstreamTarget,
+    ClientIpSource, ClusterConfig, ConfigOverrides, JwtConfig, MetricsConfig, ProxyConfig,
+    UpstreamTarget,
 };
 pub use config_types::{AwsConfig, EntitySchema, PolicyTest, PolicyTestExpect, SchemaConfig};
 pub use credential::extract_credential;
 pub use debug::{evaluate_debug, FlagDebugQuery};
 pub use error::{Error, Result, ValidationError, ValidationErrorKind, ValidationWarning};
+pub use forgeguard_core::DefaultPolicy;
 pub use headers::{inject_client_ip, inject_headers, IdentityProjection};
 pub use method::HttpMethod;
 pub use public::{PublicAuthMode, PublicMatch, PublicRoute, PublicRouteMatcher};

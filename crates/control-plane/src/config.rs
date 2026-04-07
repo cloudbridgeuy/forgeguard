@@ -1,40 +1,111 @@
+//! Organization proxy configuration types.
+
 use std::collections::BTreeMap;
 
-use forgeguard_core::{OrganizationId, ProjectId};
-use forgeguard_http::{DefaultPolicy, HttpMethod, PublicAuthMode};
+use forgeguard_core::{DefaultPolicy, ProjectId};
+use forgeguard_http::{HttpMethod, PublicAuthMode};
 use serde::{Deserialize, Serialize};
 
+/// Versioned organization proxy configuration.
+///
+/// This is the org-configurable subset of `forgeguard.toml`.
+/// Stored as JSON in the control plane, served via the proxy-config endpoint.
+/// Version follows AWS-style date format (e.g. "2026-04-07").
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct OrgProxyConfig {
-    pub(crate) organization_id: OrganizationId,
-    pub(crate) cognito_pool_id: String,
-    pub(crate) cognito_jwks_url: String,
-    pub(crate) policy_store_id: String,
-    pub(crate) project_id: ProjectId,
-    pub(crate) upstream_url: String,
-    pub(crate) default_policy: DefaultPolicy,
+pub(crate) struct OrgConfig {
+    version: String,
+    project_id: ProjectId,
+    upstream_url: String,
+    default_policy: DefaultPolicy,
     #[serde(default)]
-    pub(crate) routes: Vec<RouteEntry>,
+    routes: Vec<RouteEntry>,
     #[serde(default)]
-    pub(crate) public_routes: Vec<PublicRouteEntry>,
+    public_routes: Vec<PublicRouteEntry>,
     #[serde(default)]
-    pub(crate) features: BTreeMap<String, serde_json::Value>,
+    features: BTreeMap<String, serde_json::Value>,
+}
+
+impl OrgConfig {
+    #[cfg(test)]
+    pub(crate) fn version(&self) -> &str {
+        &self.version
+    }
+
+    #[cfg(test)]
+    pub(crate) fn upstream_url(&self) -> &str {
+        &self.upstream_url
+    }
+
+    #[cfg(test)]
+    pub(crate) fn default_policy(&self) -> DefaultPolicy {
+        self.default_policy
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct RouteEntry {
-    pub(crate) method: HttpMethod,
-    pub(crate) path: String,
-    pub(crate) action: String,
+    method: HttpMethod,
+    path: String,
+    action: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) resource_param: Option<String>,
+    resource_param: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) feature_gate: Option<String>,
+    feature_gate: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct PublicRouteEntry {
-    pub(crate) method: HttpMethod,
-    pub(crate) path: String,
-    pub(crate) auth_mode: PublicAuthMode,
+    method: HttpMethod,
+    path: String,
+    auth_mode: PublicAuthMode,
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    fn sample_config() -> OrgConfig {
+        serde_json::from_value(serde_json::json!({
+            "version": "2026-04-07",
+            "project_id": "todo-app",
+            "upstream_url": "https://api.acme.com",
+            "default_policy": "deny",
+            "routes": [],
+            "public_routes": [],
+            "features": {}
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn deserialize_minimal() {
+        let config = sample_config();
+        assert_eq!(config.version(), "2026-04-07");
+        assert_eq!(config.upstream_url(), "https://api.acme.com");
+        assert_eq!(config.default_policy(), DefaultPolicy::Deny);
+    }
+
+    #[test]
+    fn serde_round_trip() {
+        let config = sample_config();
+        let json = serde_json::to_string(&config).unwrap();
+        let back: OrgConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.version(), config.version());
+        assert_eq!(back.upstream_url(), config.upstream_url());
+    }
+
+    #[test]
+    fn defaults_for_optional_fields() {
+        let config: OrgConfig = serde_json::from_value(serde_json::json!({
+            "version": "2026-04-07",
+            "project_id": "proj",
+            "upstream_url": "https://example.com",
+            "default_policy": "passthrough"
+        }))
+        .unwrap();
+        assert!(config.routes.is_empty());
+        assert!(config.public_routes.is_empty());
+        assert!(config.features.is_empty());
+    }
 }

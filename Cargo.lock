@@ -1466,6 +1466,7 @@ name = "forgeguard_control_plane"
 version = "0.0.0"
 dependencies = [
  "axum",
+ "chrono",
  "clap",
  "color-eyre",
  "forgeguard-axum",
