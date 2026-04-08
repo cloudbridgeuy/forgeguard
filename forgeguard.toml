@@ -1,7 +1,7 @@
 # ForgeGuard Proxy Configuration
 # ================================
 # This is the reference configuration with all proxy options documented.
-# Copy this file to `forgeguard.dev.toml` and adjust for your environment.
+# Copy this file and adjust for your environment.
 # Override the config path with the FORGEGUARD_CONFIG env var.
 #
 # Example values below assume a TODO app sitting behind the proxy.
@@ -50,7 +50,7 @@ profile = "admin"
 chain_order = ["jwt"]
 
 # JWT authentication settings.
-# The xtask `dev setup --cognito` command writes these values to forgeguard.dev.toml.
+# Fill in these values after deploying Cognito infrastructure.
 [authn.jwt]
 jwks_url = "https://cognito-idp.<region>.amazonaws.com/<user-pool-id>/.well-known/jwks.json"
 issuer   = "https://cognito-idp.<region>.amazonaws.com/<user-pool-id>"

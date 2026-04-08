@@ -15,6 +15,7 @@
 - **Cluster mode:** optional Redis-backed shared authz cache — `[cluster]` config, see [cluster.md](./.claude/context/cluster.md)
 - **Metrics:** Prometheus via Pingora's `PrometheusServer` — `[metrics] enabled = true` in config
 - **Control plane:** Axum service, `--store=memory` (dev) or `--store=dynamodb` (prod) — see [control-plane.md](./.claude/context/control-plane.md)
+- **Infrastructure:** `cargo xtask control-plane infra {deploy,diff,destroy,status}` — CDK + 1Password, see [infra-control-plane.md](./.claude/context/infra-control-plane.md)
 - **DynamoDB tests:** `cargo xtask lint --dynamodb-tests` (requires `docker compose up -d dynamodb-local`)
 - **Integration tests:** `cargo test -p forgeguard_proxy` — see [demo-app.md](./.claude/context/demo-app.md)
 - **Demo app:** native or Docker Compose — see [demo-app.md](./.claude/context/demo-app.md)
@@ -114,6 +115,9 @@ crates/
 ├── proxy-saas/        forgeguard_proxy_saas — SaaS proxy: multi-org, lazy cache
 └── back-office/       forgeguard_back_office — internal ops API
 
+infra/
+└── control-plane/     CDK v2 project (TypeScript + Bun) — DynamoDB Global Table
+
 ui/
 └── dashboard/         React + Vite SPA, built with Bun, hosted on CloudFront+S3
 ```
@@ -158,6 +162,7 @@ Each crate's `README.md` describes what it owns and its pure/I/O classification.
 | [Request Signing](./.claude/context/request-signing.md)            | Ed25519 signing: canonical payload, config, key rotation, crate layout  |
 | [Demo App](./.claude/context/demo-app.md)                          | E2E demo: Python TODO app, native proxy, demo config, running instructions |
 | [Control Plane](./.claude/context/control-plane.md)                | CP scaffold, proxy-config endpoint, OrgStore trait, auth, ETag, testing |
+| [Infra: Control Plane](./.claude/context/infra-control-plane.md)   | CDK project, 1Password integration, DynamoDB Global Table, xtask infra  |
 | [Cluster Mode](./.claude/context/cluster.md)                       | TieredCache, Redis wiring, config, health stats, future slices          |
 | [Design Documents](./.claude/context/)                             | Full ForgeGuard architecture and technical specifications               |
 

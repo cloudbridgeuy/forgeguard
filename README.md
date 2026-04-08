@@ -45,6 +45,7 @@ Crate boundaries enforce the Functional Core / Imperative Shell pattern. Pure cr
 - Rust (stable, see `rust-version` in `Cargo.toml` for MSRV)
 - [bacon](https://github.com/Canop/bacon) — development task runner
 - [cargo-rail](https://github.com/nickel-org/cargo-rail) — dependency analysis and CI change detection
+- [1Password CLI (`op`)](https://developer.1password.com/docs/cli/) — required for infrastructure commands
 - Docker — for LocalStack integration tests
 
 ### Build
@@ -76,15 +77,22 @@ cargo test --workspace
 docker compose up -d
 ```
 
+## Infrastructure
+
+Manage control-plane infrastructure with `cargo xtask control-plane infra`:
+
+```bash
+cargo xtask control-plane infra deploy [--env <ENV>]   # Deploy CDK infrastructure
+cargo xtask control-plane infra diff [--env <ENV>]     # Preview changes
+cargo xtask control-plane infra destroy [--env <ENV>]  # Destroy (requires confirmation)
+cargo xtask control-plane infra status [--env <ENV>]   # Show stack status
+```
+
+Requires 1Password CLI (`op`) and `bun`. Environment defaults to `prod`; override with `--env` or `FORGEGUARD_ENV`.
+
 ## Demo
 
 See [`examples/todo-app/`](examples/todo-app/) for a working end-to-end demonstration: a Python/FastAPI TODO app running behind the ForgeGuard proxy with JWT auth, API keys, public routes, feature flags, policy evaluation, and header injection.
-
-Two setup paths:
-- **API keys + VP** — `cargo xtask dev setup --vp`. No Cognito needed. Exercises everything except JWT auth.
-- **Full stack** — `cargo xtask dev setup --all`. Deploys Cognito + Verified Permissions for the complete experience.
-
-See [`infra/dev/`](infra/dev/) for AWS infrastructure details.
 
 ## License
 

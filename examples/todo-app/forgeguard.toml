@@ -4,13 +4,12 @@
 # feature flags, feature gates, policies, and header injection.
 #
 # AWS-specific values (Cognito JWKS, VP policy store) must be filled in
-# after deploying infrastructure:
+# after deploying infrastructure. See the control-plane infra commands:
 #
-#   cargo xtask dev setup --cognito      # creates Cognito user pool
-#   cargo xtask dev setup --permissions  # creates VP policy store
+#   cargo xtask control-plane infra deploy   # deploys CDK stack
+#   cargo xtask control-plane infra status   # shows stack outputs
 #
-# The xtask commands write these values to forgeguard.dev.toml.
-# Copy them into the [authn.jwt] and [authz] sections below.
+# Copy the relevant outputs into the [authn.jwt] and [authz] sections below.
 
 project_id = "todo-demo"
 listen_addr = "127.0.0.1:8080"
@@ -58,8 +57,7 @@ listen_addr = "0.0.0.0:6150"
 [auth]
 chain_order = ["jwt", "api-key"]
 
-# JWT settings — fill in from `cargo xtask dev setup --cognito` output
-# or copy from forgeguard.dev.toml after deployment.
+# JWT settings — fill in after deploying Cognito infrastructure.
 #
 # [authn.jwt]
 # jwks_url = "https://cognito-idp.<region>.amazonaws.com/<pool-id>/.well-known/jwks.json"
@@ -106,8 +104,7 @@ groups = ["viewer"]
 # ---------------------------------------------------------------------------
 # Authorization (Amazon Verified Permissions)
 # ---------------------------------------------------------------------------
-# Fill in policy_store_id from `cargo xtask dev setup --permissions` output
-# or copy from forgeguard.dev.toml after deployment.
+# Fill in policy_store_id after deploying VP infrastructure.
 #
 # [authz]
 # policy_store_id = "<your-policy-store-id>"

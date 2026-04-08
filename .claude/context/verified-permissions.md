@@ -48,5 +48,4 @@ IAM entities (`user`, `group`) use bare names without namespace prefix.
 ## Infrastructure
 
 - CDK stack `verified-permissions-stack.ts` creates policy store (OFF validation mode) + Cognito identity source.
-- `cargo xtask dev setup --vp` deploys the stack and writes `PolicyStoreId` to config.
-- `cargo xtask dev setup --all` runs both Cognito and VP setup.
+- Control-plane infrastructure is managed via `cargo xtask control-plane infra` subcommands (deploy, diff, destroy, status).
