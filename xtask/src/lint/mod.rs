@@ -80,7 +80,7 @@ pub struct LintArgs {
     #[arg(long)]
     pub no_publish_version: bool,
 
-    /// Skip TypeScript compilation check (infra/dev)
+    /// Skip TypeScript compilation check (infra/control-plane)
     #[arg(long)]
     pub no_typescript: bool,
 
@@ -184,7 +184,7 @@ const CHECKS: &[Check] = &[
     },
     Check {
         id: CheckId::TypeScript,
-        name: "tsc --noEmit (infra/dev)",
+        name: "tsc --noEmit (infra/control-plane)",
         program: "__builtin__",
         args: &[],
         optional: false,
@@ -450,10 +450,10 @@ fn resolve_log_path() -> Result<String> {
     Ok(log_path.to_string_lossy().into_owned())
 }
 
-/// Run `npx tsc --noEmit` in `infra/dev/` to check TypeScript compilation.
+/// Run `npx tsc --noEmit` in `infra/control-plane/` to check TypeScript compilation.
 fn run_typescript_check() -> CheckOutcome {
     let output = cmd("npx", &["tsc", "--noEmit"])
-        .dir("infra/dev")
+        .dir("infra/control-plane")
         .stderr_to_stdout()
         .stdout_capture()
         .unchecked()

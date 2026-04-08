@@ -8,7 +8,7 @@
 //! The binary is integrated into the `cargo` command line by using an
 //! alias in `.cargo/config`.
 
-mod dev;
+mod control_plane;
 mod lib_cmd;
 mod lint;
 
@@ -26,8 +26,8 @@ struct App {
 enum Commands {
     /// Run all code quality checks (fmt, check, clippy, test, rail, file-length)
     Lint(lint::LintArgs),
-    /// Development infrastructure commands
-    Dev(dev::DevArgs),
+    /// Control plane infrastructure and management commands
+    ControlPlane(control_plane::ControlPlaneArgs),
     /// Library crate management commands
     Lib(lib_cmd::LibArgs),
 }
@@ -39,7 +39,7 @@ async fn main() -> Result<()> {
 
     match app.command {
         Commands::Lint(args) => lint::run(&args),
-        Commands::Dev(args) => dev::run(&args).await,
+        Commands::ControlPlane(args) => control_plane::run(&args).await,
         Commands::Lib(args) => lib_cmd::run(&args),
     }
 }
