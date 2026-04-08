@@ -20,17 +20,16 @@
 
 # Local development
 .local/
-forgeguard.dev.toml
 
 # Control plane org configs (contain tokens and AWS resource IDs)
 **/orgs.json
 
 # Generated signing keys (Ed25519 PEM files)
 **/keys/*.pem
-infra/dev/.env
-infra/dev/users.toml
-infra/dev/node_modules/
-infra/dev/cdk.out/
+
+# Control plane infra
+infra/control-plane/node_modules/
+infra/control-plane/cdk.out/
 
 # Playwright MCP screenshots
 .playwright-mcp/
@@ -40,6 +39,3 @@ __pycache__/
 
 # Bacon
 .bacon-locations
-
-# CDK / infra build artifacts
-infra/dev/target/
