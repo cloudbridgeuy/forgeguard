@@ -3,7 +3,60 @@ use std::path::Path;
 use aws_sdk_verifiedpermissions::types::SchemaDefinition;
 use color_eyre::eyre::{self, Context, Result};
 
-use super::cedar_core::{CedarSyncConfig, PolicyStoreId, StorePolicy, StoreState, StoreTemplate};
+use super::cedar_core::{
+    CedarSyncConfig, PolicyStoreId, StorePolicy, StoreState, StoreTemplate, SyncAction, SyncPlan,
+    SyncResult,
+};
+
+// ---------------------------------------------------------------------------
+// Name encoding in VP description fields
+// ---------------------------------------------------------------------------
+//
+// VP does not have a `name` field on templates or static policies. We encode
+// the name inside the description with a `[name]` prefix. The format is:
+//   "[my-name] optional description text"
+// or just "[my-name]" if there is no description.
+//
+// `parse_name_from_description` reverses this encoding.
+
+/// Encode a name into a VP description field.
+fn encode_name_in_description(name: &str, description: Option<&str>) -> String {
+    match description {
+        Some(desc) => format!("[{name}] {desc}"),
+        None => format!("[{name}]"),
+    }
+}
+
+/// Parse a `[name]` prefix from a VP description field.
+///
+/// Returns `(Some(name), Some(remaining_description))` if the prefix is found,
+/// or `(None, original)` if not.
+fn parse_name_from_description(raw: Option<&str>) -> (Option<String>, Option<String>) {
+    let Some(s) = raw else {
+        return (None, None);
+    };
+
+    let trimmed = s.trim();
+    if !trimmed.starts_with('[') {
+        return (None, Some(s.to_string()));
+    }
+
+    if let Some(close) = trimmed.find(']') {
+        let name = &trimmed[1..close];
+        if name.is_empty() {
+            return (None, Some(s.to_string()));
+        }
+        let rest = trimmed[close + 1..].trim();
+        let description = if rest.is_empty() {
+            None
+        } else {
+            Some(rest.to_string())
+        };
+        (Some(name.to_string()), description)
+    } else {
+        (None, Some(s.to_string()))
+    }
+}
 
 /// Resolve a policy store ID from a raw string.
 ///
@@ -95,9 +148,6 @@ async fn read_templates(
         .into_paginator()
         .send();
 
-    // ListPolicyTemplates does not return a name field; it only returns the
-    // description. The VP API does not surface template names, so `name` is
-    // always None.
     let mut summaries: Vec<(String, Option<String>)> = Vec::new();
 
     while let Some(page) = paginator.next().await {
@@ -111,7 +161,7 @@ async fn read_templates(
     }
 
     let mut templates = Vec::with_capacity(summaries.len());
-    for (id, description) in summaries {
+    for (id, raw_description) in summaries {
         let detail = client
             .get_policy_template()
             .policy_store_id(store_id.as_str())
@@ -120,9 +170,11 @@ async fn read_templates(
             .await
             .context(format!("GetPolicyTemplate {id} failed"))?;
 
+        let (name, description) = parse_name_from_description(raw_description.as_deref());
+
         templates.push(StoreTemplate {
             id,
-            name: None,
+            name,
             description,
             statement: detail.statement().to_string(),
         });
@@ -179,11 +231,10 @@ fn extract_static_policy_details(
     use aws_sdk_verifiedpermissions::types::PolicyDefinitionDetail;
 
     match detail.definition() {
-        Some(PolicyDefinitionDetail::Static(s)) => (
-            s.statement().to_string(),
-            None,
-            s.description().map(String::from),
-        ),
+        Some(PolicyDefinitionDetail::Static(s)) => {
+            let (name, description) = parse_name_from_description(s.description());
+            (s.statement().to_string(), name, description)
+        }
         Some(PolicyDefinitionDetail::TemplateLinked(_)) => {
             // Template-linked policies don't have inline statements.
             ("(template-linked)".to_string(), None, None)
@@ -286,6 +337,175 @@ pub(crate) async fn put_schema(
         .send()
         .await
         .context("PutSchema failed")?;
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Sync plan execution (V3)
+// ---------------------------------------------------------------------------
+
+/// Execute a sync plan against the VP policy store.
+///
+/// Iterates actions in order (the plan is pre-sorted by `compute_sync_plan`).
+/// Returns outcome counters for terminal display.
+pub(crate) async fn apply_sync_plan(
+    client: &aws_sdk_verifiedpermissions::Client,
+    store_id: &PolicyStoreId,
+    plan: &SyncPlan,
+) -> Result<SyncResult> {
+    let mut result = SyncResult {
+        schema_updated: false,
+        created_templates: 0,
+        deleted_templates: 0,
+        created_policies: 0,
+        deleted_policies: 0,
+    };
+
+    for action in &plan.actions {
+        match action {
+            SyncAction::PutSchema(schema) => {
+                put_schema(client, store_id, schema).await?;
+                result.schema_updated = true;
+            }
+            SyncAction::CreateTemplate(t) => {
+                create_policy_template(
+                    client,
+                    store_id,
+                    &t.name,
+                    t.description.as_deref(),
+                    &t.statement,
+                )
+                .await?;
+                result.created_templates += 1;
+            }
+            SyncAction::DeleteTemplate { id, .. } => {
+                delete_policy_template(client, store_id, id).await?;
+                result.deleted_templates += 1;
+            }
+            SyncAction::CreatePolicy(p) => {
+                create_policy(
+                    client,
+                    store_id,
+                    &p.name,
+                    p.description.as_deref(),
+                    &p.statement,
+                )
+                .await?;
+                result.created_policies += 1;
+            }
+            SyncAction::DeletePolicy { id, .. } => {
+                delete_policy(client, store_id, id).await?;
+                result.deleted_policies += 1;
+            }
+        }
+    }
+
+    Ok(result)
+}
+
+/// Create a policy template in the VP store.
+///
+/// VP does not have a `name` field on templates. We encode the name inside the
+/// description with a `[name]` prefix so that `read_vp_state` can parse it
+/// back out for idempotent matching.
+async fn create_policy_template(
+    client: &aws_sdk_verifiedpermissions::Client,
+    store_id: &PolicyStoreId,
+    name: &str,
+    description: Option<&str>,
+    statement: &str,
+) -> Result<()> {
+    let desc_with_name = encode_name_in_description(name, description);
+
+    let resp = client
+        .create_policy_template()
+        .policy_store_id(store_id.as_str())
+        .statement(statement)
+        .description(&desc_with_name)
+        .send()
+        .await
+        .context(format!("CreatePolicyTemplate '{name}' failed"))?;
+
+    let template_id = resp.policy_template_id();
+    println!("  Created template '{name}' (id: {template_id})");
+
+    Ok(())
+}
+
+/// Delete a policy template from the VP store.
+async fn delete_policy_template(
+    client: &aws_sdk_verifiedpermissions::Client,
+    store_id: &PolicyStoreId,
+    template_id: &str,
+) -> Result<()> {
+    client
+        .delete_policy_template()
+        .policy_store_id(store_id.as_str())
+        .policy_template_id(template_id)
+        .send()
+        .await
+        .context(format!("DeletePolicyTemplate '{template_id}' failed"))?;
+
+    println!("  Deleted template (id: {template_id})");
+
+    Ok(())
+}
+
+/// Create a static policy in the VP store.
+///
+/// VP's `StaticPolicyDefinition` has a `description` field. We encode the
+/// name there with a `[name]` prefix, same as templates.
+async fn create_policy(
+    client: &aws_sdk_verifiedpermissions::Client,
+    store_id: &PolicyStoreId,
+    name: &str,
+    description: Option<&str>,
+    statement: &str,
+) -> Result<()> {
+    use aws_sdk_verifiedpermissions::types::{PolicyDefinition, StaticPolicyDefinition};
+
+    let desc_with_name = encode_name_in_description(name, description);
+
+    let static_def = StaticPolicyDefinition::builder()
+        .statement(statement)
+        .description(&desc_with_name)
+        .build()
+        .context(format!(
+            "failed to build StaticPolicyDefinition for '{name}'"
+        ))?;
+
+    let definition = PolicyDefinition::Static(static_def);
+
+    let resp = client
+        .create_policy()
+        .policy_store_id(store_id.as_str())
+        .definition(definition)
+        .send()
+        .await
+        .context(format!("CreatePolicy '{name}' failed"))?;
+
+    let policy_id = resp.policy_id();
+    println!("  Created policy '{name}' (id: {policy_id})");
+
+    Ok(())
+}
+
+/// Delete a static policy from the VP store.
+async fn delete_policy(
+    client: &aws_sdk_verifiedpermissions::Client,
+    store_id: &PolicyStoreId,
+    policy_id: &str,
+) -> Result<()> {
+    client
+        .delete_policy()
+        .policy_store_id(store_id.as_str())
+        .policy_id(policy_id)
+        .send()
+        .await
+        .context(format!("DeletePolicy '{policy_id}' failed"))?;
+
+    println!("  Deleted policy (id: {policy_id})");
 
     Ok(())
 }

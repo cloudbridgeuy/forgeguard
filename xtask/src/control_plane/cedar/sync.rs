@@ -52,57 +52,45 @@ pub(crate) async fn run(
     // 5. Build desired state
     let desired = cedar_core::build_desired_state(&config, schema_content);
 
-    // 6. Dry-run gate
+    // 6. Build AWS config and VP client
+    let aws_config = op::build_aws_config(profile, region).await?;
+    let vp_client = aws_sdk_verifiedpermissions::Client::new(&aws_config);
+
+    // 7. Read current VP state
+    println!("Reading current VP state...");
+    let current = cedar_io::read_vp_state(&vp_client, &store_id).await?;
+
+    // 8. Compute diff
+    let plan = cedar_core::compute_sync_plan(&desired, &current);
+
+    if plan.is_empty() {
+        println!(
+            "\n{}",
+            cedar_core::format_summary(&cedar_core::SyncResult {
+                schema_updated: false,
+                created_templates: 0,
+                deleted_templates: 0,
+                created_policies: 0,
+                deleted_policies: 0,
+            })
+        );
+        return Ok(());
+    }
+
+    // 9. Dry-run gate
     if args.dry_run {
         println!("\n--- Dry-run mode ---");
-        print_summary(&desired);
+        println!("{} action(s) planned.", plan.actions.len());
         println!("No changes synced to AWS.");
         return Ok(());
     }
 
-    // 7. Build AWS config and VP client
-    let aws_config = op::build_aws_config(profile, region).await?;
-    let vp_client = aws_sdk_verifiedpermissions::Client::new(&aws_config);
+    // 10. Apply sync plan
+    println!("Applying {} action(s)...", plan.actions.len());
+    let result = cedar_io::apply_sync_plan(&vp_client, &store_id, &plan).await?;
 
-    // 8. Push schema to VP (if present)
-    if let Some(schema) = &desired.schema {
-        println!("Pushing schema to VP...");
-        cedar_io::put_schema(&vp_client, &store_id, schema).await?;
-        println!("Schema synced successfully.");
-    }
-
-    // 9. Print summary
-    print_summary(&desired);
-    println!("Sync complete.");
+    // 11. Print summary
+    println!("\n{}", cedar_core::format_summary(&result));
 
     Ok(())
-}
-
-fn print_summary(desired: &cedar_core::DesiredState) {
-    let schema_status = if desired.schema.is_some() {
-        "present"
-    } else {
-        "none"
-    };
-    println!("\nSummary:");
-    println!("  Schema: {schema_status}");
-    println!("  Templates: {}", desired.templates.len());
-    for t in &desired.templates {
-        print_entry(&t.name, t.description.as_deref(), &t.statement);
-    }
-    println!(
-        "  Policies: {} (Cedar only, RBAC skipped in V2)",
-        desired.policies.len()
-    );
-    for p in &desired.policies {
-        print_entry(&p.name, p.description.as_deref(), &p.statement);
-    }
-}
-
-fn print_entry(name: &str, description: Option<&str>, statement: &str) {
-    println!("    - {name}");
-    if let Some(desc) = description {
-        println!("      {desc}");
-    }
-    println!("      {}", cedar_core::first_line_preview(statement));
 }
