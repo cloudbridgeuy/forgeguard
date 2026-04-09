@@ -100,6 +100,28 @@ cache_max_entries = 10000
 # attributes = { owner = "String" }
 
 # ---------------------------------------------------------------------------
+# Tenant Scoping
+# ---------------------------------------------------------------------------
+# Controls automatic tenant isolation for `type = "rbac"` policies.
+# When enabled (the default), the RBAC compiler appends a `when` clause
+# to every compiled Cedar policy:
+#
+#   when { principal.<principal_attribute> == resource.<resource_attribute> }
+#
+# This ensures RBAC policies only grant access within the user's own tenant.
+#
+# To disable tenant scoping entirely (single-tenant deployments):
+#   [tenant]
+#   enabled = false
+#
+# Individual RBAC policies can opt out with `tenant_scoped = false`.
+
+[tenant]
+# enabled = true                       # default: true
+# principal_attribute = "tenant_id"    # default: "tenant_id"
+# resource_attribute = "tenant_id"     # default: "tenant_id"
+
+# ---------------------------------------------------------------------------
 # Metrics
 # ---------------------------------------------------------------------------
 
@@ -251,88 +273,111 @@ auth_mode = "anonymous"
 # ---------------------------------------------------------------------------
 # Policies
 # ---------------------------------------------------------------------------
-# Cedar-style policy definitions evaluated locally by the proxy.
-# Each policy has a name, optional description, and a list of statements.
+# Authorization policies synced to Verified Permissions via `cedar sync`.
 #
-# Statement fields:
-#   effect    - "allow" or "deny"
-#   actions   - List of Cedar action patterns (e.g., "todo:*:*", "todo:list:read")
-#   resources - (optional) List of Cedar entity references; omit for all resources
-#   except    - (optional) List of group names excluded from this statement
-
-[[policies]]
-name = "admin-full-access"
-description = "Admins can perform any action on any resource in any namespace."
-groups = ["admin"]
-
-[[policies.statements]]
-effect = "allow"
-actions = ["todo:*:*", "shopping:*:*"]
-
-[[policies]]
-name = "viewer-read-only"
-description = "Viewers can only list and read todos."
-groups = ["viewer"]
-
-[[policies.statements]]
-effect = "allow"
-actions = ["todo:list:list", "todo:list:read"]
-
-[[policies]]
-name = "shopper-access"
-description = "Shoppers can manage shopping lists and add items."
-groups = ["shopper"]
-
-[[policies.statements]]
-effect = "allow"
-actions = ["shopping:list:list", "shopping:list:read", "shopping:list:create", "shopping:item:add"]
-
-[[policies]]
-name = "top-secret-deny"
-description = "Deny access to top-secret list unless in top-secret-readers group."
-
-[[policies.statements]]
-effect = "deny"
-actions = ["todo:list:*"]
-resources = ["todo::list::top-secret"]
-except = ["top-secret-readers"]
-
-# ---------------------------------------------------------------------------
-# Groups
-# ---------------------------------------------------------------------------
-# Group definitions that can inherit from other groups.
+# Each policy has a `type` field that selects the dialect:
 #
-# Fields:
-#   name          - Unique group identifier
-#   description   - (optional) Human-readable description
-#   member_groups - (optional) Groups whose members also belong to this group
+#   type = "rbac" (default if omitted)
+#     ForgeGuard's multi-tenant RBAC DSL. Role-centric: the policy `name` maps
+#     directly to a JWT group claim (e.g., name = "admin" matches users with
+#     cognito:groups containing "admin"). Additive only — use `allow` to list
+#     permitted actions. Use `inherits` for role hierarchy. All RBAC policies
+#     are automatically tenant-scoped unless `tenant_scoped = false`.
+#
+#     Fields:
+#       name          - Role name (= group name from JWT cognito:groups claim)
+#       description   - (optional) Human-readable description
+#       inherits      - (optional) List of roles this role inherits from
+#       allow         - List of permitted actions (namespace:entity:verb format)
+#       tenant_scoped - (optional) Override tenant scoping (default: true)
+#
+#   type = "cedar"
+#     Raw Cedar policy passed through verbatim. Use when RBAC can't express
+#     what you need: principal type constraints, attribute conditions,
+#     when/unless clauses, deny policies, or cross-tenant access.
+#
+#     Fields:
+#       name        - Unique policy name (used as VP resource name)
+#       description - (optional) Human-readable description
+#       body        - Raw Cedar policy language string
 
-[[groups]]
+# --- RBAC policies (compiled to Cedar with automatic tenant scoping) ---
+
+[[policies]]
+# type = "rbac"   ← default, can be omitted
 name = "admin"
-description = "Full access to all resources."
+description = "Full access to all resources in all namespaces."
+inherits = ["viewer", "shopper"]
+allow = ["todo:list:create", "todo:list:update", "todo:list:delete", "todo:list:share", "shopping:list:update", "shopping:list:delete"]
 
-[[groups]]
+[[policies]]
 name = "viewer"
-description = "Read-only access."
+description = "Read-only access to todos."
+allow = ["todo:list:list", "todo:list:read"]
 
-[[groups]]
+[[policies]]
 name = "shopper"
 description = "Shopping list management."
+allow = ["shopping:list:list", "shopping:list:read", "shopping:list:create", "shopping:item:add"]
 
-[[groups]]
-name = "top-secret-readers"
-description = "Can access top-secret resources."
+# --- Raw Cedar policies (for patterns RBAC can't express) ---
+
+[[policies]]
+type = "cedar"
+name = "top-secret-deny"
+description = "Deny access to top-secret list unless in top-secret-readers group."
+body = """
+forbid(
+  principal,
+  action,
+  resource == todo_app::todo__list::"top-secret"
+) unless {
+  principal in todo_app::group::"top-secret-readers"
+};
+"""
+
+# ---------------------------------------------------------------------------
+# Templates
+# ---------------------------------------------------------------------------
+# Cedar policy templates synced to Verified Permissions via `cedar sync`.
+# Templates use `?principal` and `?resource` placeholders that are bound
+# when creating template-linked policies (e.g., assigning a role to a user).
+#
+# Currently only `type = "cedar"` is supported.
+#
+#   Fields:
+#     type        - "cedar" (required)
+#     name        - Unique template name (used as VP resource name)
+#     description - (optional) Human-readable description
+#     body        - Raw Cedar template with ?principal and/or ?resource
+
+# [[templates]]
+# type = "cedar"
+# name = "project-contributor"
+# description = "Grants a principal full access to a specific project resource."
+# body = """
+# permit(
+#   principal == ?principal,
+#   action in [
+#     todo_app::Action::"todo-list-list",
+#     todo_app::Action::"todo-list-read",
+#     todo_app::Action::"todo-list-create",
+#     todo_app::Action::"todo-list-update"
+#   ],
+#   resource == ?resource
+# );
+# """
 
 # ---------------------------------------------------------------------------
 # Policy Tests
 # ---------------------------------------------------------------------------
 # Inline authorization test scenarios. Used by `forgeguard test` to verify
-# that policies and groups produce the expected allow/deny decisions.
+# that policies produce the expected allow/deny decisions.
 
 [[policy_tests]]
 name = "alice (admin) can delete list"
 principal = "alice"
-groups = ["admin", "top-secret-readers"]
+groups = ["admin"]
 tenant = "acme-corp"
 action = "todo:list:delete"
 expect = "allow"
@@ -352,6 +397,22 @@ groups = ["viewer"]
 tenant = "acme-corp"
 action = "todo:list:create"
 expect = "deny"
+
+[[policy_tests]]
+name = "admin inherits viewer permissions"
+principal = "alice"
+groups = ["admin"]
+tenant = "acme-corp"
+action = "todo:list:read"
+expect = "allow"
+
+[[policy_tests]]
+name = "admin inherits shopper permissions"
+principal = "alice"
+groups = ["admin"]
+tenant = "acme-corp"
+action = "shopping:list:create"
+expect = "allow"
 
 [[policy_tests]]
 name = "admin can delete shopping list"
@@ -403,7 +464,7 @@ resource = "todo::list::top-secret"
 expect = "deny"
 
 [[policy_tests]]
-name = "alice can read top-secret"
+name = "alice can read top-secret (admin + top-secret-readers)"
 principal = "alice"
 groups = ["admin", "top-secret-readers"]
 tenant = "acme-corp"
