@@ -8,31 +8,6 @@ use super::cedar_core::{
     SyncResult,
 };
 
-// ---------------------------------------------------------------------------
-// VP name field helpers
-// ---------------------------------------------------------------------------
-//
-// AWS Verified Permissions natively supports a `name` field on both
-// `CreatePolicyTemplate` and `CreatePolicy` (SDK v1.110.0+). Names are
-// unique within the store and returned by `ListPolicyTemplates` /
-// `ListPolicies`. VP requires the name to be prefixed with `name/`.
-
-/// The required VP name prefix.
-const VP_NAME_PREFIX: &str = "name/";
-
-/// Format a user-facing name as a VP name (prepend `name/` prefix).
-fn to_vp_name(name: &str) -> String {
-    format!("{VP_NAME_PREFIX}{name}")
-}
-
-/// Extract the user-facing name from a VP name (strip `name/` prefix).
-///
-/// Returns `None` if the value is missing or doesn't carry the expected
-/// prefix (defensive — should not happen with names we create).
-fn from_vp_name(raw: Option<&str>) -> Option<String> {
-    raw.and_then(|s| s.strip_prefix(VP_NAME_PREFIX).map(String::from))
-}
-
 /// Resolve a policy store ID from a raw string.
 ///
 /// If `raw` starts with `op://`, it is resolved via `op read`. Otherwise it is
@@ -130,7 +105,7 @@ async fn read_templates(
         for item in page.policy_templates() {
             summaries.push((
                 item.policy_template_id().to_string(),
-                from_vp_name(item.name()),
+                item.name().map(String::from),
                 item.description().map(String::from),
             ));
         }
@@ -172,7 +147,7 @@ async fn read_policies(
     while let Some(page) = paginator.next().await {
         let page = page.context("ListPolicies failed")?;
         for item in page.policies() {
-            policy_summaries.push((item.policy_id().to_string(), from_vp_name(item.name())));
+            policy_summaries.push((item.policy_id().to_string(), item.name().map(String::from)));
         }
     }
 
@@ -380,7 +355,7 @@ pub(crate) async fn apply_sync_plan(
 /// Create a policy template in the VP store.
 ///
 /// Uses the native VP `name` field (SDK v1.110.0+). Names are unique within
-/// the store and must carry the `name/` prefix required by VP.
+/// the store.
 async fn create_policy_template(
     client: &aws_sdk_verifiedpermissions::Client,
     store_id: &PolicyStoreId,
@@ -392,7 +367,7 @@ async fn create_policy_template(
         .create_policy_template()
         .policy_store_id(store_id.as_str())
         .statement(statement)
-        .name(to_vp_name(name));
+        .name(name);
 
     if let Some(desc) = description {
         builder = builder.description(desc);
@@ -457,7 +432,7 @@ async fn create_policy(
         .create_policy()
         .policy_store_id(store_id.as_str())
         .definition(definition)
-        .name(to_vp_name(name))
+        .name(name)
         .send()
         .await
         .context(format!("CreatePolicy '{name}' failed"))?;
