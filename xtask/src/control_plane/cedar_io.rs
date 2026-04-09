@@ -239,18 +239,11 @@ pub(crate) fn parse_cedar_config(path: &Path) -> Result<CedarSyncConfig> {
         toml::Value::String(policy_store_id.to_string()),
     );
 
-    // Copy optional sections.
-    if let Some(schema) = table.get("schema") {
-        sync_table.insert("schema".to_string(), schema.clone());
-    }
-    if let Some(tenant) = table.get("tenant") {
-        sync_table.insert("tenant".to_string(), tenant.clone());
-    }
-    if let Some(policies) = table.get("policies") {
-        sync_table.insert("policies".to_string(), policies.clone());
-    }
-    if let Some(templates) = table.get("templates") {
-        sync_table.insert("templates".to_string(), templates.clone());
+    // Copy optional sections relevant to Cedar sync.
+    for key in ["schema", "tenant", "policies", "templates"] {
+        if let Some(value) = table.get(key) {
+            sync_table.insert(key.to_string(), value.clone());
+        }
     }
 
     let config: CedarSyncConfig = toml::Value::Table(sync_table)

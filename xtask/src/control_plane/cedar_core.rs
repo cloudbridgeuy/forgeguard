@@ -53,7 +53,7 @@ pub(crate) struct StorePolicy {
 ///
 /// Truncation respects UTF-8 character boundaries so it never panics on
 /// multi-byte characters.
-fn first_line_preview(text: &str) -> String {
+pub(crate) fn first_line_preview(text: &str) -> String {
     let first_line = text.lines().next().unwrap_or("");
     if first_line.chars().count() <= 80 {
         return first_line.to_string();
@@ -326,41 +326,40 @@ pub(crate) fn build_desired_state(
     config: &CedarSyncConfig,
     schema_content: Option<String>,
 ) -> DesiredState {
-    let mut policies = Vec::new();
-    for entry in &config.policies {
-        match entry {
+    let policies = config
+        .policies
+        .iter()
+        .filter_map(|entry| match entry {
             PolicyEntry::Cedar {
                 name,
                 description,
                 body,
-            } => {
-                policies.push(DesiredPolicy {
-                    name: name.clone(),
-                    description: description.clone(),
-                    statement: body.clone(),
-                });
-            }
+            } => Some(DesiredPolicy {
+                name: name.clone(),
+                description: description.clone(),
+                statement: body.clone(),
+            }),
             // RBAC compilation is V4 — skip for now.
-            PolicyEntry::Rbac { .. } => {}
-        }
-    }
+            PolicyEntry::Rbac { .. } => None,
+        })
+        .collect();
 
-    let mut templates = Vec::new();
-    for entry in &config.templates {
-        match entry {
-            TemplateEntry::Cedar {
+    let templates = config
+        .templates
+        .iter()
+        .map(|entry| {
+            let TemplateEntry::Cedar {
                 name,
                 description,
                 body,
-            } => {
-                templates.push(DesiredTemplate {
-                    name: name.clone(),
-                    description: description.clone(),
-                    statement: body.clone(),
-                });
+            } = entry;
+            DesiredTemplate {
+                name: name.clone(),
+                description: description.clone(),
+                statement: body.clone(),
             }
-        }
-    }
+        })
+        .collect();
 
     DesiredState {
         schema: schema_content,
