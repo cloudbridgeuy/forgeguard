@@ -6,7 +6,6 @@ use color_eyre::eyre::{self, Result};
 use crate::control_plane::cedar_core;
 use crate::control_plane::cedar_io;
 use crate::control_plane::op;
-use crate::control_plane::op_core::ForgeguardEnv;
 
 #[derive(Args)]
 pub(crate) struct SyncArgs {
@@ -20,7 +19,6 @@ pub(crate) struct SyncArgs {
 
 pub(crate) async fn run(
     args: &SyncArgs,
-    _env: ForgeguardEnv,
     op_account: Option<&str>,
     region: Option<&str>,
     profile: Option<&str>,

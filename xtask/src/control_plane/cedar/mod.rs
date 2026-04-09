@@ -51,7 +51,6 @@ pub(crate) async fn run(args: &CedarArgs) -> Result<()> {
         CedarCommands::Sync(sync_args) => {
             sync::run(
                 sync_args,
-                args.env,
                 args.op_account.as_deref(),
                 args.region.as_deref(),
                 args.profile.as_deref(),

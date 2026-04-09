@@ -265,10 +265,16 @@ pub(crate) fn read_schema_file(config_path: &Path, schema_path: &str) -> Result<
     let base_dir = config_path.parent().unwrap_or_else(|| Path::new("."));
     let full_path = base_dir.join(schema_path);
 
-    std::fs::read_to_string(&full_path).context(format!(
+    let content = std::fs::read_to_string(&full_path).context(format!(
         "failed to read schema file {}",
         full_path.display()
-    ))
+    ))?;
+
+    if content.trim().is_empty() {
+        eyre::bail!("schema file is empty: {}", full_path.display());
+    }
+
+    Ok(content)
 }
 
 /// Push a Cedar schema to a VP policy store.
