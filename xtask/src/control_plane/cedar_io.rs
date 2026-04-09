@@ -9,53 +9,28 @@ use super::cedar_core::{
 };
 
 // ---------------------------------------------------------------------------
-// Name encoding in VP description fields
+// VP name field helpers
 // ---------------------------------------------------------------------------
 //
-// VP does not have a `name` field on templates or static policies. We encode
-// the name inside the description with a `[name]` prefix. The format is:
-//   "[my-name] optional description text"
-// or just "[my-name]" if there is no description.
-//
-// `parse_name_from_description` reverses this encoding.
+// AWS Verified Permissions natively supports a `name` field on both
+// `CreatePolicyTemplate` and `CreatePolicy` (SDK v1.110.0+). Names are
+// unique within the store and returned by `ListPolicyTemplates` /
+// `ListPolicies`. VP requires the name to be prefixed with `name/`.
 
-/// Encode a name into a VP description field.
-fn encode_name_in_description(name: &str, description: Option<&str>) -> String {
-    match description {
-        Some(desc) => format!("[{name}] {desc}"),
-        None => format!("[{name}]"),
-    }
+/// The required VP name prefix.
+const VP_NAME_PREFIX: &str = "name/";
+
+/// Format a user-facing name as a VP name (prepend `name/` prefix).
+fn to_vp_name(name: &str) -> String {
+    format!("{VP_NAME_PREFIX}{name}")
 }
 
-/// Parse a `[name]` prefix from a VP description field.
+/// Extract the user-facing name from a VP name (strip `name/` prefix).
 ///
-/// Returns `(Some(name), Some(remaining_description))` if the prefix is found,
-/// or `(None, original)` if not.
-fn parse_name_from_description(raw: Option<&str>) -> (Option<String>, Option<String>) {
-    let Some(s) = raw else {
-        return (None, None);
-    };
-
-    let trimmed = s.trim();
-    if !trimmed.starts_with('[') {
-        return (None, Some(s.to_string()));
-    }
-
-    if let Some(close) = trimmed.find(']') {
-        let name = &trimmed[1..close];
-        if name.is_empty() {
-            return (None, Some(s.to_string()));
-        }
-        let rest = trimmed[close + 1..].trim();
-        let description = if rest.is_empty() {
-            None
-        } else {
-            Some(rest.to_string())
-        };
-        (Some(name.to_string()), description)
-    } else {
-        (None, Some(s.to_string()))
-    }
+/// Returns `None` if the value is missing or doesn't carry the expected
+/// prefix (defensive — should not happen with names we create).
+fn from_vp_name(raw: Option<&str>) -> Option<String> {
+    raw.and_then(|s| s.strip_prefix(VP_NAME_PREFIX).map(String::from))
 }
 
 /// Resolve a policy store ID from a raw string.
@@ -148,20 +123,21 @@ async fn read_templates(
         .into_paginator()
         .send();
 
-    let mut summaries: Vec<(String, Option<String>)> = Vec::new();
+    let mut summaries: Vec<(String, Option<String>, Option<String>)> = Vec::new();
 
     while let Some(page) = paginator.next().await {
         let page = page.context("ListPolicyTemplates failed")?;
         for item in page.policy_templates() {
             summaries.push((
                 item.policy_template_id().to_string(),
+                from_vp_name(item.name()),
                 item.description().map(String::from),
             ));
         }
     }
 
     let mut templates = Vec::with_capacity(summaries.len());
-    for (id, raw_description) in summaries {
+    for (id, name, description) in summaries {
         let detail = client
             .get_policy_template()
             .policy_store_id(store_id.as_str())
@@ -169,8 +145,6 @@ async fn read_templates(
             .send()
             .await
             .context(format!("GetPolicyTemplate {id} failed"))?;
-
-        let (name, description) = parse_name_from_description(raw_description.as_deref());
 
         templates.push(StoreTemplate {
             id,
@@ -193,17 +167,17 @@ async fn read_policies(
         .into_paginator()
         .send();
 
-    let mut policy_ids: Vec<String> = Vec::new();
+    let mut policy_summaries: Vec<(String, Option<String>)> = Vec::new();
 
     while let Some(page) = paginator.next().await {
         let page = page.context("ListPolicies failed")?;
         for item in page.policies() {
-            policy_ids.push(item.policy_id().to_string());
+            policy_summaries.push((item.policy_id().to_string(), from_vp_name(item.name())));
         }
     }
 
-    let mut policies = Vec::with_capacity(policy_ids.len());
-    for id in policy_ids {
+    let mut policies = Vec::with_capacity(policy_summaries.len());
+    for (id, name) in policy_summaries {
         let detail = client
             .get_policy()
             .policy_store_id(store_id.as_str())
@@ -212,7 +186,7 @@ async fn read_policies(
             .await
             .context(format!("GetPolicy {id} failed"))?;
 
-        let (statement, name, description) = extract_static_policy_details(&detail);
+        let (statement, description) = extract_static_policy_details(&detail);
 
         policies.push(StorePolicy {
             id,
@@ -227,19 +201,18 @@ async fn read_policies(
 
 fn extract_static_policy_details(
     detail: &aws_sdk_verifiedpermissions::operation::get_policy::GetPolicyOutput,
-) -> (String, Option<String>, Option<String>) {
+) -> (String, Option<String>) {
     use aws_sdk_verifiedpermissions::types::PolicyDefinitionDetail;
 
     match detail.definition() {
         Some(PolicyDefinitionDetail::Static(s)) => {
-            let (name, description) = parse_name_from_description(s.description());
-            (s.statement().to_string(), name, description)
+            (s.statement().to_string(), s.description().map(String::from))
         }
         Some(PolicyDefinitionDetail::TemplateLinked(_)) => {
             // Template-linked policies don't have inline statements.
-            ("(template-linked)".to_string(), None, None)
+            ("(template-linked)".to_string(), None)
         }
-        _ => ("(unknown policy type)".to_string(), None, None),
+        _ => ("(unknown policy type)".to_string(), None),
     }
 }
 
@@ -406,9 +379,8 @@ pub(crate) async fn apply_sync_plan(
 
 /// Create a policy template in the VP store.
 ///
-/// VP does not have a `name` field on templates. We encode the name inside the
-/// description with a `[name]` prefix so that `read_vp_state` can parse it
-/// back out for idempotent matching.
+/// Uses the native VP `name` field (SDK v1.110.0+). Names are unique within
+/// the store and must carry the `name/` prefix required by VP.
 async fn create_policy_template(
     client: &aws_sdk_verifiedpermissions::Client,
     store_id: &PolicyStoreId,
@@ -416,13 +388,17 @@ async fn create_policy_template(
     description: Option<&str>,
     statement: &str,
 ) -> Result<()> {
-    let desc_with_name = encode_name_in_description(name, description);
-
-    let resp = client
+    let mut builder = client
         .create_policy_template()
         .policy_store_id(store_id.as_str())
         .statement(statement)
-        .description(&desc_with_name)
+        .name(to_vp_name(name));
+
+    if let Some(desc) = description {
+        builder = builder.description(desc);
+    }
+
+    let resp = builder
         .send()
         .await
         .context(format!("CreatePolicyTemplate '{name}' failed"))?;
@@ -454,8 +430,8 @@ async fn delete_policy_template(
 
 /// Create a static policy in the VP store.
 ///
-/// VP's `StaticPolicyDefinition` has a `description` field. We encode the
-/// name there with a `[name]` prefix, same as templates.
+/// Uses the native VP `name` field (SDK v1.110.0+). The description on
+/// `StaticPolicyDefinition` is passed through directly without encoding.
 async fn create_policy(
     client: &aws_sdk_verifiedpermissions::Client,
     store_id: &PolicyStoreId,
@@ -465,15 +441,15 @@ async fn create_policy(
 ) -> Result<()> {
     use aws_sdk_verifiedpermissions::types::{PolicyDefinition, StaticPolicyDefinition};
 
-    let desc_with_name = encode_name_in_description(name, description);
+    let mut static_builder = StaticPolicyDefinition::builder().statement(statement);
 
-    let static_def = StaticPolicyDefinition::builder()
-        .statement(statement)
-        .description(&desc_with_name)
-        .build()
-        .context(format!(
-            "failed to build StaticPolicyDefinition for '{name}'"
-        ))?;
+    if let Some(desc) = description {
+        static_builder = static_builder.description(desc);
+    }
+
+    let static_def = static_builder.build().context(format!(
+        "failed to build StaticPolicyDefinition for '{name}'"
+    ))?;
 
     let definition = PolicyDefinition::Static(static_def);
 
@@ -481,6 +457,7 @@ async fn create_policy(
         .create_policy()
         .policy_store_id(store_id.as_str())
         .definition(definition)
+        .name(to_vp_name(name))
         .send()
         .await
         .context(format!("CreatePolicy '{name}' failed"))?;
