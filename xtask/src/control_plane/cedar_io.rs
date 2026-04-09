@@ -1,6 +1,9 @@
+use std::path::Path;
+
+use aws_sdk_verifiedpermissions::types::SchemaDefinition;
 use color_eyre::eyre::{self, Context, Result};
 
-use super::cedar_core::{PolicyStoreId, StorePolicy, StoreState, StoreTemplate};
+use super::cedar_core::{CedarSyncConfig, PolicyStoreId, StorePolicy, StoreState, StoreTemplate};
 
 /// Resolve a policy store ID from a raw string.
 ///
@@ -187,4 +190,103 @@ fn extract_static_policy_details(
         }
         _ => ("(unknown policy type)".to_string(), None, None),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Config parsing + schema sync (V2)
+// ---------------------------------------------------------------------------
+
+/// Read and parse a `forgeguard.toml`-style config for Cedar sync.
+///
+/// Only the fields relevant to `cedar sync` are deserialized; unknown top-level
+/// keys (e.g. `routes`, `features`) are silently ignored thanks to the TOML
+/// parser's default behavior and serde's `#[serde(default)]` on optional fields.
+pub(crate) fn parse_cedar_config(path: &Path) -> Result<CedarSyncConfig> {
+    let content =
+        std::fs::read_to_string(path).context(format!("failed to read {}", path.display()))?;
+
+    // The forgeguard.toml has the policy_store_id nested under [authz].
+    // CedarSyncConfig expects it at the top level. Extract it from the [authz]
+    // section and inject it at the top level for deserialization.
+    let raw: toml::Value =
+        toml::from_str(&content).context(format!("failed to parse {}", path.display()))?;
+
+    let table = raw
+        .as_table()
+        .ok_or_else(|| eyre::eyre!("config is not a TOML table"))?;
+
+    let policy_store_id = table
+        .get("authz")
+        .and_then(|v| v.as_table())
+        .and_then(|t| t.get("policy_store_id"))
+        .and_then(|v| v.as_str())
+        .or_else(|| {
+            // Also check top-level policy_store_id for simplified configs.
+            table
+                .get("policy_store_id")
+                .and_then(|v| v.as_str())
+        })
+        .ok_or_else(|| {
+            eyre::eyre!(
+                "missing policy_store_id: expected [authz].policy_store_id or top-level policy_store_id"
+            )
+        })?;
+
+    // Build a new table with the extracted fields.
+    let mut sync_table = toml::map::Map::new();
+    sync_table.insert(
+        "policy_store_id".to_string(),
+        toml::Value::String(policy_store_id.to_string()),
+    );
+
+    // Copy optional sections.
+    if let Some(schema) = table.get("schema") {
+        sync_table.insert("schema".to_string(), schema.clone());
+    }
+    if let Some(tenant) = table.get("tenant") {
+        sync_table.insert("tenant".to_string(), tenant.clone());
+    }
+    if let Some(policies) = table.get("policies") {
+        sync_table.insert("policies".to_string(), policies.clone());
+    }
+    if let Some(templates) = table.get("templates") {
+        sync_table.insert("templates".to_string(), templates.clone());
+    }
+
+    let config: CedarSyncConfig = toml::Value::Table(sync_table)
+        .try_into()
+        .context("failed to deserialize Cedar sync config")?;
+
+    Ok(config)
+}
+
+/// Read a schema file from disk, resolving relative to the config file's parent directory.
+pub(crate) fn read_schema_file(config_path: &Path, schema_path: &str) -> Result<String> {
+    let base_dir = config_path.parent().unwrap_or_else(|| Path::new("."));
+    let full_path = base_dir.join(schema_path);
+
+    std::fs::read_to_string(&full_path).context(format!(
+        "failed to read schema file {}",
+        full_path.display()
+    ))
+}
+
+/// Push a Cedar schema to a VP policy store.
+///
+/// Uses the `CedarJson` schema format, which is what VP's `PutSchema` API
+/// accepts as JSON-encoded Cedar schema.
+pub(crate) async fn put_schema(
+    client: &aws_sdk_verifiedpermissions::Client,
+    store_id: &PolicyStoreId,
+    schema_content: &str,
+) -> Result<()> {
+    client
+        .put_schema()
+        .policy_store_id(store_id.as_str())
+        .definition(SchemaDefinition::CedarJson(schema_content.to_string()))
+        .send()
+        .await
+        .context("PutSchema failed")?;
+
+    Ok(())
 }

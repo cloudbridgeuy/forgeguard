@@ -1,4 +1,5 @@
 mod status;
+mod sync;
 
 use clap::{Args, Subcommand};
 use color_eyre::eyre::Result;
@@ -32,12 +33,24 @@ pub(crate) struct CedarArgs {
 enum CedarCommands {
     /// Show the current VP policy store state
     Status,
+    /// Sync Cedar schema, policies, and templates to VP
+    Sync(sync::SyncArgs),
 }
 
 pub(crate) async fn run(args: &CedarArgs) -> Result<()> {
     match &args.command {
         CedarCommands::Status => {
             status::run(
+                args.env,
+                args.op_account.as_deref(),
+                args.region.as_deref(),
+                args.profile.as_deref(),
+            )
+            .await
+        }
+        CedarCommands::Sync(sync_args) => {
+            sync::run(
+                sync_args,
                 args.env,
                 args.op_account.as_deref(),
                 args.region.as_deref(),
