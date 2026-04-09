@@ -19,6 +19,7 @@
 - **DynamoDB tests:** `cargo xtask lint --dynamodb-tests` (requires `docker compose up -d dynamodb-local`)
 - **Integration tests:** `cargo test -p forgeguard_proxy` — see [demo-app.md](./.claude/context/demo-app.md)
 - **Demo app:** native or Docker Compose — see [demo-app.md](./.claude/context/demo-app.md)
+- **AWS defaults:** region `us-east-2`, profile `admin` — e.g. `--region us-east-2 --profile admin`
 - **GitHub CLI:** always use `gh auth switch --user cloudbridgeuy` before any `gh` command
 
 ## Unnegotiables

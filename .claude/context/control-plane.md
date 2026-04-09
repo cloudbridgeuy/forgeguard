@@ -133,7 +133,9 @@ See `crates/control-plane/README.md` for full usage instructions and curl exampl
 
 ```
 crates/control-plane/src/
-  main.rs          -- entry point, tracing, ForgeGuard setup, server startup (shell)
+  lib.rs           -- library root: pub mod app + internal modules
+  app.rs           -- public router builders: dynamodb_router(), memory_router()
+  main.rs          -- binary entry point: CLI parsing, delegates to app:: (shell)
   cli.rs           -- clap CLI: --store, --config, --dynamodb-table, --listen, --log-level
   config.rs        -- OrgConfig (versioned), RouteEntry, PublicRouteEntry (serde DTOs)
   store.rs         -- OrgStore trait (async), InMemoryOrgStore, AnyOrgStore, OrgRecord, build/load/etag
@@ -142,9 +144,15 @@ crates/control-plane/src/
   error.rs         -- Error enum, Result alias
 ```
 
+The crate is both lib+bin. `app.rs` exposes `dynamodb_router()` and `memory_router()` so `fg-lambdas` can import the Axum router and wrap it with `lambda_http`. All internal types stay `pub(crate)`.
+
+### Test Fixtures
+
+- `examples/control-plane/orgs.test.json` — multi-org config for local dev (`--store=memory`)
+- `examples/control-plane/orgs.sample.json` — template with placeholder values
+
 ## What's NOT Here Yet
 
 - CORS middleware (no browser clients -- deferred to #40 dashboard)
 - Cognito JWT auth for production (deferred to #41)
-- Lambda deployment (deferred to #45)
 - Hot-reload of config file
