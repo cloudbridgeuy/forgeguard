@@ -128,6 +128,16 @@ pub(crate) fn run_cdk_with_op(
     Ok(())
 }
 
+/// Run cedar preflight checks: verify only `op` is on `PATH`.
+pub(crate) fn run_cedar_preflight() -> Result<()> {
+    let errors = op_core::validate_cedar_preflight(tool_exists("op"));
+    if !errors.is_empty() {
+        let msg = errors.join("\n  - ");
+        eyre::bail!("preflight checks failed:\n  - {msg}");
+    }
+    Ok(())
+}
+
 /// Run preflight checks: verify `bun` and `op` are on `PATH`.
 pub(crate) fn run_preflight() -> Result<()> {
     let checks = op_core::PreflightChecks {

@@ -12,7 +12,7 @@ pub(crate) async fn run(
     profile: Option<&str>,
 ) -> Result<()> {
     // 1. Preflight
-    op::run_preflight()?;
+    op::run_cedar_preflight()?;
     let region = region.ok_or_else(|| eyre::eyre!("--region or AWS_REGION is required"))?;
     let profile = profile.ok_or_else(|| eyre::eyre!("--profile or AWS_PROFILE is required"))?;
 

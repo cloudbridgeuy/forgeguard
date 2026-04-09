@@ -27,6 +27,15 @@ pub(crate) struct PreflightChecks {
     pub(crate) zig_exists: bool,
 }
 
+/// Validate cedar preflight checks. Only requires `op`.
+pub(crate) fn validate_cedar_preflight(op_exists: bool) -> Vec<String> {
+    let mut errors = Vec::new();
+    if !op_exists {
+        errors.push("op (1Password CLI) is not installed".to_string());
+    }
+    errors
+}
+
 /// Validate preflight checks. Returns error messages for failures.
 pub(crate) fn validate_preflight(checks: &PreflightChecks) -> Vec<String> {
     let mut errors = Vec::new();
@@ -94,6 +103,20 @@ pub(crate) fn format_status_output(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    // --- validate_cedar_preflight ---
+
+    #[test]
+    fn validate_cedar_preflight_op_exists() {
+        assert!(validate_cedar_preflight(true).is_empty());
+    }
+
+    #[test]
+    fn validate_cedar_preflight_op_missing() {
+        let errors = validate_cedar_preflight(false);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("op"));
+    }
 
     // --- validate_preflight ---
 
