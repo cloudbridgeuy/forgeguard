@@ -14,6 +14,9 @@ pub(crate) fn tool_exists(name: &str) -> bool {
 }
 
 /// Store a value in 1Password.
+///
+/// Tries `op item edit` first. If the item doesn't exist, creates it with
+/// `op item create`, then retries the edit.
 pub(crate) fn store_in_op(
     vault: &str,
     item: &str,
@@ -22,11 +25,28 @@ pub(crate) fn store_in_op(
     op_account: Option<&str>,
 ) -> Result<()> {
     let field_assignment = format!("{field}={value}");
+
+    let edit_result = op_item_edit(vault, item, &field_assignment, op_account);
+    if edit_result.is_ok() {
+        return Ok(());
+    }
+
+    // Item likely doesn't exist — create it, then retry.
+    op_item_create(vault, item, op_account)?;
+    op_item_edit(vault, item, &field_assignment, op_account)
+}
+
+fn op_item_edit(
+    vault: &str,
+    item: &str,
+    field_assignment: &str,
+    op_account: Option<&str>,
+) -> Result<()> {
     let mut args = vec![
         "item".to_string(),
         "edit".to_string(),
         item.to_string(),
-        field_assignment,
+        field_assignment.to_string(),
         "--vault".to_string(),
         vault.to_string(),
     ];
@@ -38,7 +58,28 @@ pub(crate) fn store_in_op(
         .stdout_capture()
         .stderr_capture()
         .run()
-        .context(format!("failed to store {field} in 1Password item {item}"))?;
+        .context(format!("failed to edit 1Password item {item}"))?;
+    Ok(())
+}
+
+fn op_item_create(vault: &str, item: &str, op_account: Option<&str>) -> Result<()> {
+    let mut args = vec![
+        "item".to_string(),
+        "create".to_string(),
+        "--category=login".to_string(),
+        format!("--title={item}"),
+        "--vault".to_string(),
+        vault.to_string(),
+    ];
+    if let Some(account) = op_account {
+        args.push("--account".to_string());
+        args.push(account.to_string());
+    }
+    duct::cmd("op", &args)
+        .stdout_capture()
+        .stderr_capture()
+        .run()
+        .context(format!("failed to create 1Password item {item}"))?;
     Ok(())
 }
 
@@ -92,6 +133,8 @@ pub(crate) fn run_preflight() -> Result<()> {
     let checks = op_core::PreflightChecks {
         bun_exists: tool_exists("bun"),
         op_exists: tool_exists("op"),
+        cargo_lambda_exists: tool_exists("cargo-lambda"),
+        zig_exists: tool_exists("zig"),
     };
     let errors = op_core::validate_preflight(&checks);
     if !errors.is_empty() {
@@ -101,13 +144,42 @@ pub(crate) fn run_preflight() -> Result<()> {
     Ok(())
 }
 
+/// Ensure the AWS SSO session is active for the given profile.
+///
+/// Runs `aws sts get-caller-identity`. If the token is expired, triggers
+/// `aws sso login --profile <profile>` interactively so the user can
+/// re-authenticate.
+pub(crate) fn ensure_aws_session(profile: &str) -> Result<()> {
+    let result = duct::cmd("aws", ["sts", "get-caller-identity", "--profile", profile])
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .context("failed to run aws sts get-caller-identity")?;
+
+    if result.status.success() {
+        return Ok(());
+    }
+
+    println!("AWS SSO session expired for profile '{profile}'. Logging in...");
+    duct::cmd("aws", ["sso", "login", "--profile", profile])
+        .run()
+        .context(format!("aws sso login failed for profile '{profile}'"))?;
+
+    Ok(())
+}
+
 /// Build an AWS SDK config using explicit profile and region.
-pub(crate) async fn build_aws_config(profile: &str, region: &str) -> aws_config::SdkConfig {
-    aws_config::defaults(aws_config::BehaviorVersion::latest())
+///
+/// Ensures the SSO session is active before loading config. If the token
+/// is expired, triggers `aws sso login` interactively.
+pub(crate) async fn build_aws_config(profile: &str, region: &str) -> Result<aws_config::SdkConfig> {
+    ensure_aws_session(profile)?;
+    Ok(aws_config::defaults(aws_config::BehaviorVersion::latest())
         .profile_name(profile)
         .region(aws_config::Region::new(region.to_string()))
         .load()
-        .await
+        .await)
 }
 
 /// Read CloudFormation stack outputs for the given stack name.

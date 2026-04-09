@@ -49,9 +49,12 @@ async-trait = "0.1"
 aws-config = "1"
 
 # AWS SDKs
+aws_lambda_events = { version = "0.15", features = ["dynamodb"] }
 aws-sdk-cloudformation = "1"
 aws-sdk-cognitoidentityprovider = "1"
 aws-sdk-dynamodb = "1"
+aws-sdk-lambda = "1"
+aws-sdk-sfn = "1"
 aws-sdk-verifiedpermissions = "1"
 
 # HTTP framework
@@ -106,6 +109,10 @@ http-body-util = "0.1"
 # JWT
 jsonwebtoken = "9.3"
 
+# Lambda
+lambda_http = "0.14"
+lambda_runtime = "0.13"
+
 # Caching
 lru = "0.12"
 
@@ -135,6 +142,7 @@ reqwest = { version = "0.12", features = ["json"] }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
+serde_dynamo = "4"
 serde_json = "1.0"
 
 # Temp files (testing)
@@ -161,3 +169,6 @@ uuid = { version = "1.0", features = ["v4", "v7", "serde"] }
 
 # Hashing (stable, portable — used for feature flag rollout bucketing)
 xxhash-rust = { version = "0.8", features = ["xxh64"] }
+
+# Archive
+zip = "2"

@@ -1,0 +1,4 @@
+#!/bin/sh
+# Placeholder — replaced by cargo xtask control-plane lambda deploy
+echo '{"statusCode":500,"body":"not deployed yet"}' >&2
+exit 1

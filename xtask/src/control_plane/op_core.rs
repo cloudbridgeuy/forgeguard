@@ -23,6 +23,8 @@ impl fmt::Display for ForgeguardEnv {
 pub(crate) struct PreflightChecks {
     pub(crate) bun_exists: bool,
     pub(crate) op_exists: bool,
+    pub(crate) cargo_lambda_exists: bool,
+    pub(crate) zig_exists: bool,
 }
 
 /// Validate preflight checks. Returns error messages for failures.
@@ -33,6 +35,16 @@ pub(crate) fn validate_preflight(checks: &PreflightChecks) -> Vec<String> {
     }
     if !checks.op_exists {
         errors.push("op (1Password CLI) is not installed".to_string());
+    }
+    if !checks.cargo_lambda_exists {
+        errors.push(
+            "cargo-lambda is not installed (install: cargo install cargo-lambda)".to_string(),
+        );
+    }
+    if !checks.zig_exists {
+        errors.push(
+            "zig is not installed (install: brew install zig) — required by cargo-lambda for cross-compilation".to_string(),
+        );
     }
     errors
 }
@@ -45,6 +57,16 @@ pub(crate) fn confirm_destroy(input: &str) -> bool {
 /// Build the CloudFormation stack name for a given environment.
 pub(crate) fn build_stack_name(env: ForgeguardEnv) -> String {
     format!("forgeguard-{env}-dynamodb")
+}
+
+/// Build the Lambda CloudFormation stack name for a given environment.
+pub(crate) fn build_lambda_stack_name(env: ForgeguardEnv) -> String {
+    format!("forgeguard-{env}-lambda")
+}
+
+/// Build the Verified Permissions CloudFormation stack name for a given environment.
+pub(crate) fn build_vp_stack_name(env: ForgeguardEnv) -> String {
+    format!("forgeguard-{env}-vp")
 }
 
 /// Build the 1Password vault name for a given environment.
@@ -80,6 +102,8 @@ mod tests {
         let checks = PreflightChecks {
             bun_exists: true,
             op_exists: true,
+            cargo_lambda_exists: true,
+            zig_exists: true,
         };
         assert!(validate_preflight(&checks).is_empty());
     }
@@ -89,6 +113,8 @@ mod tests {
         let checks = PreflightChecks {
             bun_exists: false,
             op_exists: true,
+            cargo_lambda_exists: true,
+            zig_exists: true,
         };
         let errors = validate_preflight(&checks);
         assert_eq!(errors.len(), 1);
@@ -100,6 +126,8 @@ mod tests {
         let checks = PreflightChecks {
             bun_exists: true,
             op_exists: false,
+            cargo_lambda_exists: true,
+            zig_exists: true,
         };
         let errors = validate_preflight(&checks);
         assert_eq!(errors.len(), 1);
@@ -107,13 +135,53 @@ mod tests {
     }
 
     #[test]
+    fn validate_preflight_missing_cargo_lambda() {
+        let checks = PreflightChecks {
+            bun_exists: true,
+            op_exists: true,
+            cargo_lambda_exists: false,
+            zig_exists: true,
+        };
+        let errors = validate_preflight(&checks);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("cargo-lambda"));
+    }
+
+    #[test]
+    fn validate_preflight_missing_zig() {
+        let checks = PreflightChecks {
+            bun_exists: true,
+            op_exists: true,
+            cargo_lambda_exists: true,
+            zig_exists: false,
+        };
+        let errors = validate_preflight(&checks);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("zig"));
+    }
+
+    #[test]
     fn validate_preflight_both_missing() {
         let checks = PreflightChecks {
             bun_exists: false,
             op_exists: false,
+            cargo_lambda_exists: true,
+            zig_exists: true,
         };
         let errors = validate_preflight(&checks);
         assert_eq!(errors.len(), 2);
+    }
+
+    #[test]
+    fn validate_preflight_all_missing() {
+        let checks = PreflightChecks {
+            bun_exists: false,
+            op_exists: false,
+            cargo_lambda_exists: false,
+            zig_exists: false,
+        };
+        let errors = validate_preflight(&checks);
+        assert_eq!(errors.len(), 4);
     }
 
     // --- confirm_destroy ---
@@ -171,6 +239,39 @@ mod tests {
             build_stack_name(ForgeguardEnv::Dev),
             "forgeguard-dev-dynamodb"
         );
+    }
+
+    // --- build_lambda_stack_name ---
+
+    #[test]
+    fn build_lambda_stack_name_prod() {
+        assert_eq!(
+            build_lambda_stack_name(ForgeguardEnv::Prod),
+            "forgeguard-prod-lambda"
+        );
+    }
+
+    #[test]
+    fn build_lambda_stack_name_dev() {
+        assert_eq!(
+            build_lambda_stack_name(ForgeguardEnv::Dev),
+            "forgeguard-dev-lambda"
+        );
+    }
+
+    // --- build_vp_stack_name ---
+
+    #[test]
+    fn build_vp_stack_name_prod() {
+        assert_eq!(
+            build_vp_stack_name(ForgeguardEnv::Prod),
+            "forgeguard-prod-vp"
+        );
+    }
+
+    #[test]
+    fn build_vp_stack_name_dev() {
+        assert_eq!(build_vp_stack_name(ForgeguardEnv::Dev), "forgeguard-dev-vp");
     }
 
     // --- build_vault_name ---

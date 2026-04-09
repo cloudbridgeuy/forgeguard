@@ -7,6 +7,8 @@ interface DynamoDbStackProps extends cdk.StackProps {
 }
 
 export class DynamoDbStack extends cdk.Stack {
+  public readonly table!: dynamodb.TableV2;
+
   constructor(scope: Construct, id: string, props: DynamoDbStackProps) {
     super(scope, id, props);
 
@@ -17,12 +19,13 @@ export class DynamoDbStack extends cdk.Stack {
       .filter((r) => r !== primaryRegion)
       .map((region) => ({ region }));
 
-    const table = new dynamodb.TableV2(this, "OrgsTable", {
+    this.table = new dynamodb.TableV2(this, "OrgsTable", {
       tableName: `forgeguard-${props.environment}-orgs`,
       partitionKey: { name: "PK", type: dynamodb.AttributeType.STRING },
       sortKey: { name: "SK", type: dynamodb.AttributeType.STRING },
       billing: dynamodb.Billing.onDemand(),
       removalPolicy: cdk.RemovalPolicy.RETAIN,
+      dynamoStream: dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
       replicas,
     });
 
@@ -30,11 +33,11 @@ export class DynamoDbStack extends cdk.Stack {
     cdk.Tags.of(this).add("environment", props.environment);
 
     new cdk.CfnOutput(this, "TableName", {
-      value: table.tableName,
+      value: this.table.tableName,
     });
 
     new cdk.CfnOutput(this, "TableArn", {
-      value: table.tableArn,
+      value: this.table.tableArn,
     });
   }
 }

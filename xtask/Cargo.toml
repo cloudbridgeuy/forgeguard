@@ -12,6 +12,8 @@ path = "src/main.rs"
 [dependencies]
 aws-config = { workspace = true }
 aws-sdk-cloudformation = { workspace = true }
+aws-sdk-lambda = { workspace = true }
+aws-sdk-verifiedpermissions = { workspace = true }
 clap = { workspace = true }
 color-eyre = { workspace = true }
 chrono = { workspace = true }
@@ -22,3 +24,4 @@ serde_json = { workspace = true }
 tokio = { workspace = true }
 toml = { workspace = true }
 toml_edit = { workspace = true }
+zip = { workspace = true }

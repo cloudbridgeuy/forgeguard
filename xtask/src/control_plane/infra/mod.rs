@@ -16,13 +16,18 @@ pub(crate) struct InfraArgs {
     #[arg(long, global = true, env = "FORGEGUARD_ENV", default_value = "prod")]
     env: ForgeguardEnv,
     /// 1Password account identifier (email or UUID) for multi-account setups.
-    #[arg(long, global = true, env = "FORGEGUARD_OP_ACCOUNT")]
+    #[arg(
+        long,
+        global = true,
+        env = "FORGEGUARD_OP_ACCOUNT",
+        default_value = "YYN6IHBFRRD5RCLU63J46WPKMA"
+    )]
     op_account: Option<String>,
     /// AWS region for CloudFormation queries.
-    #[arg(long, global = true, env = "AWS_REGION")]
+    #[arg(long, global = true, env = "AWS_REGION", default_value = "us-east-2")]
     region: Option<String>,
     /// AWS CLI profile name.
-    #[arg(long, global = true, env = "AWS_PROFILE")]
+    #[arg(long, global = true, env = "AWS_PROFILE", default_value = "admin")]
     profile: Option<String>,
 }
 

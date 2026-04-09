@@ -1,4 +1,4 @@
-use color_eyre::eyre::{self, Context, Result};
+use color_eyre::eyre::{self, Result};
 
 use crate::control_plane::op;
 use crate::control_plane::op_core::{self, ForgeguardEnv};
@@ -16,16 +16,32 @@ pub(crate) async fn run(
     let region = region.ok_or_else(|| eyre::eyre!("--region or AWS_REGION is required"))?;
     let profile = profile.ok_or_else(|| eyre::eyre!("--profile or AWS_PROFILE is required"))?;
 
-    let stack_name = op_core::build_stack_name(env);
-    let aws_config = op::build_aws_config(profile, region).await;
+    let aws_config = op::build_aws_config(profile, region).await?;
     let cf_client = aws_sdk_cloudformation::Client::new(&aws_config);
 
+    let stacks = [
+        op_core::build_stack_name(env),
+        op_core::build_lambda_stack_name(env),
+        op_core::build_vp_stack_name(env),
+    ];
+
+    for stack_name in &stacks {
+        print_stack_status(&cf_client, stack_name).await?;
+    }
+
+    Ok(())
+}
+
+async fn print_stack_status(
+    cf_client: &aws_sdk_cloudformation::Client,
+    stack_name: &str,
+) -> Result<()> {
     let describe = cf_client
         .describe_stacks()
-        .stack_name(&stack_name)
+        .stack_name(stack_name)
         .send()
         .await
-        .context("DescribeStacks failed")?;
+        .map_err(|_| eyre::eyre!("stack `{stack_name}` not found"))?;
 
     let stack = describe
         .stacks()
@@ -36,17 +52,16 @@ pub(crate) async fn run(
         .stack_status()
         .map(|s| s.as_str())
         .unwrap_or("UNKNOWN");
-    let outputs = stack.outputs();
 
-    // 3. Format and display
-    let output_pairs: Vec<(&str, &str)> = outputs
+    let output_pairs: Vec<(&str, &str)> = stack
+        .outputs()
         .iter()
         .filter_map(|o| Some((o.output_key()?, o.output_value()?)))
         .collect();
 
     println!(
         "{}",
-        op_core::format_status_output(&stack_name, status, &output_pairs)
+        op_core::format_status_output(stack_name, status, &output_pairs)
     );
 
     Ok(())

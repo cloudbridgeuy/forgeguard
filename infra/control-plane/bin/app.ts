@@ -1,5 +1,7 @@
 import * as cdk from "aws-cdk-lib";
 import { DynamoDbStack } from "../lib/dynamodb-stack";
+import { LambdaStack } from "../lib/lambda-stack";
+import { VerifiedPermissionsStack } from "../lib/verified-permissions-stack";
 
 type ForgeguardEnv = "dev" | "prod";
 
@@ -26,7 +28,18 @@ const env = {
 
 const environment = parseForgeguardEnv(process.env.FORGEGUARD_ENV);
 
-new DynamoDbStack(app, `forgeguard-${environment}-dynamodb`, {
+const dynamoStack = new DynamoDbStack(app, `forgeguard-${environment}-dynamodb`, {
+  env,
+  environment,
+});
+
+new LambdaStack(app, `forgeguard-${environment}-lambda`, {
+  env,
+  environment,
+  table: dynamoStack.table,
+});
+
+new VerifiedPermissionsStack(app, `forgeguard-${environment}-vp`, {
   env,
   environment,
 });
