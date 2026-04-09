@@ -10,6 +10,10 @@ authors.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[lib]
+name = "forgeguard_control_plane"
+path = "src/lib.rs"
+
 [[bin]]
 name = "forgeguard-control-plane"
 path = "src/main.rs"
