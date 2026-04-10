@@ -7,19 +7,9 @@ use super::store::StoreState;
 pub(crate) enum SyncAction {
     PutSchema(String),
     CreateTemplate(DesiredTemplate),
-    DeleteTemplate {
-        id: String,
-        /// Used by V5 dry-run formatting.
-        #[allow(dead_code)]
-        name: Option<String>,
-    },
+    DeleteTemplate { id: String, name: Option<String> },
     CreatePolicy(DesiredPolicy),
-    DeletePolicy {
-        id: String,
-        /// Used by V5 dry-run formatting.
-        #[allow(dead_code)]
-        name: Option<String>,
-    },
+    DeletePolicy { id: String, name: Option<String> },
 }
 
 /// The complete sync plan.
@@ -313,6 +303,46 @@ pub(crate) fn format_summary(result: &SyncResult) -> String {
     );
 
     out
+}
+
+/// Format a sync plan for human-readable display.
+///
+/// Each action is listed with its type and identifier. Empty plans produce
+/// `"No changes."`.
+pub(crate) fn format_sync_plan(plan: &SyncPlan) -> String {
+    if plan.is_empty() {
+        return "No changes.".to_string();
+    }
+
+    let mut out = format!("Sync plan: {} action(s)\n\n", plan.actions.len());
+
+    for action in &plan.actions {
+        let line = match action {
+            SyncAction::PutSchema(s) => format!("  PUT schema ({} bytes)", s.len()),
+            SyncAction::CreateTemplate(t) => format!("  CREATE template \"{}\"", t.name),
+            SyncAction::DeleteTemplate { id, name } => match name {
+                Some(n) => format!("  DELETE template \"{n}\" [{id}]"),
+                None => format!("  DELETE template [{id}]"),
+            },
+            SyncAction::CreatePolicy(p) => format!("  CREATE policy \"{}\"", p.name),
+            SyncAction::DeletePolicy { id, name } => match name {
+                Some(n) => format!("  DELETE policy \"{n}\" [{id}]"),
+                None => format!("  DELETE policy [{id}]"),
+            },
+        };
+        let _ = writeln!(out, "{line}");
+    }
+
+    out
+}
+
+/// Return process exit code: 0 if no changes, 1 if changes pending.
+pub(crate) fn exit_code_from_plan(plan: &SyncPlan) -> i32 {
+    if plan.is_empty() {
+        0
+    } else {
+        1
+    }
 }
 
 #[cfg(test)]
@@ -809,5 +839,102 @@ mod tests {
         assert!(output.contains("Schema: updated"));
         assert!(output.contains("Templates: 1 created, 2 deleted"));
         assert!(output.contains("Policies: 3 created, 4 deleted"));
+    }
+
+    // -- format_sync_plan tests -----------------------------------------------
+
+    #[test]
+    fn format_sync_plan_empty() {
+        let plan = SyncPlan { actions: vec![] };
+        assert_eq!(format_sync_plan(&plan), "No changes.");
+    }
+
+    #[test]
+    fn format_sync_plan_single_action() {
+        let plan = SyncPlan {
+            actions: vec![SyncAction::PutSchema("{\"Ns\":{}}".to_string())],
+        };
+        let output = format_sync_plan(&plan);
+        assert!(output.contains("Sync plan: 1 action(s)"));
+        assert!(output.contains("PUT schema (9 bytes)"));
+    }
+
+    #[test]
+    fn format_sync_plan_mixed_actions() {
+        let plan = SyncPlan {
+            actions: vec![
+                SyncAction::PutSchema("{\"Ns\":{}}".to_string()),
+                SyncAction::CreateTemplate(DesiredTemplate {
+                    name: "owner".to_string(),
+                    description: None,
+                    statement: "permit(principal == ?principal, action, resource);".to_string(),
+                }),
+                SyncAction::DeletePolicy {
+                    id: "ps-abc123".to_string(),
+                    name: Some("old-policy".to_string()),
+                },
+                SyncAction::CreatePolicy(DesiredPolicy {
+                    name: "machine-proxy-config-read".to_string(),
+                    description: None,
+                    statement: "permit(principal, action, resource);".to_string(),
+                }),
+                SyncAction::DeleteTemplate {
+                    id: "pt-xyz789".to_string(),
+                    name: None,
+                },
+            ],
+        };
+        let output = format_sync_plan(&plan);
+        assert!(output.contains("Sync plan: 5 action(s)"));
+        assert!(output.contains("PUT schema (9 bytes)"));
+        assert!(output.contains("CREATE template \"owner\""));
+        assert!(output.contains("DELETE policy \"old-policy\" [ps-abc123]"));
+        assert!(output.contains("CREATE policy \"machine-proxy-config-read\""));
+        assert!(output.contains("DELETE template [pt-xyz789]"));
+    }
+
+    #[test]
+    fn format_sync_plan_delete_with_and_without_name() {
+        let plan = SyncPlan {
+            actions: vec![
+                SyncAction::DeletePolicy {
+                    id: "pol-1".to_string(),
+                    name: Some("named-policy".to_string()),
+                },
+                SyncAction::DeletePolicy {
+                    id: "pol-2".to_string(),
+                    name: None,
+                },
+                SyncAction::DeleteTemplate {
+                    id: "tmpl-1".to_string(),
+                    name: Some("named-template".to_string()),
+                },
+                SyncAction::DeleteTemplate {
+                    id: "tmpl-2".to_string(),
+                    name: None,
+                },
+            ],
+        };
+        let output = format_sync_plan(&plan);
+        assert!(output.contains("DELETE policy \"named-policy\" [pol-1]"));
+        assert!(output.contains("DELETE policy [pol-2]"));
+        assert!(output.contains("DELETE template \"named-template\" [tmpl-1]"));
+        assert!(output.contains("DELETE template [tmpl-2]"));
+    }
+
+    // -- exit_code_from_plan tests --------------------------------------------
+
+    #[test]
+    fn exit_code_empty_plan() {
+        let plan = SyncPlan { actions: vec![] };
+        assert_eq!(exit_code_from_plan(&plan), 0);
+    }
+
+    #[test]
+    fn exit_code_non_empty_plan() {
+        let plan = SyncPlan {
+            actions: vec![SyncAction::PutSchema("{}".to_string())],
+        };
+        assert_eq!(exit_code_from_plan(&plan), 1);
     }
 }

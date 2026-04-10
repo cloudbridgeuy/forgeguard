@@ -34,7 +34,10 @@ pub(crate) use config::CedarSyncConfig;
 pub(crate) use desired::build_desired_state;
 pub(crate) use store::{format_status, StorePolicy, StoreState, StoreTemplate};
 
-pub(crate) use sync::{compute_sync_plan, format_summary, SyncAction, SyncPlan, SyncResult};
+pub(crate) use sync::{
+    compute_sync_plan, exit_code_from_plan, format_summary, format_sync_plan, SyncAction, SyncPlan,
+    SyncResult,
+};
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]

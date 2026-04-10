@@ -8,17 +8,14 @@ use crate::control_plane::cedar_io;
 use crate::control_plane::op;
 
 #[derive(Args)]
-pub(crate) struct SyncArgs {
+pub(crate) struct DiffArgs {
     /// Path to the forgeguard.toml configuration file.
     #[arg(long)]
     config: PathBuf,
-    /// Dry-run mode: show what would be synced without making changes.
-    #[arg(long)]
-    dry_run: bool,
 }
 
 pub(crate) async fn run(
-    args: &SyncArgs,
+    args: &DiffArgs,
     op_account: Option<&str>,
     region: Option<&str>,
     profile: Option<&str>,
@@ -30,23 +27,14 @@ pub(crate) async fn run(
 
     // 2. Parse config
     let config = cedar_io::parse_cedar_config(&args.config)?;
-    println!("Parsed config from {}", args.config.display());
 
     // 3. Resolve policy store ID (op:// or plain)
     let store_id = cedar_io::resolve_policy_store_id(&config.policy_store_id, op_account)?;
-    println!("Policy store: {store_id}");
 
     // 4. Read schema file if [schema] section present
     let schema_content = match &config.schema {
-        Some(schema_cfg) => {
-            let content = cedar_io::read_schema_file(&args.config, &schema_cfg.path)?;
-            println!("Schema: loaded from {}", schema_cfg.path);
-            Some(content)
-        }
-        None => {
-            println!("Schema: none configured");
-            None
-        }
+        Some(schema_cfg) => Some(cedar_io::read_schema_file(&args.config, &schema_cfg.path)?),
+        None => None,
     };
 
     // 5. Build desired state
@@ -57,30 +45,15 @@ pub(crate) async fn run(
     let vp_client = aws_sdk_verifiedpermissions::Client::new(&aws_config);
 
     // 7. Read current VP state
-    println!("Reading current VP state...");
     let current = cedar_io::read_vp_state(&vp_client, &store_id).await?;
 
     // 8. Compute diff
     let plan = cedar_core::compute_sync_plan(&desired, &current);
 
-    if plan.is_empty() {
-        println!("\nNo changes.");
-        return Ok(());
-    }
+    // 9. Format and print
+    let output = cedar_core::format_sync_plan(&plan);
+    print!("{output}");
 
-    // 9. Dry-run gate
-    if args.dry_run {
-        println!("\n--- Dry-run mode ---");
-        print!("{}", cedar_core::format_sync_plan(&plan));
-        return Ok(());
-    }
-
-    // 10. Apply sync plan
-    println!("Applying {} action(s)...", plan.actions.len());
-    let result = cedar_io::apply_sync_plan(&vp_client, &store_id, &plan).await?;
-
-    // 11. Print summary
-    println!("\n{}", cedar_core::format_summary(&result));
-
-    Ok(())
+    // 10. Exit with code (0 = no changes, 1 = changes pending)
+    std::process::exit(cedar_core::exit_code_from_plan(&plan));
 }

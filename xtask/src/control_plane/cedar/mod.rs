@@ -1,3 +1,4 @@
+mod diff;
 mod status;
 mod sync;
 
@@ -35,6 +36,8 @@ enum CedarCommands {
     Status,
     /// Sync Cedar schema, policies, and templates to VP
     Sync(sync::SyncArgs),
+    /// Show planned changes without applying them
+    Diff(diff::DiffArgs),
 }
 
 pub(crate) async fn run(args: &CedarArgs) -> Result<()> {
@@ -51,6 +54,15 @@ pub(crate) async fn run(args: &CedarArgs) -> Result<()> {
         CedarCommands::Sync(sync_args) => {
             sync::run(
                 sync_args,
+                args.op_account.as_deref(),
+                args.region.as_deref(),
+                args.profile.as_deref(),
+            )
+            .await
+        }
+        CedarCommands::Diff(diff_args) => {
+            diff::run(
+                diff_args,
                 args.op_account.as_deref(),
                 args.region.as_deref(),
                 args.profile.as_deref(),
