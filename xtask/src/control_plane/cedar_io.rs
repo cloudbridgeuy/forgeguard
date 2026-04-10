@@ -147,6 +147,13 @@ async fn read_policies(
     while let Some(page) = paginator.next().await {
         let page = page.context("ListPolicies failed")?;
         for item in page.policies() {
+            // Skip template-linked policies — they are managed externally
+            // (created when roles are assigned to users) and should not be
+            // part of the sync engine's view of state.
+            if *item.policy_type() == aws_sdk_verifiedpermissions::types::PolicyType::TemplateLinked
+            {
+                continue;
+            }
             policy_summaries.push((item.policy_id().to_string(), item.name().map(String::from)));
         }
     }
@@ -183,10 +190,8 @@ fn extract_static_policy_details(
         Some(PolicyDefinitionDetail::Static(s)) => {
             (s.statement().to_string(), s.description().map(String::from))
         }
-        Some(PolicyDefinitionDetail::TemplateLinked(_)) => {
-            // Template-linked policies don't have inline statements.
-            ("(template-linked)".to_string(), None)
-        }
+        // Template-linked policies are filtered out during listing, so we
+        // should never reach this point. Treat unexpected variants as unknown.
         _ => ("(unknown policy type)".to_string(), None),
     }
 }
@@ -297,6 +302,11 @@ pub(crate) async fn put_schema(
 ///
 /// Iterates actions in order (the plan is pre-sorted by `compute_sync_plan`).
 /// Returns outcome counters for terminal display.
+///
+/// **Partial failure:** If an action fails mid-plan, earlier actions have
+/// already been applied to the remote store. The recovery path is to re-run
+/// sync, which will converge idempotently — the plan recomputes a diff
+/// against current state, so already-applied actions become no-ops.
 pub(crate) async fn apply_sync_plan(
     client: &aws_sdk_verifiedpermissions::Client,
     store_id: &PolicyStoreId,

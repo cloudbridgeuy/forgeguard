@@ -50,7 +50,7 @@ pub(crate) async fn run(
     };
 
     // 5. Build desired state
-    let desired = cedar_core::build_desired_state(&config, schema_content);
+    let desired = cedar_core::build_desired_state(&config, schema_content)?;
 
     // 6. Build AWS config and VP client
     let aws_config = op::build_aws_config(profile, region).await?;

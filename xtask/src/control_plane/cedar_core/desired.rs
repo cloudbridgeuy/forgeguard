@@ -1,3 +1,7 @@
+use std::collections::HashSet;
+
+use color_eyre::eyre::{self, Result};
+
 use super::config::{CedarSyncConfig, PolicyEntry, TemplateEntry};
 
 /// Desired state to sync to VP (compiled from config).
@@ -28,11 +32,14 @@ pub(crate) struct DesiredPolicy {
 ///
 /// For V2: Cedar policies/templates pass through verbatim.
 /// RBAC policies are skipped (added in V4).
+///
+/// Returns an error if two policies share the same name or two templates
+/// share the same name.
 pub(crate) fn build_desired_state(
     config: &CedarSyncConfig,
     schema_content: Option<String>,
-) -> DesiredState {
-    let policies = config
+) -> Result<DesiredState> {
+    let policies: Vec<DesiredPolicy> = config
         .policies
         .iter()
         .filter_map(|entry| match entry {
@@ -50,7 +57,7 @@ pub(crate) fn build_desired_state(
         })
         .collect();
 
-    let templates = config
+    let templates: Vec<DesiredTemplate> = config
         .templates
         .iter()
         .map(|entry| {
@@ -67,11 +74,27 @@ pub(crate) fn build_desired_state(
         })
         .collect();
 
-    DesiredState {
+    // Validate uniqueness of policy names.
+    let mut seen = HashSet::new();
+    for p in &policies {
+        if !seen.insert(&p.name) {
+            eyre::bail!("duplicate policy name: '{}'", p.name);
+        }
+    }
+
+    // Validate uniqueness of template names.
+    seen.clear();
+    for t in &templates {
+        if !seen.insert(&t.name) {
+            eyre::bail!("duplicate template name: '{}'", t.name);
+        }
+    }
+
+    Ok(DesiredState {
         schema: schema_content,
         templates,
         policies,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -89,7 +112,7 @@ mod tests {
             policies: vec![],
             templates: vec![],
         };
-        let state = build_desired_state(&config, None);
+        let state = build_desired_state(&config, None).unwrap();
         assert!(state.schema.is_none());
         assert!(state.policies.is_empty());
         assert!(state.templates.is_empty());
@@ -106,7 +129,7 @@ mod tests {
             policies: vec![],
             templates: vec![],
         };
-        let state = build_desired_state(&config, Some("{\"Ns\":{}}".to_string()));
+        let state = build_desired_state(&config, Some("{\"Ns\":{}}".to_string())).unwrap();
         assert_eq!(state.schema.as_deref(), Some("{\"Ns\":{}}"));
     }
 
@@ -132,7 +155,7 @@ mod tests {
             ],
             templates: vec![],
         };
-        let state = build_desired_state(&config, None);
+        let state = build_desired_state(&config, None).unwrap();
         assert_eq!(state.policies.len(), 1);
         assert_eq!(state.policies[0].name, "custom");
         assert_eq!(
@@ -158,7 +181,7 @@ mod tests {
                 body: "permit(principal == ?principal, action, resource == ?resource);".to_string(),
             }],
         };
-        let state = build_desired_state(&config, None);
+        let state = build_desired_state(&config, None).unwrap();
         assert_eq!(state.templates.len(), 1);
         assert_eq!(state.templates[0].name, "project-access");
         assert_eq!(
@@ -168,6 +191,34 @@ mod tests {
         assert_eq!(
             state.templates[0].statement,
             "permit(principal == ?principal, action, resource == ?resource);"
+        );
+    }
+
+    #[test]
+    fn build_desired_state_rejects_duplicate_policy_names() {
+        let config = CedarSyncConfig {
+            policy_store_id: "ps-dup".to_string(),
+            schema: None,
+            tenant: None,
+            policies: vec![
+                PolicyEntry::Cedar {
+                    name: "same-name".to_string(),
+                    description: None,
+                    body: "permit(principal, action, resource);".to_string(),
+                },
+                PolicyEntry::Cedar {
+                    name: "same-name".to_string(),
+                    description: None,
+                    body: "forbid(principal, action, resource);".to_string(),
+                },
+            ],
+            templates: vec![],
+        };
+        let err = build_desired_state(&config, None).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("duplicate policy name: 'same-name'"),
+            "unexpected error: {msg}"
         );
     }
 }
