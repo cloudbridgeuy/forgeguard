@@ -258,23 +258,6 @@ pub(crate) fn parse_cedar_config(path: &Path) -> Result<CedarSyncConfig> {
     Ok(config)
 }
 
-/// Read a schema file from disk, resolving relative to the config file's parent directory.
-pub(crate) fn read_schema_file(config_path: &Path, schema_path: &str) -> Result<String> {
-    let base_dir = config_path.parent().unwrap_or_else(|| Path::new("."));
-    let full_path = base_dir.join(schema_path);
-
-    let content = std::fs::read_to_string(&full_path).context(format!(
-        "failed to read schema file {}",
-        full_path.display()
-    ))?;
-
-    if content.trim().is_empty() {
-        eyre::bail!("schema file is empty: {}", full_path.display());
-    }
-
-    Ok(content)
-}
-
 // ---------------------------------------------------------------------------
 // Shared pipeline: config -> desired state + store ID
 // ---------------------------------------------------------------------------
@@ -291,20 +274,16 @@ pub(crate) struct PreparedPipeline {
 
 /// Run the common config-preparation pipeline shared by sync and diff.
 ///
-/// Steps: parse config, resolve policy store ID, read optional schema file,
-/// build desired state.
+/// Steps: parse config, resolve policy store ID, build desired state.
+/// Schema generation (when configured) is handled internally by
+/// `build_desired_state` -- no file I/O is needed.
 pub(crate) fn prepare_pipeline(
     config_path: &Path,
     op_account: Option<&str>,
 ) -> Result<PreparedPipeline> {
     let config = parse_cedar_config(config_path)?;
     let store_id = resolve_policy_store_id(&config.policy_store_id, op_account)?;
-    let schema_content = config
-        .schema
-        .as_ref()
-        .map(|s| read_schema_file(config_path, &s.path))
-        .transpose()?;
-    let desired = super::cedar_core::build_desired_state(&config, schema_content)?;
+    let desired = super::cedar_core::build_desired_state(&config)?;
 
     Ok(PreparedPipeline { store_id, desired })
 }
