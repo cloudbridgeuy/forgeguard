@@ -55,10 +55,7 @@ pub(crate) fn compute_sync_plan(
     desired: &super::desired::DesiredState,
     current: &StoreState,
 ) -> SyncPlan {
-    let mut schema_actions: Vec<SyncAction> = Vec::new();
-    let mut update_actions: Vec<SyncAction> = Vec::new();
-    let mut create_actions: Vec<SyncAction> = Vec::new();
-    let mut delete_actions: Vec<SyncAction> = Vec::new();
+    let mut phases = PhasedActions::default();
 
     // --- Schema ---
     if let Some(desired_schema) = &desired.schema {
@@ -67,7 +64,9 @@ pub(crate) fn compute_sync_plan(
             None => true,
         };
         if needs_put {
-            schema_actions.push(SyncAction::PutSchema(desired_schema.clone()));
+            phases
+                .schema
+                .push(SyncAction::PutSchema(desired_schema.clone()));
         }
     }
 
@@ -78,30 +77,11 @@ pub(crate) fn compute_sync_plan(
         |d| (&d.name, &d.statement),
         |s| (s.name.as_deref(), &s.id, &s.statement),
     );
-    for diff in template_diffs {
-        match diff {
-            DiffAction::Create { index, is_update } => {
-                let target = if is_update {
-                    &mut update_actions
-                } else {
-                    &mut create_actions
-                };
-                target.push(SyncAction::CreateTemplate(desired.templates[index].clone()));
-            }
-            DiffAction::Delete {
-                id,
-                name,
-                is_update,
-            } => {
-                let target = if is_update {
-                    &mut update_actions
-                } else {
-                    &mut delete_actions
-                };
-                target.push(SyncAction::DeleteTemplate { id, name });
-            }
-        }
-    }
+    phases.route_diffs(
+        &template_diffs,
+        |idx| SyncAction::CreateTemplate(desired.templates[idx].clone()),
+        |id, name| SyncAction::DeleteTemplate { id, name },
+    );
 
     // --- Policies ---
     let policy_diffs = diff_by_name(
@@ -110,39 +90,15 @@ pub(crate) fn compute_sync_plan(
         |d| (&d.name, &d.statement),
         |s| (s.name.as_deref(), &s.id, &s.statement),
     );
-    for diff in policy_diffs {
-        match diff {
-            DiffAction::Create { index, is_update } => {
-                let target = if is_update {
-                    &mut update_actions
-                } else {
-                    &mut create_actions
-                };
-                target.push(SyncAction::CreatePolicy(desired.policies[index].clone()));
-            }
-            DiffAction::Delete {
-                id,
-                name,
-                is_update,
-            } => {
-                let target = if is_update {
-                    &mut update_actions
-                } else {
-                    &mut delete_actions
-                };
-                target.push(SyncAction::DeletePolicy { id, name });
-            }
-        }
+    phases.route_diffs(
+        &policy_diffs,
+        |idx| SyncAction::CreatePolicy(desired.policies[idx].clone()),
+        |id, name| SyncAction::DeletePolicy { id, name },
+    );
+
+    SyncPlan {
+        actions: phases.into_ordered(),
     }
-
-    // Assemble: schema -> updates (delete-then-create pairs) -> creates -> deletes
-    let mut actions = Vec::new();
-    actions.append(&mut schema_actions);
-    actions.append(&mut update_actions);
-    actions.append(&mut create_actions);
-    actions.append(&mut delete_actions);
-
-    SyncPlan { actions }
 }
 
 /// Internal diff result — either create a desired item (by index) or delete
@@ -158,6 +114,60 @@ enum DiffAction {
         name: Option<String>,
         is_update: bool,
     },
+}
+
+/// Groups sync actions into execution phases:
+/// schema -> updates (delete-then-create pairs) -> creates -> deletes.
+#[derive(Default)]
+struct PhasedActions {
+    schema: Vec<SyncAction>,
+    updates: Vec<SyncAction>,
+    creates: Vec<SyncAction>,
+    deletes: Vec<SyncAction>,
+}
+
+impl PhasedActions {
+    /// Route diff actions into the correct phase bucket.
+    fn route_diffs(
+        &mut self,
+        diffs: &[DiffAction],
+        make_create: impl Fn(usize) -> SyncAction,
+        make_delete: impl Fn(String, Option<String>) -> SyncAction,
+    ) {
+        for diff in diffs {
+            match diff {
+                DiffAction::Create { index, is_update } => {
+                    let target = if *is_update {
+                        &mut self.updates
+                    } else {
+                        &mut self.creates
+                    };
+                    target.push(make_create(*index));
+                }
+                DiffAction::Delete {
+                    id,
+                    name,
+                    is_update,
+                } => {
+                    let target = if *is_update {
+                        &mut self.updates
+                    } else {
+                        &mut self.deletes
+                    };
+                    target.push(make_delete(id.clone(), name.clone()));
+                }
+            }
+        }
+    }
+
+    /// Assemble all phases into the final ordered action list.
+    fn into_ordered(self) -> Vec<SyncAction> {
+        let mut actions = self.schema;
+        actions.extend(self.updates);
+        actions.extend(self.creates);
+        actions.extend(self.deletes);
+        actions
+    }
 }
 
 /// Generic diff-by-name for templates and policies.
@@ -312,459 +322,331 @@ mod tests {
     use crate::control_plane::cedar_core::desired::{DesiredPolicy, DesiredState, DesiredTemplate};
     use crate::control_plane::cedar_core::store::{StorePolicy, StoreState, StoreTemplate};
 
-    /// Helper: count actions by variant.
-    fn count_actions(plan: &SyncPlan) -> (usize, usize, usize, usize, usize) {
-        let mut put_schema = 0;
-        let mut create_tmpl = 0;
-        let mut delete_tmpl = 0;
-        let mut create_pol = 0;
-        let mut delete_pol = 0;
-        for action in &plan.actions {
-            match action {
-                SyncAction::PutSchema(_) => put_schema += 1,
-                SyncAction::CreateTemplate(_) => create_tmpl += 1,
-                SyncAction::DeleteTemplate { .. } => delete_tmpl += 1,
-                SyncAction::CreatePolicy(_) => create_pol += 1,
-                SyncAction::DeletePolicy { .. } => delete_pol += 1,
-            }
+    // -- Test helpers ---------------------------------------------------------
+
+    fn desired(
+        schema: Option<&str>,
+        templates: Vec<DesiredTemplate>,
+        policies: Vec<DesiredPolicy>,
+    ) -> DesiredState {
+        DesiredState {
+            schema: schema.map(String::from),
+            templates,
+            policies,
         }
-        (put_schema, create_tmpl, delete_tmpl, create_pol, delete_pol)
     }
 
-    // --- Empty desired + empty current ---
+    fn current(
+        schema: Option<&str>,
+        templates: Vec<StoreTemplate>,
+        policies: Vec<StorePolicy>,
+    ) -> StoreState {
+        StoreState {
+            schema: schema.map(String::from),
+            templates,
+            policies,
+        }
+    }
+
+    fn d_tmpl(name: &str, stmt: &str) -> DesiredTemplate {
+        DesiredTemplate {
+            name: name.to_string(),
+            description: None,
+            statement: stmt.to_string(),
+        }
+    }
+
+    fn d_pol(name: &str, stmt: &str) -> DesiredPolicy {
+        DesiredPolicy {
+            name: name.to_string(),
+            description: None,
+            statement: stmt.to_string(),
+        }
+    }
+
+    fn s_tmpl(id: &str, name: Option<&str>, stmt: &str) -> StoreTemplate {
+        StoreTemplate {
+            id: id.to_string(),
+            name: name.map(String::from),
+            description: None,
+            statement: stmt.to_string(),
+        }
+    }
+
+    fn s_pol(id: &str, name: Option<&str>, stmt: &str) -> StorePolicy {
+        StorePolicy {
+            id: id.to_string(),
+            name: name.map(String::from),
+            description: None,
+            statement: stmt.to_string(),
+        }
+    }
+
+    /// Count actions by variant: (put_schema, create_tmpl, delete_tmpl, create_pol, delete_pol).
+    fn count_actions(plan: &SyncPlan) -> (usize, usize, usize, usize, usize) {
+        let mut counts = (0, 0, 0, 0, 0);
+        for action in &plan.actions {
+            match action {
+                SyncAction::PutSchema(_) => counts.0 += 1,
+                SyncAction::CreateTemplate(_) => counts.1 += 1,
+                SyncAction::DeleteTemplate { .. } => counts.2 += 1,
+                SyncAction::CreatePolicy(_) => counts.3 += 1,
+                SyncAction::DeletePolicy { .. } => counts.4 += 1,
+            }
+        }
+        counts
+    }
+
+    // -- Schema tests ---------------------------------------------------------
 
     #[test]
     fn sync_plan_empty_both() {
-        let desired = DesiredState {
-            schema: None,
-            templates: vec![],
-            policies: vec![],
-        };
-        let current = StoreState {
-            schema: None,
-            templates: vec![],
-            policies: vec![],
-        };
-        let plan = compute_sync_plan(&desired, &current);
+        let plan = compute_sync_plan(
+            &desired(None, vec![], vec![]),
+            &current(None, vec![], vec![]),
+        );
         assert!(plan.is_empty());
     }
 
-    // --- Schema tests ---
-
     #[test]
     fn sync_plan_new_schema() {
-        let desired = DesiredState {
-            schema: Some("{\"Ns\":{}}".to_string()),
-            templates: vec![],
-            policies: vec![],
-        };
-        let current = StoreState {
-            schema: None,
-            templates: vec![],
-            policies: vec![],
-        };
-        let plan = compute_sync_plan(&desired, &current);
-        let (put_schema, ..) = count_actions(&plan);
-        assert_eq!(put_schema, 1);
+        let plan = compute_sync_plan(
+            &desired(Some("{\"Ns\":{}}"), vec![], vec![]),
+            &current(None, vec![], vec![]),
+        );
+        assert_eq!(count_actions(&plan).0, 1);
     }
 
     #[test]
     fn sync_plan_same_schema() {
-        let schema = "{\"Ns\":{}}".to_string();
-        let desired = DesiredState {
-            schema: Some(schema.clone()),
-            templates: vec![],
-            policies: vec![],
-        };
-        let current = StoreState {
-            schema: Some(schema),
-            templates: vec![],
-            policies: vec![],
-        };
-        let plan = compute_sync_plan(&desired, &current);
+        let plan = compute_sync_plan(
+            &desired(Some("{\"Ns\":{}}"), vec![], vec![]),
+            &current(Some("{\"Ns\":{}}"), vec![], vec![]),
+        );
         assert!(plan.is_empty());
     }
 
     #[test]
     fn sync_plan_same_schema_with_whitespace() {
-        let desired = DesiredState {
-            schema: Some("  {\"Ns\":{}}  ".to_string()),
-            templates: vec![],
-            policies: vec![],
-        };
-        let current = StoreState {
-            schema: Some("{\"Ns\":{}}".to_string()),
-            templates: vec![],
-            policies: vec![],
-        };
-        let plan = compute_sync_plan(&desired, &current);
+        let plan = compute_sync_plan(
+            &desired(Some("  {\"Ns\":{}}  "), vec![], vec![]),
+            &current(Some("{\"Ns\":{}}"), vec![], vec![]),
+        );
         assert!(plan.is_empty());
     }
 
     #[test]
     fn sync_plan_changed_schema() {
-        let desired = DesiredState {
-            schema: Some("{\"Ns\":{\"Entity\":{}}}".to_string()),
-            templates: vec![],
-            policies: vec![],
-        };
-        let current = StoreState {
-            schema: Some("{\"Ns\":{}}".to_string()),
-            templates: vec![],
-            policies: vec![],
-        };
-        let plan = compute_sync_plan(&desired, &current);
-        let (put_schema, ..) = count_actions(&plan);
-        assert_eq!(put_schema, 1);
+        let plan = compute_sync_plan(
+            &desired(Some("{\"Ns\":{\"Entity\":{}}}"), vec![], vec![]),
+            &current(Some("{\"Ns\":{}}"), vec![], vec![]),
+        );
+        assert_eq!(count_actions(&plan).0, 1);
     }
 
     #[test]
     fn sync_plan_no_desired_schema_with_existing() {
-        let desired = DesiredState {
-            schema: None,
-            templates: vec![],
-            policies: vec![],
-        };
-        let current = StoreState {
-            schema: Some("{\"Ns\":{}}".to_string()),
-            templates: vec![],
-            policies: vec![],
-        };
         // No desired schema means we don't touch the current one.
-        let plan = compute_sync_plan(&desired, &current);
+        let plan = compute_sync_plan(
+            &desired(None, vec![], vec![]),
+            &current(Some("{\"Ns\":{}}"), vec![], vec![]),
+        );
         assert!(plan.is_empty());
     }
 
-    // --- Template tests ---
+    // -- Template tests -------------------------------------------------------
+
+    const TMPL_STMT: &str = "permit(principal == ?principal, action, resource);";
+    const TMPL_STMT_V2: &str = "permit(principal == ?principal, action, resource in ?resource);";
 
     #[test]
     fn sync_plan_new_template() {
-        let desired = DesiredState {
-            schema: None,
-            templates: vec![DesiredTemplate {
-                name: "read-access".to_string(),
-                description: None,
-                statement: "permit(principal == ?principal, action, resource);".to_string(),
-            }],
-            policies: vec![],
-        };
-        let current = StoreState {
-            schema: None,
-            templates: vec![],
-            policies: vec![],
-        };
-        let plan = compute_sync_plan(&desired, &current);
-        let (_, create_tmpl, delete_tmpl, ..) = count_actions(&plan);
-        assert_eq!(create_tmpl, 1);
-        assert_eq!(delete_tmpl, 0);
+        let plan = compute_sync_plan(
+            &desired(None, vec![d_tmpl("read-access", TMPL_STMT)], vec![]),
+            &current(None, vec![], vec![]),
+        );
+        let (_, ct, dt, ..) = count_actions(&plan);
+        assert_eq!((ct, dt), (1, 0));
     }
 
     #[test]
     fn sync_plan_same_template_idempotent() {
-        let stmt = "permit(principal == ?principal, action, resource);".to_string();
-        let desired = DesiredState {
-            schema: None,
-            templates: vec![DesiredTemplate {
-                name: "read-access".to_string(),
-                description: None,
-                statement: stmt.clone(),
-            }],
-            policies: vec![],
-        };
-        let current = StoreState {
-            schema: None,
-            templates: vec![StoreTemplate {
-                id: "tmpl-1".to_string(),
-                name: Some("read-access".to_string()),
-                description: None,
-                statement: stmt,
-            }],
-            policies: vec![],
-        };
-        let plan = compute_sync_plan(&desired, &current);
+        let plan = compute_sync_plan(
+            &desired(None, vec![d_tmpl("read-access", TMPL_STMT)], vec![]),
+            &current(
+                None,
+                vec![s_tmpl("tmpl-1", Some("read-access"), TMPL_STMT)],
+                vec![],
+            ),
+        );
         assert!(plan.is_empty());
     }
 
     #[test]
     fn sync_plan_changed_template_content() {
-        let desired = DesiredState {
-            schema: None,
-            templates: vec![DesiredTemplate {
-                name: "read-access".to_string(),
-                description: None,
-                statement: "permit(principal == ?principal, action, resource in ?resource);"
-                    .to_string(),
-            }],
-            policies: vec![],
-        };
-        let current = StoreState {
-            schema: None,
-            templates: vec![StoreTemplate {
-                id: "tmpl-1".to_string(),
-                name: Some("read-access".to_string()),
-                description: None,
-                statement: "permit(principal == ?principal, action, resource);".to_string(),
-            }],
-            policies: vec![],
-        };
-        let plan = compute_sync_plan(&desired, &current);
-        let (_, create_tmpl, delete_tmpl, ..) = count_actions(&plan);
-        assert_eq!(create_tmpl, 1);
-        assert_eq!(delete_tmpl, 1);
+        let plan = compute_sync_plan(
+            &desired(None, vec![d_tmpl("read-access", TMPL_STMT_V2)], vec![]),
+            &current(
+                None,
+                vec![s_tmpl("tmpl-1", Some("read-access"), TMPL_STMT)],
+                vec![],
+            ),
+        );
+        let (_, ct, dt, ..) = count_actions(&plan);
+        assert_eq!((ct, dt), (1, 1));
     }
 
     #[test]
     fn sync_plan_removed_template() {
-        let desired = DesiredState {
-            schema: None,
-            templates: vec![],
-            policies: vec![],
-        };
-        let current = StoreState {
-            schema: None,
-            templates: vec![StoreTemplate {
-                id: "tmpl-1".to_string(),
-                name: Some("read-access".to_string()),
-                description: None,
-                statement: "permit(principal == ?principal, action, resource);".to_string(),
-            }],
-            policies: vec![],
-        };
-        let plan = compute_sync_plan(&desired, &current);
-        let (_, create_tmpl, delete_tmpl, ..) = count_actions(&plan);
-        assert_eq!(create_tmpl, 0);
-        assert_eq!(delete_tmpl, 1);
+        let plan = compute_sync_plan(
+            &desired(None, vec![], vec![]),
+            &current(
+                None,
+                vec![s_tmpl("tmpl-1", Some("read-access"), TMPL_STMT)],
+                vec![],
+            ),
+        );
+        let (_, ct, dt, ..) = count_actions(&plan);
+        assert_eq!((ct, dt), (0, 1));
     }
 
     #[test]
     fn sync_plan_unnamed_current_template_deleted() {
-        let desired = DesiredState {
-            schema: None,
-            templates: vec![],
-            policies: vec![],
-        };
-        let current = StoreState {
-            schema: None,
-            templates: vec![StoreTemplate {
-                id: "tmpl-orphan".to_string(),
-                name: None,
-                description: None,
-                statement: "permit(principal, action, resource);".to_string(),
-            }],
-            policies: vec![],
-        };
-        let plan = compute_sync_plan(&desired, &current);
-        let (_, create_tmpl, delete_tmpl, ..) = count_actions(&plan);
-        assert_eq!(create_tmpl, 0);
-        assert_eq!(delete_tmpl, 1);
+        let plan = compute_sync_plan(
+            &desired(None, vec![], vec![]),
+            &current(
+                None,
+                vec![s_tmpl(
+                    "tmpl-orphan",
+                    None,
+                    "permit(principal, action, resource);",
+                )],
+                vec![],
+            ),
+        );
+        let (_, ct, dt, ..) = count_actions(&plan);
+        assert_eq!((ct, dt), (0, 1));
     }
 
-    // --- Policy tests ---
+    // -- Policy tests ---------------------------------------------------------
+
+    const POL_FORBID: &str = "forbid(principal, action, resource);";
+    const POL_FORBID_WHEN: &str = "forbid(principal, action, resource) when { true };";
+    const POL_PERMIT: &str = "permit(principal, action, resource);";
+    const POL_PERMIT_WHEN: &str = "permit(principal, action, resource) when { true };";
 
     #[test]
     fn sync_plan_new_policy() {
-        let desired = DesiredState {
-            schema: None,
-            templates: vec![],
-            policies: vec![DesiredPolicy {
-                name: "deny-all".to_string(),
-                description: None,
-                statement: "forbid(principal, action, resource);".to_string(),
-            }],
-        };
-        let current = StoreState {
-            schema: None,
-            templates: vec![],
-            policies: vec![],
-        };
-        let plan = compute_sync_plan(&desired, &current);
-        let (.., create_pol, delete_pol) = count_actions(&plan);
-        assert_eq!(create_pol, 1);
-        assert_eq!(delete_pol, 0);
+        let plan = compute_sync_plan(
+            &desired(None, vec![], vec![d_pol("deny-all", POL_FORBID)]),
+            &current(None, vec![], vec![]),
+        );
+        let (.., cp, dp) = count_actions(&plan);
+        assert_eq!((cp, dp), (1, 0));
     }
 
     #[test]
     fn sync_plan_same_policy_idempotent() {
-        let stmt = "forbid(principal, action, resource);".to_string();
-        let desired = DesiredState {
-            schema: None,
-            templates: vec![],
-            policies: vec![DesiredPolicy {
-                name: "deny-all".to_string(),
-                description: None,
-                statement: stmt.clone(),
-            }],
-        };
-        let current = StoreState {
-            schema: None,
-            templates: vec![],
-            policies: vec![StorePolicy {
-                id: "pol-1".to_string(),
-                name: Some("deny-all".to_string()),
-                description: None,
-                statement: stmt,
-            }],
-        };
-        let plan = compute_sync_plan(&desired, &current);
+        let plan = compute_sync_plan(
+            &desired(None, vec![], vec![d_pol("deny-all", POL_FORBID)]),
+            &current(
+                None,
+                vec![],
+                vec![s_pol("pol-1", Some("deny-all"), POL_FORBID)],
+            ),
+        );
         assert!(plan.is_empty());
     }
 
     #[test]
     fn sync_plan_changed_policy_content() {
-        let desired = DesiredState {
-            schema: None,
-            templates: vec![],
-            policies: vec![DesiredPolicy {
-                name: "deny-all".to_string(),
-                description: None,
-                statement: "forbid(principal, action, resource) when { true };".to_string(),
-            }],
-        };
-        let current = StoreState {
-            schema: None,
-            templates: vec![],
-            policies: vec![StorePolicy {
-                id: "pol-1".to_string(),
-                name: Some("deny-all".to_string()),
-                description: None,
-                statement: "forbid(principal, action, resource);".to_string(),
-            }],
-        };
-        let plan = compute_sync_plan(&desired, &current);
-        let (.., create_pol, delete_pol) = count_actions(&plan);
-        assert_eq!(create_pol, 1);
-        assert_eq!(delete_pol, 1);
+        let plan = compute_sync_plan(
+            &desired(None, vec![], vec![d_pol("deny-all", POL_FORBID_WHEN)]),
+            &current(
+                None,
+                vec![],
+                vec![s_pol("pol-1", Some("deny-all"), POL_FORBID)],
+            ),
+        );
+        let (.., cp, dp) = count_actions(&plan);
+        assert_eq!((cp, dp), (1, 1));
     }
 
     #[test]
     fn sync_plan_removed_policy() {
-        let desired = DesiredState {
-            schema: None,
-            templates: vec![],
-            policies: vec![],
-        };
-        let current = StoreState {
-            schema: None,
-            templates: vec![],
-            policies: vec![StorePolicy {
-                id: "pol-1".to_string(),
-                name: Some("deny-all".to_string()),
-                description: None,
-                statement: "forbid(principal, action, resource);".to_string(),
-            }],
-        };
-        let plan = compute_sync_plan(&desired, &current);
-        let (.., create_pol, delete_pol) = count_actions(&plan);
-        assert_eq!(create_pol, 0);
-        assert_eq!(delete_pol, 1);
+        let plan = compute_sync_plan(
+            &desired(None, vec![], vec![]),
+            &current(
+                None,
+                vec![],
+                vec![s_pol("pol-1", Some("deny-all"), POL_FORBID)],
+            ),
+        );
+        let (.., cp, dp) = count_actions(&plan);
+        assert_eq!((cp, dp), (0, 1));
     }
 
     #[test]
     fn sync_plan_unnamed_current_policy_deleted() {
-        let desired = DesiredState {
-            schema: None,
-            templates: vec![],
-            policies: vec![],
-        };
-        let current = StoreState {
-            schema: None,
-            templates: vec![],
-            policies: vec![StorePolicy {
-                id: "pol-orphan".to_string(),
-                name: None,
-                description: None,
-                statement: "permit(principal, action, resource);".to_string(),
-            }],
-        };
-        let plan = compute_sync_plan(&desired, &current);
-        let (.., create_pol, delete_pol) = count_actions(&plan);
-        assert_eq!(create_pol, 0);
-        assert_eq!(delete_pol, 1);
+        let plan = compute_sync_plan(
+            &desired(None, vec![], vec![]),
+            &current(None, vec![], vec![s_pol("pol-orphan", None, POL_PERMIT)]),
+        );
+        let (.., cp, dp) = count_actions(&plan);
+        assert_eq!((cp, dp), (0, 1));
     }
 
-    // --- Ordering tests ---
+    // -- Ordering tests -------------------------------------------------------
 
     #[test]
     fn sync_plan_ordering_schema_first_deletes_last() {
-        let desired = DesiredState {
-            schema: Some("{\"Ns\":{}}".to_string()),
-            templates: vec![DesiredTemplate {
-                name: "new-tmpl".to_string(),
-                description: None,
-                statement: "permit(principal == ?principal, action, resource);".to_string(),
-            }],
-            policies: vec![DesiredPolicy {
-                name: "new-pol".to_string(),
-                description: None,
-                statement: "permit(principal, action, resource);".to_string(),
-            }],
-        };
-        let current = StoreState {
-            schema: None,
-            templates: vec![StoreTemplate {
-                id: "tmpl-old".to_string(),
-                name: Some("old-tmpl".to_string()),
-                description: None,
-                statement: "forbid(principal == ?principal, action, resource);".to_string(),
-            }],
-            policies: vec![StorePolicy {
-                id: "pol-old".to_string(),
-                name: Some("old-pol".to_string()),
-                description: None,
-                statement: "forbid(principal, action, resource);".to_string(),
-            }],
-        };
-        let plan = compute_sync_plan(&desired, &current);
+        let plan = compute_sync_plan(
+            &desired(
+                Some("{\"Ns\":{}}"),
+                vec![d_tmpl("new-tmpl", TMPL_STMT)],
+                vec![d_pol("new-pol", POL_PERMIT)],
+            ),
+            &current(
+                None,
+                vec![s_tmpl(
+                    "tmpl-old",
+                    Some("old-tmpl"),
+                    "forbid(principal == ?principal, action, resource);",
+                )],
+                vec![s_pol("pol-old", Some("old-pol"), POL_FORBID)],
+            ),
+        );
 
-        // Verify we have the expected actions.
-        let (put_schema, create_tmpl, delete_tmpl, create_pol, delete_pol) = count_actions(&plan);
-        assert_eq!(put_schema, 1);
-        assert_eq!(create_tmpl, 1);
-        assert_eq!(delete_tmpl, 1);
-        assert_eq!(create_pol, 1);
-        assert_eq!(delete_pol, 1);
+        let (ps, ct, dt, cp, dp) = count_actions(&plan);
+        assert_eq!((ps, ct, dt, cp, dp), (1, 1, 1, 1, 1));
 
         // Schema must be first action.
         assert!(matches!(plan.actions[0], SyncAction::PutSchema(_)));
 
         // Standalone deletes must be last.
         let last_two = &plan.actions[plan.actions.len() - 2..];
-        let all_deletes = last_two.iter().all(|a| {
-            matches!(
+        assert!(
+            last_two.iter().all(|a| matches!(
                 a,
                 SyncAction::DeleteTemplate { .. } | SyncAction::DeletePolicy { .. }
-            )
-        });
-        assert!(all_deletes, "standalone deletes should be at the end");
+            )),
+            "standalone deletes should be at the end"
+        );
     }
 
     #[test]
     fn sync_plan_update_deletes_before_creates() {
         // When a policy is updated (same name, different content), the delete
         // must execute before the create to avoid VP name-uniqueness violations.
-        let desired = DesiredState {
-            schema: None,
-            templates: vec![],
-            policies: vec![DesiredPolicy {
-                name: "my-policy".to_string(),
-                description: None,
-                statement: "permit(principal, action, resource) when { true };".to_string(),
-            }],
-        };
-        let current = StoreState {
-            schema: None,
-            templates: vec![],
-            policies: vec![StorePolicy {
-                id: "pol-1".to_string(),
-                name: Some("my-policy".to_string()),
-                description: None,
-                statement: "permit(principal, action, resource);".to_string(),
-            }],
-        };
-        let plan = compute_sync_plan(&desired, &current);
+        let plan = compute_sync_plan(
+            &desired(None, vec![], vec![d_pol("my-policy", POL_PERMIT_WHEN)]),
+            &current(
+                None,
+                vec![],
+                vec![s_pol("pol-1", Some("my-policy"), POL_PERMIT)],
+            ),
+        );
         assert_eq!(plan.actions.len(), 2);
-
-        // First action must be the delete, second must be the create.
         assert!(
             matches!(&plan.actions[0], SyncAction::DeletePolicy { id, .. } if id == "pol-1"),
             "first action should be DeletePolicy"
@@ -777,29 +659,15 @@ mod tests {
 
     #[test]
     fn sync_plan_update_template_deletes_before_creates() {
-        let desired = DesiredState {
-            schema: None,
-            templates: vec![DesiredTemplate {
-                name: "my-tmpl".to_string(),
-                description: None,
-                statement: "permit(principal == ?principal, action, resource in ?resource);"
-                    .to_string(),
-            }],
-            policies: vec![],
-        };
-        let current = StoreState {
-            schema: None,
-            templates: vec![StoreTemplate {
-                id: "tmpl-1".to_string(),
-                name: Some("my-tmpl".to_string()),
-                description: None,
-                statement: "permit(principal == ?principal, action, resource);".to_string(),
-            }],
-            policies: vec![],
-        };
-        let plan = compute_sync_plan(&desired, &current);
+        let plan = compute_sync_plan(
+            &desired(None, vec![d_tmpl("my-tmpl", TMPL_STMT_V2)], vec![]),
+            &current(
+                None,
+                vec![s_tmpl("tmpl-1", Some("my-tmpl"), TMPL_STMT)],
+                vec![],
+            ),
+        );
         assert_eq!(plan.actions.len(), 2);
-
         assert!(
             matches!(&plan.actions[0], SyncAction::DeleteTemplate { id, .. } if id == "tmpl-1"),
             "first action should be DeleteTemplate"
@@ -810,69 +678,44 @@ mod tests {
         );
     }
 
-    // --- Mixed scenario ---
+    // -- Mixed scenario -------------------------------------------------------
 
     #[test]
     fn sync_plan_mixed_creates_deletes_noop() {
-        let desired = DesiredState {
-            schema: Some("{\"Ns\":{}}".to_string()),
-            templates: vec![
-                // Same as current: no-op
-                DesiredTemplate {
-                    name: "unchanged-tmpl".to_string(),
-                    description: None,
-                    statement: "permit(principal == ?principal, action, resource);".to_string(),
-                },
-                // New: create
-                DesiredTemplate {
-                    name: "new-tmpl".to_string(),
-                    description: Some("Brand new.".to_string()),
-                    statement: "permit(principal == ?principal, action, resource in ?resource);"
-                        .to_string(),
-                },
-            ],
-            policies: vec![
-                // Changed: delete + create
-                DesiredPolicy {
-                    name: "updated-pol".to_string(),
-                    description: None,
-                    statement: "permit(principal, action, resource) when { true };".to_string(),
-                },
-            ],
-        };
-        let current = StoreState {
-            schema: Some("{\"Ns\":{}}".to_string()), // Same schema: no-op
-            templates: vec![
-                StoreTemplate {
-                    id: "tmpl-1".to_string(),
-                    name: Some("unchanged-tmpl".to_string()),
-                    description: None,
-                    statement: "permit(principal == ?principal, action, resource);".to_string(),
-                },
-                // Not in desired: delete
-                StoreTemplate {
-                    id: "tmpl-removed".to_string(),
-                    name: Some("removed-tmpl".to_string()),
-                    description: None,
-                    statement: "forbid(principal == ?principal, action, resource);".to_string(),
-                },
-            ],
-            policies: vec![StorePolicy {
-                id: "pol-1".to_string(),
-                name: Some("updated-pol".to_string()),
-                description: None,
-                statement: "permit(principal, action, resource);".to_string(),
-            }],
-        };
+        let plan = compute_sync_plan(
+            &desired(
+                Some("{\"Ns\":{}}"),
+                vec![
+                    d_tmpl("unchanged-tmpl", TMPL_STMT), // same as current: no-op
+                    DesiredTemplate {
+                        // new: create (with description)
+                        name: "new-tmpl".to_string(),
+                        description: Some("Brand new.".to_string()),
+                        statement: TMPL_STMT_V2.to_string(),
+                    },
+                ],
+                vec![d_pol("updated-pol", POL_PERMIT_WHEN)], // changed: delete + create
+            ),
+            &current(
+                Some("{\"Ns\":{}}"), // same schema: no-op
+                vec![
+                    s_tmpl("tmpl-1", Some("unchanged-tmpl"), TMPL_STMT),
+                    s_tmpl(
+                        "tmpl-removed",
+                        Some("removed-tmpl"),
+                        "forbid(principal == ?principal, action, resource);",
+                    ),
+                ],
+                vec![s_pol("pol-1", Some("updated-pol"), POL_PERMIT)],
+            ),
+        );
 
-        let plan = compute_sync_plan(&desired, &current);
-
-        let (put_schema, create_tmpl, delete_tmpl, create_pol, delete_pol) = count_actions(&plan);
-        assert_eq!(put_schema, 0, "schema unchanged");
-        assert_eq!(create_tmpl, 1, "new-tmpl created");
-        assert_eq!(delete_tmpl, 1, "removed-tmpl deleted");
-        assert_eq!(create_pol, 1, "updated-pol re-created");
-        assert_eq!(delete_pol, 1, "updated-pol old version deleted");
+        let (ps, ct, dt, cp, dp) = count_actions(&plan);
+        assert_eq!(ps, 0, "schema unchanged");
+        assert_eq!(ct, 1, "new-tmpl created");
+        assert_eq!(dt, 1, "removed-tmpl deleted");
+        assert_eq!(cp, 1, "updated-pol re-created");
+        assert_eq!(dp, 1, "updated-pol old version deleted");
 
         // The update pair (delete pol-1, create updated-pol) must be ordered
         // correctly: delete before create.
@@ -894,41 +737,25 @@ mod tests {
 
     #[test]
     fn sync_plan_whitespace_trimmed_for_comparison() {
-        let desired = DesiredState {
-            schema: None,
-            templates: vec![DesiredTemplate {
-                name: "tmpl".to_string(),
-                description: None,
-                statement: "  permit(principal == ?principal, action, resource);  ".to_string(),
-            }],
-            policies: vec![DesiredPolicy {
-                name: "pol".to_string(),
-                description: None,
-                statement: "  forbid(principal, action, resource);  ".to_string(),
-            }],
-        };
-        let current = StoreState {
-            schema: None,
-            templates: vec![StoreTemplate {
-                id: "tmpl-1".to_string(),
-                name: Some("tmpl".to_string()),
-                description: None,
-                statement: "permit(principal == ?principal, action, resource);".to_string(),
-            }],
-            policies: vec![StorePolicy {
-                id: "pol-1".to_string(),
-                name: Some("pol".to_string()),
-                description: None,
-                statement: "forbid(principal, action, resource);".to_string(),
-            }],
-        };
-        let plan = compute_sync_plan(&desired, &current);
+        let plan = compute_sync_plan(
+            &desired(
+                None,
+                vec![d_tmpl(
+                    "tmpl",
+                    "  permit(principal == ?principal, action, resource);  ",
+                )],
+                vec![d_pol("pol", "  forbid(principal, action, resource);  ")],
+            ),
+            &current(
+                None,
+                vec![s_tmpl("tmpl-1", Some("tmpl"), TMPL_STMT)],
+                vec![s_pol("pol-1", Some("pol"), POL_FORBID)],
+            ),
+        );
         assert!(plan.is_empty(), "trimmed statements should match");
     }
 
-    // =========================================================================
-    // format_summary tests
-    // =========================================================================
+    // -- format_summary tests -------------------------------------------------
 
     #[test]
     fn format_summary_no_changes() {
@@ -944,14 +771,13 @@ mod tests {
 
     #[test]
     fn format_summary_schema_only() {
-        let result = SyncResult {
+        let output = format_summary(&SyncResult {
             schema_updated: true,
             created_templates: 0,
             deleted_templates: 0,
             created_policies: 0,
             deleted_policies: 0,
-        };
-        let output = format_summary(&result);
+        });
         assert!(output.contains("Schema: updated"));
         assert!(output.contains("Templates: 0 created, 0 deleted"));
         assert!(output.contains("Policies: 0 created, 0 deleted"));
@@ -959,14 +785,13 @@ mod tests {
 
     #[test]
     fn format_summary_mixed() {
-        let result = SyncResult {
+        let output = format_summary(&SyncResult {
             schema_updated: false,
             created_templates: 2,
             deleted_templates: 1,
             created_policies: 3,
             deleted_policies: 0,
-        };
-        let output = format_summary(&result);
+        });
         assert!(output.contains("Schema: unchanged"));
         assert!(output.contains("Templates: 2 created, 1 deleted"));
         assert!(output.contains("Policies: 3 created, 0 deleted"));
@@ -974,14 +799,13 @@ mod tests {
 
     #[test]
     fn format_summary_all_changes() {
-        let result = SyncResult {
+        let output = format_summary(&SyncResult {
             schema_updated: true,
             created_templates: 1,
             deleted_templates: 2,
             created_policies: 3,
             deleted_policies: 4,
-        };
-        let output = format_summary(&result);
+        });
         assert!(output.contains("Schema: updated"));
         assert!(output.contains("Templates: 1 created, 2 deleted"));
         assert!(output.contains("Policies: 3 created, 4 deleted"));

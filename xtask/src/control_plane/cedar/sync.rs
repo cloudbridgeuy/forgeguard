@@ -64,16 +64,7 @@ pub(crate) async fn run(
     let plan = cedar_core::compute_sync_plan(&desired, &current);
 
     if plan.is_empty() {
-        println!(
-            "\n{}",
-            cedar_core::format_summary(&cedar_core::SyncResult {
-                schema_updated: false,
-                created_templates: 0,
-                deleted_templates: 0,
-                created_policies: 0,
-                deleted_policies: 0,
-            })
-        );
+        println!("\nNo changes.");
         return Ok(());
     }
 
