@@ -55,5 +55,7 @@ pub(crate) async fn run(
     print!("{output}");
 
     // 10. Exit with code (0 = no changes, 1 = changes pending)
+    use std::io::Write;
+    let _ = std::io::stdout().flush();
     std::process::exit(cedar_core::exit_code_from_plan(&plan));
 }
