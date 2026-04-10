@@ -79,10 +79,14 @@ pub(crate) fn build_desired_state(config: &CedarSyncConfig) -> Result<DesiredSta
     }
 
     // Generate schema if configured.
-    let schema = config.schema.as_ref().map(|schema_config| {
-        let rbac_actions = collect_rbac_actions(&config.policies);
-        generate_schema_json(schema_config, &rbac_actions)
-    });
+    let schema = config
+        .schema
+        .as_ref()
+        .map(|schema_config| -> Result<String> {
+            let rbac_actions = collect_rbac_actions(&config.policies)?;
+            Ok(generate_schema_json(schema_config, &rbac_actions))
+        })
+        .transpose()?;
 
     let templates: Vec<DesiredTemplate> = config
         .templates
@@ -128,23 +132,24 @@ pub(crate) fn build_desired_state(config: &CedarSyncConfig) -> Result<DesiredSta
 ///
 /// For each RBAC policy, resolves the full set of actions (own + inherited)
 /// and collects them into a single deduplicated list.
-fn collect_rbac_actions(policies: &[PolicyEntry]) -> Vec<String> {
+///
+/// Returns an error if any RBAC policy has an unresolvable inheritance chain.
+fn collect_rbac_actions(policies: &[PolicyEntry]) -> Result<Vec<String>> {
     let mut all_actions = Vec::new();
     let mut seen = HashSet::new();
 
     for entry in policies {
         if let PolicyEntry::Rbac { name, .. } = entry {
-            if let Ok(resolved) = resolve_inherits(policies, name) {
-                for action in resolved {
-                    if seen.insert(action.clone()) {
-                        all_actions.push(action);
-                    }
+            let resolved = resolve_inherits(policies, name).map_err(|e| eyre::eyre!("{e}"))?;
+            for action in resolved {
+                if seen.insert(action.clone()) {
+                    all_actions.push(action);
                 }
             }
         }
     }
 
-    all_actions
+    Ok(all_actions)
 }
 
 #[cfg(test)]

@@ -23,12 +23,26 @@ pub(crate) fn generate_schema_json(config: &SchemaConfig, rbac_actions: &[String
     // Always include Group
     entity_types.insert("Group", json!({}));
 
-    // Add entities from config
+    // Add entities from config, merging with hardcoded User/Group if needed.
     for (name, entity_config) in &config.entities {
+        // Build the memberOfTypes list: for User, merge config member_of with
+        // the hardcoded ["Group"]; for others, use config as-is.
+        let member_of: BTreeSet<&str> = if name == "User" {
+            let mut set: BTreeSet<&str> = BTreeSet::new();
+            set.insert("Group");
+            for m in &entity_config.member_of {
+                set.insert(m.as_str());
+            }
+            set
+        } else {
+            entity_config.member_of.iter().map(|m| m.as_str()).collect()
+        };
+
         let mut entry = serde_json::Map::new();
 
-        if !entity_config.member_of.is_empty() {
-            entry.insert("memberOfTypes".to_string(), json!(entity_config.member_of));
+        if !member_of.is_empty() {
+            let sorted: Vec<&str> = member_of.into_iter().collect();
+            entry.insert("memberOfTypes".to_string(), json!(sorted));
         }
 
         if !entity_config.attributes.is_empty() {
@@ -311,5 +325,68 @@ mod tests {
         assert_eq!(attrs["name"]["type"], json!("String"));
         assert_eq!(attrs["count"]["type"], json!("Long"));
         assert_eq!(attrs["active"]["type"], json!("Boolean"));
+    }
+
+    #[test]
+    fn config_user_without_member_of_preserves_hardcoded_group() {
+        let mut entities = HashMap::new();
+        entities.insert(
+            "User".to_string(),
+            EntityConfig {
+                member_of: vec![],
+                attributes: {
+                    let mut attrs = HashMap::new();
+                    attrs.insert("email".to_string(), AttributeType::String);
+                    attrs
+                },
+            },
+        );
+
+        let config = SchemaConfig {
+            namespace: "Merge".to_string(),
+            actions: vec![],
+            entities,
+        };
+
+        let json_str = generate_schema_json(&config, &[]);
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+
+        let user = &parsed["Merge"]["entityTypes"]["User"];
+
+        // Hardcoded memberOfTypes: ["Group"] must be preserved even though
+        // the config-defined User has an empty member_of list.
+        assert_eq!(user["memberOfTypes"], json!(["Group"]));
+
+        // Config-defined attributes are still present.
+        assert_eq!(
+            user["shape"]["attributes"]["email"]["type"],
+            json!("String")
+        );
+    }
+
+    #[test]
+    fn config_user_with_extra_member_of_merges_with_group() {
+        let mut entities = HashMap::new();
+        entities.insert(
+            "User".to_string(),
+            EntityConfig {
+                member_of: vec!["Team".to_string()],
+                attributes: HashMap::new(),
+            },
+        );
+
+        let config = SchemaConfig {
+            namespace: "MergePlus".to_string(),
+            actions: vec![],
+            entities,
+        };
+
+        let json_str = generate_schema_json(&config, &[]);
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+
+        let user = &parsed["MergePlus"]["entityTypes"]["User"];
+
+        // Must contain both "Group" (hardcoded) and "Team" (from config), sorted.
+        assert_eq!(user["memberOfTypes"], json!(["Group", "Team"]));
     }
 }
