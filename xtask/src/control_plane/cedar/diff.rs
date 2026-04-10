@@ -25,36 +25,22 @@ pub(crate) async fn run(
     let region = region.ok_or_else(|| eyre::eyre!("--region or AWS_REGION is required"))?;
     let profile = profile.ok_or_else(|| eyre::eyre!("--profile or AWS_PROFILE is required"))?;
 
-    // 2. Parse config
-    let config = cedar_io::parse_cedar_config(&args.config)?;
+    // 2. Parse config, resolve store ID, build desired state
+    let pipeline = cedar_io::prepare_pipeline(&args.config, op_account)?;
 
-    // 3. Resolve policy store ID (op:// or plain)
-    let store_id = cedar_io::resolve_policy_store_id(&config.policy_store_id, op_account)?;
-
-    // 4. Read schema file if [schema] section present
-    let schema_content = match &config.schema {
-        Some(schema_cfg) => Some(cedar_io::read_schema_file(&args.config, &schema_cfg.path)?),
-        None => None,
-    };
-
-    // 5. Build desired state
-    let desired = cedar_core::build_desired_state(&config, schema_content)?;
-
-    // 6. Build AWS config and VP client
+    // 3. Build AWS config and VP client
     let aws_config = op::build_aws_config(profile, region).await?;
     let vp_client = aws_sdk_verifiedpermissions::Client::new(&aws_config);
 
-    // 7. Read current VP state
-    let current = cedar_io::read_vp_state(&vp_client, &store_id).await?;
+    // 4. Read current VP state and compute diff
+    let current = cedar_io::read_vp_state(&vp_client, &pipeline.store_id).await?;
+    let plan = cedar_core::compute_sync_plan(&pipeline.desired, &current);
 
-    // 8. Compute diff
-    let plan = cedar_core::compute_sync_plan(&desired, &current);
-
-    // 9. Format and print
+    // 5. Format and print
     let output = cedar_core::format_sync_plan(&plan);
     print!("{output}");
 
-    // 10. Exit with code (0 = no changes, 1 = changes pending)
+    // 6. Exit with code (0 = no changes, 1 = changes pending)
     use std::io::Write;
     let _ = std::io::stdout().flush();
     std::process::exit(cedar_core::exit_code_from_plan(&plan));

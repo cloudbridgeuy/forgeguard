@@ -3,6 +3,7 @@ use std::path::Path;
 use aws_sdk_verifiedpermissions::types::SchemaDefinition;
 use color_eyre::eyre::{self, Context, Result};
 
+use super::cedar_core::desired::DesiredState;
 use super::cedar_core::{
     CedarSyncConfig, PolicyStoreId, StorePolicy, StoreState, StoreTemplate, SyncAction, SyncPlan,
     SyncResult,
@@ -272,6 +273,40 @@ pub(crate) fn read_schema_file(config_path: &Path, schema_path: &str) -> Result<
     }
 
     Ok(content)
+}
+
+// ---------------------------------------------------------------------------
+// Shared pipeline: config -> desired state + store ID
+// ---------------------------------------------------------------------------
+
+/// Intermediate result from the shared config-to-desired-state pipeline.
+///
+/// Both `cedar sync` and `cedar diff` run the same preflight -> parse ->
+/// resolve -> schema -> desired sequence. This struct bundles the outputs
+/// so callers don't duplicate the pipeline.
+pub(crate) struct PreparedPipeline {
+    pub(crate) store_id: PolicyStoreId,
+    pub(crate) desired: DesiredState,
+}
+
+/// Run the common config-preparation pipeline shared by sync and diff.
+///
+/// Steps: parse config, resolve policy store ID, read optional schema file,
+/// build desired state.
+pub(crate) fn prepare_pipeline(
+    config_path: &Path,
+    op_account: Option<&str>,
+) -> Result<PreparedPipeline> {
+    let config = parse_cedar_config(config_path)?;
+    let store_id = resolve_policy_store_id(&config.policy_store_id, op_account)?;
+    let schema_content = config
+        .schema
+        .as_ref()
+        .map(|s| read_schema_file(config_path, &s.path))
+        .transpose()?;
+    let desired = super::cedar_core::build_desired_state(&config, schema_content)?;
+
+    Ok(PreparedPipeline { store_id, desired })
 }
 
 /// Push a Cedar schema to a VP policy store.
