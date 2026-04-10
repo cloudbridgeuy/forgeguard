@@ -30,7 +30,7 @@ pub(crate) struct SchemaConfig {
 }
 
 /// Tenant scoping configuration for RBAC policies.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub(crate) struct TenantConfig {
     #[serde(default = "default_true")]
     pub(crate) enabled: bool,

@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use color_eyre::eyre::{self, Result};
 
-use super::config::{CedarSyncConfig, PolicyEntry, TemplateEntry, TenantConfig};
+use super::config::{CedarSyncConfig, PolicyEntry, TemplateEntry};
 use super::rbac::{compile_rbac_to_cedar, resolve_inherits};
 
 /// Desired state to sync to VP (compiled from config).
@@ -40,14 +40,7 @@ pub(crate) fn build_desired_state(
     config: &CedarSyncConfig,
     schema_content: Option<String>,
 ) -> Result<DesiredState> {
-    let tenant = config
-        .tenant
-        .as_ref()
-        .map_or_else(TenantConfig::default, |t| TenantConfig {
-            enabled: t.enabled,
-            principal_attribute: t.principal_attribute.clone(),
-            resource_attribute: t.resource_attribute.clone(),
-        });
+    let tenant = config.tenant.clone().unwrap_or_default();
 
     let mut policies: Vec<DesiredPolicy> = Vec::new();
     for entry in &config.policies {
@@ -127,7 +120,7 @@ pub(crate) fn build_desired_state(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use crate::control_plane::cedar_core::config::SchemaConfig;
+    use crate::control_plane::cedar_core::config::{SchemaConfig, TenantConfig};
 
     #[test]
     fn build_desired_state_empty() {
@@ -351,6 +344,36 @@ mod tests {
         };
         let state = build_desired_state(&config, None).unwrap();
         assert!(!state.policies[0].statement.contains("when"));
+    }
+
+    #[test]
+    fn build_desired_state_rejects_duplicate_template_names() {
+        let config = CedarSyncConfig {
+            policy_store_id: "ps-dup-tmpl".to_string(),
+            schema: None,
+            tenant: None,
+            policies: vec![],
+            templates: vec![
+                TemplateEntry::Cedar {
+                    name: "same-tmpl".to_string(),
+                    description: None,
+                    body: "permit(principal == ?principal, action, resource == ?resource);"
+                        .to_string(),
+                },
+                TemplateEntry::Cedar {
+                    name: "same-tmpl".to_string(),
+                    description: None,
+                    body: "forbid(principal == ?principal, action, resource == ?resource);"
+                        .to_string(),
+                },
+            ],
+        };
+        let err = build_desired_state(&config, None).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("duplicate template name: 'same-tmpl'"),
+            "unexpected error: {msg}"
+        );
     }
 
     #[test]
