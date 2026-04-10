@@ -2,7 +2,8 @@ use std::collections::HashSet;
 
 use color_eyre::eyre::{self, Result};
 
-use super::config::{CedarSyncConfig, PolicyEntry, TemplateEntry};
+use super::config::{CedarSyncConfig, PolicyEntry, TemplateEntry, TenantConfig};
+use super::rbac::{compile_rbac_to_cedar, resolve_inherits};
 
 /// Desired state to sync to VP (compiled from config).
 #[derive(Debug)]
@@ -30,8 +31,8 @@ pub(crate) struct DesiredPolicy {
 
 /// Build desired state from parsed config and schema file content.
 ///
-/// For V2: Cedar policies/templates pass through verbatim.
-/// RBAC policies are skipped (added in V4).
+/// Cedar policies pass through verbatim. RBAC policies are compiled to
+/// Cedar via `compile_rbac_to_cedar` with inheritance resolution.
 ///
 /// Returns an error if two policies share the same name or two templates
 /// share the same name.
@@ -39,23 +40,48 @@ pub(crate) fn build_desired_state(
     config: &CedarSyncConfig,
     schema_content: Option<String>,
 ) -> Result<DesiredState> {
-    let policies: Vec<DesiredPolicy> = config
-        .policies
-        .iter()
-        .filter_map(|entry| match entry {
+    let tenant = config
+        .tenant
+        .as_ref()
+        .map_or_else(TenantConfig::default, |t| TenantConfig {
+            enabled: t.enabled,
+            principal_attribute: t.principal_attribute.clone(),
+            resource_attribute: t.resource_attribute.clone(),
+        });
+
+    let mut policies: Vec<DesiredPolicy> = Vec::new();
+    for entry in &config.policies {
+        match entry {
             PolicyEntry::Cedar {
                 name,
                 description,
                 body,
-            } => Some(DesiredPolicy {
-                name: name.clone(),
-                description: description.clone(),
-                statement: body.clone(),
-            }),
-            // RBAC compilation is V4 — skip for now.
-            PolicyEntry::Rbac { .. } => None,
-        })
-        .collect();
+            } => {
+                policies.push(DesiredPolicy {
+                    name: name.clone(),
+                    description: description.clone(),
+                    statement: body.clone(),
+                });
+            }
+            PolicyEntry::Rbac {
+                name,
+                description,
+                tenant_scoped,
+                ..
+            } => {
+                let resolved_actions =
+                    resolve_inherits(&config.policies, name).map_err(|e| eyre::eyre!("{e}"))?;
+                let statement =
+                    compile_rbac_to_cedar(name, &resolved_actions, *tenant_scoped, &tenant)
+                        .map_err(|e| eyre::eyre!("{e}"))?;
+                policies.push(DesiredPolicy {
+                    name: name.clone(),
+                    description: description.clone(),
+                    statement,
+                });
+            }
+        }
+    }
 
     let templates: Vec<DesiredTemplate> = config
         .templates
@@ -101,7 +127,7 @@ pub(crate) fn build_desired_state(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use crate::control_plane::cedar_core::config::{SchemaConfig, TemplateEntry};
+    use crate::control_plane::cedar_core::config::SchemaConfig;
 
     #[test]
     fn build_desired_state_empty() {
@@ -134,7 +160,7 @@ mod tests {
     }
 
     #[test]
-    fn build_desired_state_skips_rbac_includes_cedar() {
+    fn build_desired_state_compiles_rbac_and_includes_cedar() {
         let config = CedarSyncConfig {
             policy_store_id: "ps-m".to_string(),
             schema: None,
@@ -156,14 +182,27 @@ mod tests {
             templates: vec![],
         };
         let state = build_desired_state(&config, None).unwrap();
-        assert_eq!(state.policies.len(), 1);
-        assert_eq!(state.policies[0].name, "custom");
+        assert_eq!(state.policies.len(), 2);
+
+        // RBAC policy is compiled to Cedar.
+        assert_eq!(state.policies[0].name, "admin");
+        assert!(state.policies[0].statement.contains("group::\"admin\""));
+        assert!(state.policies[0]
+            .statement
+            .contains("Action::\"todo:list:create\""));
+        // Default tenant scoping is applied.
+        assert!(state.policies[0]
+            .statement
+            .contains("principal.tenant_id == resource.tenant_id"));
+
+        // Cedar policy passes through verbatim.
+        assert_eq!(state.policies[1].name, "custom");
         assert_eq!(
-            state.policies[0].description.as_deref(),
+            state.policies[1].description.as_deref(),
             Some("Custom policy.")
         );
         assert_eq!(
-            state.policies[0].statement,
+            state.policies[1].statement,
             "forbid(principal, action, resource);"
         );
     }
@@ -220,5 +259,117 @@ mod tests {
             msg.contains("duplicate policy name: 'same-name'"),
             "unexpected error: {msg}"
         );
+    }
+
+    #[test]
+    fn build_desired_state_rbac_with_inheritance() {
+        let config = CedarSyncConfig {
+            policy_store_id: "ps-inh".to_string(),
+            schema: None,
+            tenant: None,
+            policies: vec![
+                PolicyEntry::Rbac {
+                    name: "viewer".to_string(),
+                    description: Some("Read-only.".to_string()),
+                    inherits: vec![],
+                    allow: vec!["todo:list:read".to_string()],
+                    tenant_scoped: true,
+                },
+                PolicyEntry::Rbac {
+                    name: "editor".to_string(),
+                    description: None,
+                    inherits: vec!["viewer".to_string()],
+                    allow: vec!["todo:list:write".to_string()],
+                    tenant_scoped: true,
+                },
+            ],
+            templates: vec![],
+        };
+        let state = build_desired_state(&config, None).unwrap();
+        assert_eq!(state.policies.len(), 2);
+
+        // viewer: only own action
+        assert!(state.policies[0]
+            .statement
+            .contains("Action::\"todo:list:read\""));
+        assert!(!state.policies[0]
+            .statement
+            .contains("Action::\"todo:list:write\""));
+
+        // editor: own + inherited
+        assert!(state.policies[1]
+            .statement
+            .contains("Action::\"todo:list:write\""));
+        assert!(state.policies[1]
+            .statement
+            .contains("Action::\"todo:list:read\""));
+    }
+
+    #[test]
+    fn build_desired_state_rbac_with_custom_tenant() {
+        let config = CedarSyncConfig {
+            policy_store_id: "ps-ct".to_string(),
+            schema: None,
+            tenant: Some(TenantConfig {
+                enabled: true,
+                principal_attribute: "org_id".to_string(),
+                resource_attribute: "org_id".to_string(),
+            }),
+            policies: vec![PolicyEntry::Rbac {
+                name: "viewer".to_string(),
+                description: None,
+                inherits: vec![],
+                allow: vec!["read".to_string()],
+                tenant_scoped: true,
+            }],
+            templates: vec![],
+        };
+        let state = build_desired_state(&config, None).unwrap();
+        assert!(state.policies[0]
+            .statement
+            .contains("principal.org_id == resource.org_id"));
+    }
+
+    #[test]
+    fn build_desired_state_rbac_tenant_disabled() {
+        let config = CedarSyncConfig {
+            policy_store_id: "ps-td".to_string(),
+            schema: None,
+            tenant: Some(TenantConfig {
+                enabled: false,
+                principal_attribute: "tenant_id".to_string(),
+                resource_attribute: "tenant_id".to_string(),
+            }),
+            policies: vec![PolicyEntry::Rbac {
+                name: "viewer".to_string(),
+                description: None,
+                inherits: vec![],
+                allow: vec!["read".to_string()],
+                tenant_scoped: true,
+            }],
+            templates: vec![],
+        };
+        let state = build_desired_state(&config, None).unwrap();
+        assert!(!state.policies[0].statement.contains("when"));
+    }
+
+    #[test]
+    fn build_desired_state_rbac_empty_allow_errors() {
+        let config = CedarSyncConfig {
+            policy_store_id: "ps-err".to_string(),
+            schema: None,
+            tenant: None,
+            policies: vec![PolicyEntry::Rbac {
+                name: "empty".to_string(),
+                description: None,
+                inherits: vec![],
+                allow: vec![],
+                tenant_scoped: true,
+            }],
+            templates: vec![],
+        };
+        let err = build_desired_state(&config, None).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("empty allow list"), "unexpected error: {msg}");
     }
 }

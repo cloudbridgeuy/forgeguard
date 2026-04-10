@@ -1,5 +1,6 @@
 pub(crate) mod config;
 pub(crate) mod desired;
+pub(crate) mod rbac;
 pub(crate) mod store;
 pub(crate) mod sync;
 

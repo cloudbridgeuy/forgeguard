@@ -16,8 +16,6 @@ fn default_tenant_id() -> String {
 pub(crate) struct CedarSyncConfig {
     pub(crate) policy_store_id: String,
     pub(crate) schema: Option<SchemaConfig>,
-    /// Used by RBAC compilation (V4).
-    #[allow(dead_code)]
     pub(crate) tenant: Option<TenantConfig>,
     #[serde(default)]
     pub(crate) policies: Vec<PolicyEntry>,
@@ -32,10 +30,7 @@ pub(crate) struct SchemaConfig {
 }
 
 /// Tenant scoping configuration for RBAC policies.
-///
-/// Fields are consumed by RBAC compilation (V4).
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 pub(crate) struct TenantConfig {
     #[serde(default = "default_true")]
     pub(crate) enabled: bool,
@@ -60,9 +55,7 @@ impl Default for TenantConfig {
 /// When `type` is omitted, defaults to `Rbac`. Uses a custom `Deserialize`
 /// implementation that inserts `type = "rbac"` when the field is missing, then
 /// delegates to the internally-tagged deserializer.
-/// Fields in `Rbac` are consumed by RBAC compilation (V4).
 #[derive(Debug)]
-#[allow(dead_code)]
 pub(crate) enum PolicyEntry {
     Rbac {
         name: String,
