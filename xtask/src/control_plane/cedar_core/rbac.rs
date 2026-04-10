@@ -3,6 +3,22 @@ use std::fmt::Write as _;
 
 use super::config::{PolicyEntry, TenantConfig};
 
+/// Validate that a string is safe to interpolate into a Cedar policy.
+/// Rejects strings containing double quotes, control characters, or newlines.
+fn validate_cedar_ident(value: &str, label: &str) -> Result<(), String> {
+    if value.is_empty() {
+        return Err(format!("{label} must not be empty"));
+    }
+    if value.contains('"')
+        || value.contains('\n')
+        || value.contains('\r')
+        || value.chars().any(|c| c.is_control())
+    {
+        return Err(format!("{label} contains invalid characters: {value:?}"));
+    }
+    Ok(())
+}
+
 /// Compile an RBAC policy entry to a Cedar permit statement.
 ///
 /// The role name becomes the group name in Cedar. Each action in `allow`
@@ -14,10 +30,21 @@ pub(crate) fn compile_rbac_to_cedar(
     tenant_scoped: bool,
     tenant: &TenantConfig,
 ) -> Result<String, String> {
+    validate_cedar_ident(name, "role name")?;
+
     if allow.is_empty() {
         return Err(format!(
             "RBAC policy '{name}' has an empty allow list; cannot compile to Cedar"
         ));
+    }
+
+    for action in allow {
+        validate_cedar_ident(action, "action")?;
+    }
+
+    if tenant_scoped && tenant.enabled {
+        validate_cedar_ident(&tenant.principal_attribute, "tenant principal_attribute")?;
+        validate_cedar_ident(&tenant.resource_attribute, "tenant resource_attribute")?;
     }
 
     let mut out = String::new();
@@ -28,19 +55,15 @@ pub(crate) fn compile_rbac_to_cedar(
     let actions: Vec<String> = allow.iter().map(|a| format!("Action::\"{a}\"")).collect();
     let _ = writeln!(out, "  action in [{}],", actions.join(", "));
 
-    let _ = write!(out, "  resource");
-
     // Tenant scoping: append `when` clause if both per-policy and global are enabled.
     if tenant_scoped && tenant.enabled {
-        let _ = writeln!(out);
         let _ = write!(
             out,
-            ") when {{ principal.{} == resource.{} }};",
+            "  resource\n) when {{ principal.{} == resource.{} }};",
             tenant.principal_attribute, tenant.resource_attribute
         );
     } else {
-        let _ = writeln!(out);
-        let _ = write!(out, ");");
+        let _ = write!(out, "  resource\n);");
     }
 
     Ok(out)
@@ -55,22 +78,21 @@ pub(crate) fn resolve_inherits(
     policies: &[PolicyEntry],
     target_name: &str,
 ) -> Result<Vec<String>, String> {
-    // Build a lookup of RBAC policies by name.
-    let rbac_map: HashMap<&str, &[String]> = policies
-        .iter()
-        .filter_map(|entry| match entry {
-            PolicyEntry::Rbac { name, allow, .. } => Some((name.as_str(), allow.as_slice())),
-            PolicyEntry::Cedar { .. } => None,
-        })
-        .collect();
-
-    let inherits_map: HashMap<&str, &[String]> = policies
-        .iter()
-        .filter_map(|entry| match entry {
-            PolicyEntry::Rbac { name, inherits, .. } => Some((name.as_str(), inherits.as_slice())),
-            PolicyEntry::Cedar { .. } => None,
-        })
-        .collect();
+    // Build lookups of RBAC policies by name (single pass).
+    let mut rbac_map: HashMap<&str, &[String]> = HashMap::new();
+    let mut inherits_map: HashMap<&str, &[String]> = HashMap::new();
+    for entry in policies {
+        if let PolicyEntry::Rbac {
+            name,
+            allow,
+            inherits,
+            ..
+        } = entry
+        {
+            rbac_map.insert(name.as_str(), allow.as_slice());
+            inherits_map.insert(name.as_str(), inherits.as_slice());
+        }
+    }
 
     // Verify the target exists.
     if !rbac_map.contains_key(target_name) {
@@ -411,5 +433,48 @@ permit(
                 "shopping:list:read",
             ]
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // validate_cedar_ident tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn compile_rbac_role_name_with_quotes_returns_error() {
+        let tenant = TenantConfig::default();
+        let result = compile_rbac_to_cedar(
+            "role\"injection",
+            &["todo:list:read".to_string()],
+            true,
+            &tenant,
+        );
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("invalid characters"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn compile_rbac_action_with_newline_returns_error() {
+        let tenant = TenantConfig::default();
+        let result =
+            compile_rbac_to_cedar("viewer", &["todo:list\n:read".to_string()], true, &tenant);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("invalid characters"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn compile_rbac_empty_name_returns_error() {
+        let tenant = TenantConfig::default();
+        let result = compile_rbac_to_cedar("", &["todo:list:read".to_string()], true, &tenant);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("must not be empty"), "unexpected error: {err}");
     }
 }
