@@ -107,7 +107,7 @@ forgeguard_sdk = { version = "0.0.0", path = "crates/sdk" }
 http-body-util = "0.1"
 
 # JWT
-jsonwebtoken = "9.3"
+jsonwebtoken = "10.3"
 
 # Lambda
 lambda_http = "0.14"
