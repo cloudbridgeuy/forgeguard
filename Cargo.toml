@@ -138,7 +138,7 @@ rand = "^0.8.5" #unified
 redis = { version = "1.0", features = ["tokio-comp", "connection-manager"] }
 
 # HTTP client
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.13", features = ["json"] }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
