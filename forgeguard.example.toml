@@ -1,0 +1,540 @@
+# ForgeGuard Configuration — Reference Example
+# ==============================================
+# Complete reference with all options documented. Copy this file,
+# rename to forgeguard.toml, and adjust for your environment.
+#
+# This example shows a TODO app proxy with:
+# - JWT + API key authentication
+# - Dual-dialect policies (RBAC + raw Cedar)
+# - Inline Cedar schema with entity types and attributes
+# - Tenant scoping (auto-applied to RBAC policies)
+# - Feature flags with rollouts and overrides
+# - CORS configuration
+# - Multi-namespace routes (todo + shopping)
+# - Policy tests for verification
+#
+# For the live control plane configuration, see forgeguard.toml.
+
+# ---------------------------------------------------------------------------
+# General
+# ---------------------------------------------------------------------------
+
+# Unique identifier for this project (used in audit logs and policy scoping).
+project_id = "todo-app"
+
+# Address the proxy listens on for incoming HTTP traffic.
+listen_addr = "127.0.0.1:8080"
+
+# The backend service URL that the proxy forwards requests to.
+upstream_url = "http://127.0.0.1:3000"
+
+# Default authorization policy when no route-level policy matches.
+# Values: "allow" or "deny" (default: "deny").
+default_policy = "deny"
+
+# How the proxy determines the client IP address.
+# Values: "peer" (default, uses socket peer address),
+#         "x-forwarded-for" (uses the X-Forwarded-For header),
+#         "x-real-ip" (uses the X-Real-Ip header).
+client_ip_source = "peer"
+
+# ---------------------------------------------------------------------------
+# AWS
+# ---------------------------------------------------------------------------
+# AWS defaults for all SDK calls. Both fields are optional.
+# Precedence: CLI flag > env var > [aws] config > SDK default chain.
+
+[aws]
+region = "us-east-2"
+profile = "admin"
+
+# ---------------------------------------------------------------------------
+# Authentication
+# ---------------------------------------------------------------------------
+
+[auth]
+# Ordered list of authentication methods the proxy will try.
+# The proxy walks the chain in order; the first one that succeeds wins.
+# Values: "jwt", "api-key", "anonymous"
+chain_order = ["jwt"]
+
+# JWT authentication settings.
+# Fill in these values after deploying Cognito infrastructure.
+[authn.jwt]
+jwks_url = "https://cognito-idp.<region>.amazonaws.com/<user-pool-id>/.well-known/jwks.json"
+issuer   = "https://cognito-idp.<region>.amazonaws.com/<user-pool-id>"
+# audience = "optional-client-id"
+# user_id_claim = "sub"
+# tenant_claim = "custom:org_id"
+# groups_claim = "cognito:groups"
+# cache_ttl_secs = 3600
+
+# ---------------------------------------------------------------------------
+# Static API Keys (demo / development)
+# ---------------------------------------------------------------------------
+# Each entry maps a key string to an identity. The proxy treats these
+# as pre-authenticated — no external validation. Use only for dev/demo.
+
+# [[api_keys]]
+# key = "sk-test-alice-admin"
+# user_id = "alice"
+# tenant_id = "acme-corp"
+# groups = ["admin"]
+
+# ---------------------------------------------------------------------------
+# Authorization (Amazon Verified Permissions)
+# ---------------------------------------------------------------------------
+
+[authz]
+# The AVP policy store identifier.
+policy_store_id = "ps-EXAMPLE"
+
+# How long (in seconds) to cache authorization decisions (default: 300).
+cache_ttl_secs = 300
+
+# Maximum number of entries in the authorization cache (default: 10000).
+cache_max_entries = 10000
+
+# ---------------------------------------------------------------------------
+# Schema (inline Cedar schema definition)
+# ---------------------------------------------------------------------------
+# Defines the Cedar schema namespace, entity types, and explicit actions.
+# RBAC actions from [[policies]] are auto-collected and merged with
+# the explicit actions listed here.
+#
+# Entity types User (memberOfTypes: ["Group"]) and Group are always
+# included automatically.
+
+[schema]
+namespace = "ForgeGuard"
+actions = ["proxy-config:read"]
+
+[schema.entities.User]
+member_of = ["Group"]
+
+[schema.entities.Group]
+
+[schema.entities.Organization]
+
+[schema.entities.Machine.attributes]
+org_id = "String"
+
+# ---------------------------------------------------------------------------
+# Tenant Scoping
+# ---------------------------------------------------------------------------
+# Controls automatic tenant isolation for `type = "rbac"` policies.
+# When enabled (the default), the RBAC compiler appends a `when` clause
+# to every compiled Cedar policy:
+#
+#   when { principal.<principal_attribute> == resource.<resource_attribute> }
+#
+# This ensures RBAC policies only grant access within the user's own tenant.
+#
+# To disable tenant scoping entirely (single-tenant deployments):
+#   [tenant]
+#   enabled = false
+#
+# Individual RBAC policies can opt out with `tenant_scoped = false`.
+
+[tenant]
+# enabled = true                       # default: true
+# principal_attribute = "tenant_id"    # default: "tenant_id"
+# resource_attribute = "tenant_id"     # default: "tenant_id"
+
+# ---------------------------------------------------------------------------
+# Metrics
+# ---------------------------------------------------------------------------
+
+[metrics]
+# Whether to expose a Prometheus-compatible metrics endpoint.
+enabled = false
+
+# Address the metrics endpoint listens on. Only used when enabled = true.
+listen_addr = "127.0.0.1:9090"
+
+# ---------------------------------------------------------------------------
+# CORS
+# ---------------------------------------------------------------------------
+# Cross-Origin Resource Sharing configuration. When enabled, the proxy handles
+# all CORS logic — the upstream service remains CORS-unaware.
+#
+# Fields:
+#   enabled           - Master switch (default: false). When false, no CORS
+#                        headers are emitted regardless of other settings.
+#   allowed_origins   - Origins that may make cross-origin requests.
+#                        Supports exact ("https://app.example.com"),
+#                        wildcard suffix ("*.example.com"), and bare
+#                        wildcard ("*"). Required when enabled = true.
+#   allowed_methods   - HTTP methods allowed in preflight responses
+#                        (default: GET, POST, PUT, PATCH, DELETE).
+#   allowed_headers   - Headers the browser may send in the actual request
+#                        (default: Content-Type, Authorization, X-API-Key).
+#   expose_headers    - Response headers the browser may read via JS
+#                        (default: none).
+#   allow_credentials - Whether the browser may send cookies / auth headers.
+#                        Cannot be true when allowed_origins contains "*".
+#   max_age_secs      - Preflight cache duration in seconds (default: 3600).
+
+# [cors]
+# enabled = true
+# allowed_origins = ["https://app.forgeguard.dev", "*.forgeguard.dev"]
+# allowed_methods = ["GET", "POST", "PUT", "PATCH", "DELETE"]
+# allowed_headers = ["Content-Type", "Authorization", "X-API-Key"]
+# expose_headers = ["X-Request-Id", "X-Trace-Id"]
+# allow_credentials = true
+# max_age_secs = 3600
+
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
+# Each [[routes]] entry maps an HTTP method + path to an authorization action.
+# The proxy evaluates the matched route's action against the identity and
+# policies to decide allow/deny.
+#
+# Fields:
+#   method         - HTTP method (GET, POST, PUT, DELETE, PATCH, etc.)
+#   path           - URL path pattern. Supports path parameters like `:id`.
+#   action         - The Cedar action in canonical format: namespace:entity:verb
+#   resource_param - (optional) Path parameter to use as the Cedar resource id.
+#   feature_gate   - (optional) Feature flag name; if the flag evaluates to
+#                    false, the route returns 404.
+
+[[routes]]
+method = "GET"
+path = "/api/todos"
+action = "todo:list:list"
+
+[[routes]]
+method = "POST"
+path = "/api/todos"
+action = "todo:list:create"
+
+[[routes]]
+method = "GET"
+path = "/api/todos/:id"
+action = "todo:list:read"
+resource_param = "id"
+
+[[routes]]
+method = "PUT"
+path = "/api/todos/:id"
+action = "todo:list:update"
+resource_param = "id"
+
+[[routes]]
+method = "DELETE"
+path = "/api/todos/:id"
+action = "todo:list:delete"
+resource_param = "id"
+
+[[routes]]
+method = "POST"
+path = "/api/todos/:id/share"
+action = "todo:list:share"
+resource_param = "id"
+feature_gate = "todo:sharing"
+
+# --- Shopping namespace (demonstrates multi-namespace with shared entity name) ---
+
+[[routes]]
+method = "GET"
+path = "/api/shopping-lists"
+action = "shopping:list:list"
+
+[[routes]]
+method = "POST"
+path = "/api/shopping-lists"
+action = "shopping:list:create"
+
+[[routes]]
+method = "GET"
+path = "/api/shopping-lists/:id"
+action = "shopping:list:read"
+resource_param = "id"
+
+[[routes]]
+method = "PUT"
+path = "/api/shopping-lists/:id"
+action = "shopping:list:update"
+resource_param = "id"
+
+[[routes]]
+method = "DELETE"
+path = "/api/shopping-lists/:id"
+action = "shopping:list:delete"
+resource_param = "id"
+
+[[routes]]
+method = "POST"
+path = "/api/shopping-lists/:id/items"
+action = "shopping:item:add"
+resource_param = "id"
+
+# ---------------------------------------------------------------------------
+# Public Routes
+# ---------------------------------------------------------------------------
+# Routes that bypass authentication entirely (health checks, docs, etc.).
+#
+# Fields:
+#   method    - HTTP method
+#   path      - URL path pattern
+#   auth_mode - Authentication mode (default: "anonymous")
+
+[[public_routes]]
+method = "GET"
+path = "/healthz"
+auth_mode = "anonymous"
+
+[[public_routes]]
+method = "GET"
+path = "/api/docs"
+auth_mode = "anonymous"
+
+# ---------------------------------------------------------------------------
+# Policies
+# ---------------------------------------------------------------------------
+# Authorization policies synced to Verified Permissions via `cedar sync`.
+#
+# Each policy has a `type` field that selects the dialect:
+#
+#   type = "rbac" (default if omitted)
+#     ForgeGuard's multi-tenant RBAC DSL. Role-centric: the policy `name` maps
+#     directly to a JWT group claim (e.g., name = "admin" matches users with
+#     cognito:groups containing "admin"). Additive only — use `allow` to list
+#     permitted actions. Use `inherits` for role hierarchy. All RBAC policies
+#     are automatically tenant-scoped unless `tenant_scoped = false`.
+#
+#     Fields:
+#       name          - Role name (= group name from JWT cognito:groups claim)
+#       description   - (optional) Human-readable description
+#       inherits      - (optional) List of roles this role inherits from
+#       allow         - List of permitted actions (namespace:entity:verb format)
+#       tenant_scoped - (optional) Override tenant scoping (default: true)
+#
+#   type = "cedar"
+#     Raw Cedar policy passed through verbatim. Use when RBAC can't express
+#     what you need: principal type constraints, attribute conditions,
+#     when/unless clauses, deny policies, or cross-tenant access.
+#
+#     Fields:
+#       name        - Unique policy name (used as VP resource name)
+#       description - (optional) Human-readable description
+#       body        - Raw Cedar policy language string
+
+# --- RBAC policies (compiled to Cedar with automatic tenant scoping) ---
+
+[[policies]]
+# type = "rbac"   ← default, can be omitted
+name = "admin"
+description = "Full access to all resources in all namespaces."
+inherits = ["viewer", "shopper"]
+allow = ["todo:list:create", "todo:list:update", "todo:list:delete", "todo:list:share", "shopping:list:update", "shopping:list:delete"]
+
+[[policies]]
+name = "viewer"
+description = "Read-only access to todos."
+allow = ["todo:list:list", "todo:list:read"]
+
+[[policies]]
+name = "shopper"
+description = "Shopping list management."
+allow = ["shopping:list:list", "shopping:list:read", "shopping:list:create", "shopping:item:add"]
+
+# --- Raw Cedar policies (for patterns RBAC can't express) ---
+
+[[policies]]
+type = "cedar"
+name = "top-secret-deny"
+description = "Deny access to top-secret list unless in top-secret-readers group."
+body = """
+forbid(
+  principal,
+  action,
+  resource == todo_app::todo__list::"top-secret"
+) unless {
+  principal in todo_app::group::"top-secret-readers"
+};
+"""
+
+# ---------------------------------------------------------------------------
+# Templates
+# ---------------------------------------------------------------------------
+# Cedar policy templates synced to Verified Permissions via `cedar sync`.
+# Templates use `?principal` and `?resource` placeholders that are bound
+# when creating template-linked policies (e.g., assigning a role to a user).
+#
+# Currently only `type = "cedar"` is supported.
+#
+#   Fields:
+#     type        - "cedar" (required)
+#     name        - Unique template name (used as VP resource name)
+#     description - (optional) Human-readable description
+#     body        - Raw Cedar template with ?principal and/or ?resource
+
+# [[templates]]
+# type = "cedar"
+# name = "project-contributor"
+# description = "Grants a principal full access to a specific project resource."
+# body = """
+# permit(
+#   principal == ?principal,
+#   action in [
+#     todo_app::Action::"todo-list-list",
+#     todo_app::Action::"todo-list-read",
+#     todo_app::Action::"todo-list-create",
+#     todo_app::Action::"todo-list-update"
+#   ],
+#   resource == ?resource
+# );
+# """
+
+# ---------------------------------------------------------------------------
+# Policy Tests
+# ---------------------------------------------------------------------------
+# Inline authorization test scenarios. Used by `forgeguard test` to verify
+# that policies produce the expected allow/deny decisions.
+
+[[policy_tests]]
+name = "alice (admin) can delete list"
+principal = "alice"
+groups = ["admin"]
+tenant = "acme-corp"
+action = "todo:list:delete"
+expect = "allow"
+
+[[policy_tests]]
+name = "charlie (viewer) can read regular list"
+principal = "charlie"
+groups = ["viewer"]
+tenant = "acme-corp"
+action = "todo:list:read"
+expect = "allow"
+
+[[policy_tests]]
+name = "charlie cannot create list"
+principal = "charlie"
+groups = ["viewer"]
+tenant = "acme-corp"
+action = "todo:list:create"
+expect = "deny"
+
+[[policy_tests]]
+name = "admin inherits viewer permissions"
+principal = "alice"
+groups = ["admin"]
+tenant = "acme-corp"
+action = "todo:list:read"
+expect = "allow"
+
+[[policy_tests]]
+name = "admin inherits shopper permissions"
+principal = "alice"
+groups = ["admin"]
+tenant = "acme-corp"
+action = "shopping:list:create"
+expect = "allow"
+
+[[policy_tests]]
+name = "admin can delete shopping list"
+principal = "alice"
+groups = ["admin"]
+tenant = "acme-corp"
+action = "shopping:list:delete"
+expect = "allow"
+
+[[policy_tests]]
+name = "shopper can create shopping list"
+principal = "dave"
+groups = ["shopper"]
+tenant = "acme-corp"
+action = "shopping:list:create"
+expect = "allow"
+
+[[policy_tests]]
+name = "shopper can add item to shopping list"
+principal = "dave"
+groups = ["shopper"]
+tenant = "acme-corp"
+action = "shopping:item:add"
+expect = "allow"
+
+[[policy_tests]]
+name = "shopper cannot delete shopping list"
+principal = "dave"
+groups = ["shopper"]
+tenant = "acme-corp"
+action = "shopping:list:delete"
+expect = "deny"
+
+[[policy_tests]]
+name = "viewer cannot access shopping lists"
+principal = "charlie"
+groups = ["viewer"]
+tenant = "acme-corp"
+action = "shopping:list:read"
+expect = "deny"
+
+[[policy_tests]]
+name = "charlie denied on top-secret"
+principal = "charlie"
+groups = ["viewer"]
+tenant = "acme-corp"
+action = "todo:list:list"
+resource = "todo::list::top-secret"
+expect = "deny"
+
+[[policy_tests]]
+name = "alice can read top-secret (admin + top-secret-readers)"
+principal = "alice"
+groups = ["admin", "top-secret-readers"]
+tenant = "acme-corp"
+action = "todo:list:list"
+resource = "todo::list::top-secret"
+expect = "allow"
+
+# ---------------------------------------------------------------------------
+# Feature Flags
+# ---------------------------------------------------------------------------
+# Feature flags control runtime behavior without redeployment.
+#
+# Flag names can be global ("maintenance-mode") or scoped ("todo:sharing").
+#
+# Flag definition fields:
+#   type               - "boolean", "string", or "number"
+#   default            - Default value when no override or rollout matches
+#   enabled            - Kill switch (default: true). Set to false to force the
+#                        default value regardless of overrides or rollout.
+#   rollout_percentage - (optional) 0-100. Percentage of users who get the
+#                        rollout_variant instead of the default. Uses a
+#                        deterministic hash so the same user always gets the
+#                        same bucket.
+#   rollout_variant    - (optional) Value returned for users inside the rollout.
+#                        Defaults to true for boolean flags.
+#
+# Override fields (evaluated in order, first match wins):
+#   tenant - (optional) Match a specific tenant id
+#   user   - (optional) Match a specific user id
+#   group  - (optional) Match users belonging to a specific group
+#   value  - The value to return when this override matches
+
+[features]
+
+[features.flags."maintenance-mode"]
+type = "boolean"
+default = false
+enabled = true
+
+[features.flags."todo:sharing"]
+type = "boolean"
+default = false
+enabled = true
+rollout_percentage = 25
+
+[[features.flags."todo:sharing".overrides]]
+group = "admin"
+value = true
+
+[features.flags."todo:ai-suggestions"]
+type = "boolean"
+default = false
+enabled = false
