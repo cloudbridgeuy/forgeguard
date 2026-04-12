@@ -117,7 +117,7 @@ lambda_runtime = "0.13"
 lru = "0.12"
 
 # Routing
-matchit = "0.8"
+matchit = "0.9"
 
 # Terminal colors
 owo-colors = { version = "4", features = ["supports-colors"] }
