@@ -10,7 +10,8 @@ use super::config::SchemaConfig;
 /// Entity types come from `config.entities`.
 /// Actions = union of `config.actions` (explicit) + `rbac_actions` (auto-collected),
 /// deduplicated and sorted.
-/// Actions are simple `"name": {}` entries (no appliesTo blocks).
+/// Each action gets an `appliesTo` block listing all entity types as both
+/// `principalTypes` and `resourceTypes` so VP can validate policies/templates.
 ///
 /// Output is under `config.namespace` as the top-level JSON key.
 pub(crate) fn generate_schema_json(config: &SchemaConfig, rbac_actions: &[String]) -> String {
@@ -74,8 +75,23 @@ pub(crate) fn generate_schema_json(config: &SchemaConfig, rbac_actions: &[String
         all_actions.insert(action.as_str());
     }
 
-    let actions: BTreeMap<&str, serde_json::Value> =
-        all_actions.iter().map(|a| (*a, json!({}))).collect();
+    // Collect all entity type names for the appliesTo block.
+    let entity_type_names: Vec<&str> = entity_types.keys().copied().collect();
+
+    let actions: BTreeMap<&str, serde_json::Value> = all_actions
+        .iter()
+        .map(|a| {
+            (
+                *a,
+                json!({
+                    "appliesTo": {
+                        "principalTypes": &entity_type_names,
+                        "resourceTypes": &entity_type_names,
+                    }
+                }),
+            )
+        })
+        .collect();
 
     // --- Assemble top-level structure ---
     let schema = json!({
@@ -191,9 +207,11 @@ mod tests {
         assert!(actions.contains_key("todo:list:create"));
         assert!(actions.contains_key("todo:list:read"));
 
-        // Each action is an empty object
+        // Each action has appliesTo with principalTypes and resourceTypes
         for (_, v) in actions {
-            assert_eq!(*v, json!({}));
+            assert!(v.get("appliesTo").is_some());
+            assert!(v["appliesTo"]["principalTypes"].is_array());
+            assert!(v["appliesTo"]["resourceTypes"].is_array());
         }
     }
 
