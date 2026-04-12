@@ -45,12 +45,7 @@ pub(crate) fn first_line_preview(text: &str) -> String {
 ///
 /// Format: `name [id] — description` or just `name [id]` if no description.
 /// Falls back to `[id]` if no name.
-fn write_entry(
-    out: &mut String,
-    id: &str,
-    name: Option<&str>,
-    description: Option<&str>,
-) {
+fn write_entry(out: &mut String, id: &str, name: Option<&str>, description: Option<&str>) {
     match (name, description) {
         (Some(n), Some(d)) => {
             let _ = writeln!(out, "  {n} [{id}] — {d}");

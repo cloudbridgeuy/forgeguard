@@ -123,8 +123,7 @@ async fn read_templates(
             .context(format!("GetPolicyTemplate {id} failed"))?;
 
         // Decode name from the [name] prefix in the description field.
-        let (decoded_name, decoded_desc) =
-            decode_name_from_description(sdk_description.as_deref());
+        let (decoded_name, decoded_desc) = decode_name_from_description(sdk_description.as_deref());
 
         templates.push(StoreTemplate {
             id,
@@ -176,8 +175,7 @@ async fn read_policies(
         let (statement, raw_description) = extract_static_policy_details(&detail);
 
         // Decode name from the [name] prefix in the description field.
-        let (decoded_name, decoded_desc) =
-            decode_name_from_description(raw_description.as_deref());
+        let (decoded_name, decoded_desc) = decode_name_from_description(raw_description.as_deref());
 
         policies.push(StorePolicy {
             id,
