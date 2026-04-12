@@ -42,12 +42,29 @@ pub(crate) fn first_line_preview(text: &str) -> String {
 }
 
 /// Write a single entry (template or policy) to the output buffer.
-fn write_entry(out: &mut String, label: &str, description: Option<&str>, statement: &str) {
-    let _ = writeln!(out, "  - {label}");
-    if let Some(desc) = description {
-        let _ = writeln!(out, "    {desc}");
+///
+/// Format: `name [id] — description` or just `name [id]` if no description.
+/// Falls back to `[id]` if no name.
+fn write_entry(
+    out: &mut String,
+    id: &str,
+    name: Option<&str>,
+    description: Option<&str>,
+) {
+    match (name, description) {
+        (Some(n), Some(d)) => {
+            let _ = writeln!(out, "  {n} [{id}] — {d}");
+        }
+        (Some(n), None) => {
+            let _ = writeln!(out, "  {n} [{id}]");
+        }
+        (None, Some(d)) => {
+            let _ = writeln!(out, "  [{id}] — {d}");
+        }
+        (None, None) => {
+            let _ = writeln!(out, "  [{id}]");
+        }
     }
-    let _ = writeln!(out, "    {}", first_line_preview(statement));
 }
 
 /// Format the VP store state for terminal display.
@@ -64,14 +81,12 @@ pub(crate) fn format_status(store_id: &PolicyStoreId, state: &StoreState) -> Str
 
     let _ = writeln!(out, "Templates: {}", state.templates.len());
     for t in &state.templates {
-        let label = t.name.as_deref().unwrap_or(&t.id);
-        write_entry(&mut out, label, t.description.as_deref(), &t.statement);
+        write_entry(&mut out, &t.id, t.name.as_deref(), t.description.as_deref());
     }
 
     let _ = writeln!(out, "Policies: {}", state.policies.len());
     for p in &state.policies {
-        let label = p.name.as_deref().unwrap_or(&p.id);
-        write_entry(&mut out, label, p.description.as_deref(), &p.statement);
+        write_entry(&mut out, &p.id, p.name.as_deref(), p.description.as_deref());
     }
 
     out
@@ -148,15 +163,12 @@ mod tests {
         assert!(output.contains("Policy Store: ps-full"));
         assert!(output.contains("Schema: present"));
         assert!(output.contains("Templates: 1"));
-        assert!(output.contains("- ReadOnly"));
+        assert!(output.contains("ReadOnly [tmpl-1]"));
         assert!(output.contains("Read-only access template"));
-        assert!(output.contains("permit(principal == ?principal"));
         assert!(output.contains("Policies: 2"));
-        assert!(output.contains("- AdminAccess"));
-        assert!(output.contains("permit(principal, action, resource)"));
-        // pol-2 has no name, should fall back to id
-        assert!(output.contains("- pol-2"));
+        assert!(output.contains("AdminAccess [pol-1]"));
+        // pol-2 has no name, should show just [id]
+        assert!(output.contains("[pol-2]"));
         assert!(output.contains("A nameless policy"));
-        assert!(output.contains("forbid(principal, action, resource)"));
     }
 }

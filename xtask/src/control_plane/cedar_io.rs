@@ -113,7 +113,7 @@ async fn read_templates(
     }
 
     let mut templates = Vec::with_capacity(summaries.len());
-    for (id, name, description) in summaries {
+    for (id, _sdk_name, sdk_description) in summaries {
         let detail = client
             .get_policy_template()
             .policy_store_id(store_id.as_str())
@@ -122,10 +122,14 @@ async fn read_templates(
             .await
             .context(format!("GetPolicyTemplate {id} failed"))?;
 
+        // Decode name from the [name] prefix in the description field.
+        let (decoded_name, decoded_desc) =
+            decode_name_from_description(sdk_description.as_deref());
+
         templates.push(StoreTemplate {
             id,
-            name,
-            description,
+            name: decoded_name,
+            description: decoded_desc,
             statement: detail.statement().to_string(),
         });
     }
@@ -160,7 +164,7 @@ async fn read_policies(
     }
 
     let mut policies = Vec::with_capacity(policy_summaries.len());
-    for (id, name) in policy_summaries {
+    for (id, _sdk_name) in policy_summaries {
         let detail = client
             .get_policy()
             .policy_store_id(store_id.as_str())
@@ -169,12 +173,16 @@ async fn read_policies(
             .await
             .context(format!("GetPolicy {id} failed"))?;
 
-        let (statement, description) = extract_static_policy_details(&detail);
+        let (statement, raw_description) = extract_static_policy_details(&detail);
+
+        // Decode name from the [name] prefix in the description field.
+        let (decoded_name, decoded_desc) =
+            decode_name_from_description(raw_description.as_deref());
 
         policies.push(StorePolicy {
             id,
-            name,
-            description,
+            name: decoded_name,
+            description: decoded_desc,
             statement,
         });
     }
@@ -376,10 +384,51 @@ pub(crate) async fn apply_sync_plan(
     Ok(result)
 }
 
+/// Encode a resource name into the VP `description` field.
+///
+/// VP does not support a native `name` field on templates or policies, so we
+/// encode the name as a `[name]` prefix in the description. This allows the
+/// sync engine to match resources by name when reading them back.
+///
+/// Format: `[name] description text` or `[name]` if no description.
+fn encode_name_in_description(name: &str, description: Option<&str>) -> String {
+    match description {
+        Some(desc) => format!("[{name}] {desc}"),
+        None => format!("[{name}]"),
+    }
+}
+
+/// Decode a resource name from a VP `description` field.
+///
+/// Returns `(name, remaining_description)`. If the description doesn't follow
+/// the `[name]` encoding, returns `(None, original_description)`.
+fn decode_name_from_description(description: Option<&str>) -> (Option<String>, Option<String>) {
+    let Some(desc) = description else {
+        return (None, None);
+    };
+
+    if let Some(rest) = desc.strip_prefix('[') {
+        if let Some(end) = rest.find(']') {
+            let name = &rest[..end];
+            if !name.is_empty() {
+                let remaining = rest[end + 1..].trim();
+                let desc = if remaining.is_empty() {
+                    None
+                } else {
+                    Some(remaining.to_string())
+                };
+                return (Some(name.to_string()), desc);
+            }
+        }
+    }
+
+    (None, Some(desc.to_string()))
+}
+
 /// Create a policy template in the VP store.
 ///
-/// Uses the native VP `name` field (SDK v1.110.0+). Names are unique within
-/// the store.
+/// Encodes the name as a `[name]` prefix in the description field since VP
+/// does not support a native `name` field on `CreatePolicyTemplate`.
 async fn create_policy_template(
     client: &aws_sdk_verifiedpermissions::Client,
     store_id: &PolicyStoreId,
@@ -387,17 +436,13 @@ async fn create_policy_template(
     description: Option<&str>,
     statement: &str,
 ) -> Result<()> {
-    let mut builder = client
+    let encoded_desc = encode_name_in_description(name, description);
+
+    let resp = client
         .create_policy_template()
         .policy_store_id(store_id.as_str())
         .statement(statement)
-        .name(name);
-
-    if let Some(desc) = description {
-        builder = builder.description(desc);
-    }
-
-    let resp = builder
+        .description(&encoded_desc)
         .send()
         .await
         .context(format!("CreatePolicyTemplate '{name}' failed"))?;
@@ -429,8 +474,9 @@ async fn delete_policy_template(
 
 /// Create a static policy in the VP store.
 ///
-/// Uses the native VP `name` field (SDK v1.110.0+). The description on
-/// `StaticPolicyDefinition` is passed through directly without encoding.
+/// Encodes the name as a `[name]` prefix in the `StaticPolicyDefinition`
+/// description field since VP does not support a native `name` field on
+/// `CreatePolicy`.
 async fn create_policy(
     client: &aws_sdk_verifiedpermissions::Client,
     store_id: &PolicyStoreId,
@@ -440,15 +486,15 @@ async fn create_policy(
 ) -> Result<()> {
     use aws_sdk_verifiedpermissions::types::{PolicyDefinition, StaticPolicyDefinition};
 
-    let mut static_builder = StaticPolicyDefinition::builder().statement(statement);
+    let encoded_desc = encode_name_in_description(name, description);
 
-    if let Some(desc) = description {
-        static_builder = static_builder.description(desc);
-    }
-
-    let static_def = static_builder.build().context(format!(
-        "failed to build StaticPolicyDefinition for '{name}'"
-    ))?;
+    let static_def = StaticPolicyDefinition::builder()
+        .statement(statement)
+        .description(&encoded_desc)
+        .build()
+        .context(format!(
+            "failed to build StaticPolicyDefinition for '{name}'"
+        ))?;
 
     let definition = PolicyDefinition::Static(static_def);
 
@@ -456,7 +502,6 @@ async fn create_policy(
         .create_policy()
         .policy_store_id(store_id.as_str())
         .definition(definition)
-        .name(name)
         .send()
         .await
         .context(format!("CreatePolicy '{name}' failed"))?;
