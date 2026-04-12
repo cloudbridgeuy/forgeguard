@@ -152,7 +152,7 @@ thiserror = "2.0"
 # Async runtime
 tokio = { version = "1.0", features = ["full"] }
 toml = "0.8"
-toml_edit = "0.22"
+toml_edit = "0.25"
 # Tower middleware
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["cors", "trace", "timeout"] }
