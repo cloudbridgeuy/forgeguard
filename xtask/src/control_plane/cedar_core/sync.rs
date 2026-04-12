@@ -23,6 +23,23 @@ impl SyncPlan {
     }
 }
 
+/// Compare two Cedar JSON schemas semantically (as parsed JSON values).
+///
+/// VP may reformat the schema (minify, reorder keys) when storing it, so a
+/// simple string comparison would cause false diffs. Parsing both as
+/// `serde_json::Value` handles formatting differences.
+///
+/// Falls back to trimmed string comparison if either side fails to parse.
+fn schemas_equal(a: &str, b: &str) -> bool {
+    match (
+        serde_json::from_str::<serde_json::Value>(a),
+        serde_json::from_str::<serde_json::Value>(b),
+    ) {
+        (Ok(va), Ok(vb)) => va == vb,
+        _ => a.trim() == b.trim(),
+    }
+}
+
 /// Compute a sync plan by diffing desired state against current VP state.
 ///
 /// This is a pure function with no I/O. The plan describes what changes are
@@ -50,7 +67,7 @@ pub(crate) fn compute_sync_plan(
     // --- Schema ---
     if let Some(desired_schema) = &desired.schema {
         let needs_put = match &current.schema {
-            Some(current_schema) => desired_schema.trim() != current_schema.trim(),
+            Some(current_schema) => !schemas_equal(desired_schema, current_schema),
             None => true,
         };
         if needs_put {
