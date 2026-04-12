@@ -130,7 +130,7 @@ pingora-http = "0.8"
 pingora-proxy = "0.8"
 
 # Metrics
-prometheus = "0.13"
+prometheus = "0.14"
 
 rand = "^0.8.5" #unified
 
