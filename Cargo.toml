@@ -141,7 +141,7 @@ tempfile = "3"
 thiserror = "2.0"
 
 # Async runtime
-tokio = { version = "1.0", features = ["full"] }
+tokio = { version = "1.51", features = ["full"] }
 toml = "0.8"
 toml_edit = "0.22"
 # Tower middleware
