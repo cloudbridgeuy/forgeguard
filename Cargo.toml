@@ -114,7 +114,7 @@ lambda_http = "0.14"
 lambda_runtime = "0.13"
 
 # Caching
-lru = "0.12"
+lru = "0.16"
 
 # Routing
 matchit = "0.8"
