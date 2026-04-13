@@ -15,7 +15,7 @@ pub mod builder;
 pub use chain::IdentityChain;
 pub use credential::Credential;
 pub use error::{Error, Result};
-pub use identity::Identity;
+pub use identity::{Identity, IdentityParams};
 pub use jwt_claims::JwtClaims;
 pub use resolver::IdentityResolver;
 pub use static_api_key::StaticApiKeyResolver;

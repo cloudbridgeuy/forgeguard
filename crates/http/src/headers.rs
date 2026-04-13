@@ -195,19 +195,20 @@ pub fn inject_client_ip(ip: IpAddr) -> (String, String) {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+    use forgeguard_authn_core::IdentityParams;
     use forgeguard_core::{GroupName, TenantId, UserId};
 
     use super::*;
 
     fn make_identity(tenant: Option<&str>, groups: &[&str]) -> Identity {
-        Identity::new(
-            UserId::new("alice").unwrap(),
-            tenant.map(|t| TenantId::new(t).unwrap()),
-            groups.iter().map(|g| GroupName::new(*g).unwrap()).collect(),
-            None,
-            "jwt",
-            None,
-        )
+        Identity::new(IdentityParams {
+            user_id: UserId::new("alice").unwrap(),
+            tenant_id: tenant.map(|t| TenantId::new(t).unwrap()),
+            groups: groups.iter().map(|g| GroupName::new(*g).unwrap()).collect(),
+            expiry: None,
+            resolver: "jwt",
+            extra: None,
+        })
     }
 
     #[test]

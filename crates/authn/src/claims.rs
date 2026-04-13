@@ -1,7 +1,7 @@
 //! Pure claim-to-Identity mapping.
 
 use chrono::DateTime;
-use forgeguard_authn_core::{Identity, JwtClaims};
+use forgeguard_authn_core::{Identity, IdentityParams, JwtClaims};
 use forgeguard_core::{GroupName, TenantId, UserId};
 
 use crate::config::JwtResolverConfig;
@@ -26,14 +26,14 @@ pub(crate) fn map_claims(claims: &JwtClaims, config: &JwtResolverConfig) -> Resu
     );
     let extra = build_extra(claims);
 
-    Ok(Identity::new(
+    Ok(Identity::new(IdentityParams {
         user_id,
         tenant_id,
         groups,
         expiry,
-        "cognito_jwt",
+        resolver: "cognito_jwt",
         extra,
-    ))
+    }))
 }
 
 /// Extract the user ID from the configured claim.

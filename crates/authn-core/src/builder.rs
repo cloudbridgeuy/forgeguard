@@ -3,7 +3,7 @@
 use chrono::{DateTime, Utc};
 use forgeguard_core::{GroupName, TenantId, UserId};
 
-use crate::identity::Identity;
+use crate::identity::{Identity, IdentityParams};
 
 /// Builder for constructing Identity values in tests.
 /// Available only with the `test-support` feature.
@@ -54,14 +54,14 @@ impl IdentityBuilder {
     }
 
     pub fn build(self) -> Identity {
-        Identity::new(
-            self.user_id,
-            self.tenant_id,
-            self.groups,
-            self.expiry,
-            self.resolver,
-            self.extra,
-        )
+        Identity::new(IdentityParams {
+            user_id: self.user_id,
+            tenant_id: self.tenant_id,
+            groups: self.groups,
+            expiry: self.expiry,
+            resolver: self.resolver,
+            extra: self.extra,
+        })
     }
 }
 

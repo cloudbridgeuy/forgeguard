@@ -8,7 +8,7 @@ use forgeguard_core::{GroupName, TenantId, UserId};
 
 use crate::credential::Credential;
 use crate::error::{Error, Result};
-use crate::identity::Identity;
+use crate::identity::{Identity, IdentityParams};
 use crate::resolver::IdentityResolver;
 
 /// Metadata for a static API key entry.
@@ -57,14 +57,14 @@ impl IdentityResolver for StaticApiKeyResolver {
     ) -> Pin<Box<dyn Future<Output = Result<Identity>> + Send + '_>> {
         let result = match credential {
             Credential::ApiKey(key) => match self.keys.get(key.as_str()) {
-                Some(entry) => Ok(Identity::new(
-                    entry.user_id.clone(),
-                    entry.tenant_id.clone(),
-                    entry.groups.clone(),
-                    None, // API keys don't expire via this resolver
-                    "static_api_key",
-                    None,
-                )),
+                Some(entry) => Ok(Identity::new(IdentityParams {
+                    user_id: entry.user_id.clone(),
+                    tenant_id: entry.tenant_id.clone(),
+                    groups: entry.groups.clone(),
+                    expiry: None, // API keys don't expire via this resolver
+                    resolver: "static_api_key",
+                    extra: None,
+                })),
                 None => Err(Error::InvalidCredential("unknown API key".into())),
             },
             Credential::Bearer(_) => Err(Error::InvalidCredential(

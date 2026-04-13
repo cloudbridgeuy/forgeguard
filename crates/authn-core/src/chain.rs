@@ -44,6 +44,8 @@ mod tests {
 
     use forgeguard_core::{GroupName, TenantId, UserId};
 
+    use crate::identity::IdentityParams;
+
     use super::*;
 
     // -- Mock resolvers -------------------------------------------------------
@@ -64,14 +66,14 @@ mod tests {
             &self,
             _credential: &Credential,
         ) -> Pin<Box<dyn Future<Output = Result<Identity>> + Send + '_>> {
-            Box::pin(std::future::ready(Ok(Identity::new(
-                UserId::new("bearer-user").unwrap(),
-                Some(TenantId::new("tenant-a").unwrap()),
-                vec![GroupName::new("users").unwrap()],
-                None,
-                "bearer-resolver",
-                None,
-            ))))
+            Box::pin(std::future::ready(Ok(Identity::new(IdentityParams {
+                user_id: UserId::new("bearer-user").unwrap(),
+                tenant_id: Some(TenantId::new("tenant-a").unwrap()),
+                groups: vec![GroupName::new("users").unwrap()],
+                expiry: None,
+                resolver: "bearer-resolver",
+                extra: None,
+            }))))
         }
     }
 
@@ -91,14 +93,14 @@ mod tests {
             &self,
             _credential: &Credential,
         ) -> Pin<Box<dyn Future<Output = Result<Identity>> + Send + '_>> {
-            Box::pin(std::future::ready(Ok(Identity::new(
-                UserId::new("apikey-user").unwrap(),
-                Some(TenantId::new("tenant-b").unwrap()),
-                vec![GroupName::new("service-accounts").unwrap()],
-                None,
-                "api-key-resolver",
-                None,
-            ))))
+            Box::pin(std::future::ready(Ok(Identity::new(IdentityParams {
+                user_id: UserId::new("apikey-user").unwrap(),
+                tenant_id: Some(TenantId::new("tenant-b").unwrap()),
+                groups: vec![GroupName::new("service-accounts").unwrap()],
+                expiry: None,
+                resolver: "api-key-resolver",
+                extra: None,
+            }))))
         }
     }
 

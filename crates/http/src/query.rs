@@ -50,18 +50,19 @@ mod tests {
 
     use crate::method::HttpMethod;
     use crate::route::{RouteMapping, RouteMatcher};
+    use forgeguard_authn_core::IdentityParams;
 
     use super::*;
 
     fn make_identity(tenant: Option<&str>, groups: &[&str]) -> Identity {
-        Identity::new(
-            UserId::new("alice").unwrap(),
-            tenant.map(|t| TenantId::new(t).unwrap()),
-            groups.iter().map(|g| GroupName::new(*g).unwrap()).collect(),
-            None,
-            "jwt",
-            None,
-        )
+        Identity::new(IdentityParams {
+            user_id: UserId::new("alice").unwrap(),
+            tenant_id: tenant.map(|t| TenantId::new(t).unwrap()),
+            groups: groups.iter().map(|g| GroupName::new(*g).unwrap()).collect(),
+            expiry: None,
+            resolver: "jwt",
+            extra: None,
+        })
     }
 
     #[test]
@@ -117,14 +118,14 @@ mod tests {
 
     #[test]
     fn build_query_with_extra_claims() {
-        let identity = Identity::new(
-            UserId::new("alice").unwrap(),
-            None,
-            vec![],
-            None,
-            "jwt",
-            Some(serde_json::json!({"role": "superadmin"})),
-        );
+        let identity = Identity::new(IdentityParams {
+            user_id: UserId::new("alice").unwrap(),
+            tenant_id: None,
+            groups: vec![],
+            expiry: None,
+            resolver: "jwt",
+            extra: Some(serde_json::json!({"role": "superadmin"})),
+        });
         let routes = vec![RouteMapping::new(
             HttpMethod::Get,
             "/admin".to_string(),

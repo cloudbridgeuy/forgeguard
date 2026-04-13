@@ -21,25 +21,27 @@ pub struct Identity {
     extra: Option<serde_json::Value>,
 }
 
+/// Parameters for constructing an [`Identity`].
+pub struct IdentityParams {
+    pub user_id: UserId,
+    pub tenant_id: Option<TenantId>,
+    pub groups: Vec<GroupName>,
+    pub expiry: Option<DateTime<Utc>>,
+    pub resolver: &'static str,
+    pub extra: Option<serde_json::Value>,
+}
+
 impl Identity {
-    /// Construct a new Identity. Takes fully-typed arguments — invariants
-    /// are enforced by the argument types (Parse Don't Validate), not visibility.
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        user_id: UserId,
-        tenant_id: Option<TenantId>,
-        groups: Vec<GroupName>,
-        expiry: Option<DateTime<Utc>>,
-        resolver: &'static str,
-        extra: Option<serde_json::Value>,
-    ) -> Self {
+    /// Construct a new Identity. Invariants are enforced by the field types
+    /// on [`IdentityParams`] (Parse Don't Validate).
+    pub fn new(params: IdentityParams) -> Self {
         Self {
-            user_id,
-            tenant_id,
-            groups,
-            expiry,
-            resolver,
-            extra,
+            user_id: params.user_id,
+            tenant_id: params.tenant_id,
+            groups: params.groups,
+            expiry: params.expiry,
+            resolver: params.resolver,
+            extra: params.extra,
         }
     }
 
@@ -83,17 +85,17 @@ mod tests {
 
     /// Helper: build a minimal identity for tests.
     fn make_identity(expiry: Option<DateTime<Utc>>, extra: Option<serde_json::Value>) -> Identity {
-        Identity::new(
-            UserId::new("alice").unwrap(),
-            Some(TenantId::new("acme-corp").unwrap()),
-            vec![
+        Identity::new(IdentityParams {
+            user_id: UserId::new("alice").unwrap(),
+            tenant_id: Some(TenantId::new("acme-corp").unwrap()),
+            groups: vec![
                 GroupName::new("admin").unwrap(),
                 GroupName::new("backend-team").unwrap(),
             ],
             expiry,
-            "test-resolver",
+            resolver: "test-resolver",
             extra,
-        )
+        })
     }
 
     // -- Getter tests ---------------------------------------------------------
@@ -112,14 +114,14 @@ mod tests {
 
     #[test]
     fn tenant_id_returns_none_when_absent() {
-        let id = Identity::new(
-            UserId::new("bob").unwrap(),
-            None,
-            vec![],
-            None,
-            "test-resolver",
-            None,
-        );
+        let id = Identity::new(IdentityParams {
+            user_id: UserId::new("bob").unwrap(),
+            tenant_id: None,
+            groups: vec![],
+            expiry: None,
+            resolver: "test-resolver",
+            extra: None,
+        });
         assert!(id.tenant_id().is_none());
     }
 
@@ -136,14 +138,14 @@ mod tests {
 
     #[test]
     fn groups_returns_empty_when_none() {
-        let id = Identity::new(
-            UserId::new("bob").unwrap(),
-            None,
-            vec![],
-            None,
-            "test-resolver",
-            None,
-        );
+        let id = Identity::new(IdentityParams {
+            user_id: UserId::new("bob").unwrap(),
+            tenant_id: None,
+            groups: vec![],
+            expiry: None,
+            resolver: "test-resolver",
+            extra: None,
+        });
         assert!(id.groups().is_empty());
     }
 
