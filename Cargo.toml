@@ -49,7 +49,7 @@ async-trait = "0.1"
 aws-config = "1"
 
 # AWS SDKs
-aws_lambda_events = { version = "0.15", features = ["dynamodb"] }
+aws_lambda_events = { version = "0.16", features = ["dynamodb"] }
 aws-sdk-cloudformation = "1"
 aws-sdk-cognitoidentityprovider = "1"
 aws-sdk-dynamodb = "1"
@@ -107,17 +107,17 @@ forgeguard_sdk = { version = "0.0.0", path = "crates/sdk" }
 http-body-util = "0.1"
 
 # JWT
-jsonwebtoken = "9.3"
+jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }
 
 # Lambda
-lambda_http = "0.14"
-lambda_runtime = "0.13"
+lambda_http = "1.1"
+lambda_runtime = "1.1"
 
 # Caching
-lru = "0.12"
+lru = "0.16"
 
 # Routing
-matchit = "0.8"
+matchit = "0.9"
 
 # Terminal colors
 owo-colors = { version = "4", features = ["supports-colors"] }
@@ -138,7 +138,7 @@ rand = "^0.8.5" #unified
 redis = { version = "1.0", features = ["tokio-comp", "connection-manager"] }
 
 # HTTP client
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.13", features = ["json"] }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -151,8 +151,8 @@ thiserror = "2.0"
 
 # Async runtime
 tokio = { version = "1.0", features = ["full"] }
-toml = "0.8"
-toml_edit = "0.22"
+toml = "1.1"
+toml_edit = "0.25"
 # Tower middleware
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["cors", "trace", "timeout"] }
