@@ -52,6 +52,7 @@ Each crate defines `Error` and `Result<T> = std::result::Result<T, Error>`. No d
 - `#![deny(clippy::unwrap_used, clippy::expect_used)]` in every lib.rs and main.rs
 - Workspace lints enforce pattern compliance — see [linting-and-clippy.md](./.claude/context/linting-and-clippy.md)
 - Test code may use `.unwrap()`
+- **Never `#[allow(clippy::too_many_arguments)]`** — use a `Params` / `Config` struct instead. Enforced by `cargo xtask lint`. See [params-struct-rule.md](./.claude/context/params-struct-rule.md)
 
 ### Verification (MUST)
 
@@ -152,6 +153,7 @@ Each crate's `README.md` describes what it owns and its pure/I/O classification.
 | Document                                                           | Purpose                                                                 |
 | ------------------------------------------------------------------ | ----------------------------------------------------------------------- |
 | [Linting and Clippy](./.claude/context/linting-and-clippy.md)      | Clippy thresholds, workspace lints, and how they map to design patterns |
+| [Params Struct Rule](./.claude/context/params-struct-rule.md)      | Why we ban `#[allow(clippy::too_many_arguments)]` and how the lint enforces it |
 | [Commit and Release](./.claude/context/commit-and-release.md)      | Conventional commits, version bump logic, release flow                  |
 | [xtask lint](./.claude/context/xtask-lint.md)                      | Lint pipeline checks, flags, architecture, adding new checks            |
 | [Feature Flags](./.claude/context/feature-flags.md)                | Flag types, evaluation order, overrides, debug endpoint, proxy wiring   |

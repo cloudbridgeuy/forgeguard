@@ -22,6 +22,7 @@ enum CheckId {
     FileLength,
     PublishVersion,
     TypeScript,
+    TooManyArgsAllow,
 }
 
 /// A lint check to execute.
@@ -83,6 +84,10 @@ pub struct LintArgs {
     /// Skip TypeScript compilation check (infra/control-plane)
     #[arg(long)]
     pub no_typescript: bool,
+
+    /// Skip the `#[allow(clippy::too_many_arguments)]` ban check
+    #[arg(long)]
+    pub no_too_many_args: bool,
 
     /// Run DynamoDB integration tests (requires DynamoDB Local)
     #[arg(long)]
@@ -189,6 +194,13 @@ const CHECKS: &[Check] = &[
         args: &[],
         optional: false,
     },
+    Check {
+        id: CheckId::TooManyArgsAllow,
+        name: "forbid #[allow(clippy::too_many_arguments)]",
+        program: "__builtin__",
+        args: &[],
+        optional: false,
+    },
 ];
 
 /// Determine whether a check should be skipped based on the user's skip flags.
@@ -203,6 +215,7 @@ fn should_skip(id: CheckId, args: &LintArgs) -> bool {
         CheckId::FileLength => args.no_file_length,
         CheckId::PublishVersion => args.no_publish_version,
         CheckId::TypeScript => args.no_typescript,
+        CheckId::TooManyArgsAllow => args.no_too_many_args,
     }
 }
 
@@ -330,6 +343,118 @@ fn evaluate_publish_versions(entries: &[PublishEntry]) -> CheckOutcome {
     }
 }
 
+/// A forbidden `#[allow(clippy::too_many_arguments)]` attribute found in source.
+struct TooManyArgsFinding {
+    path: String,
+    line: usize,
+    text: String,
+}
+
+/// Pure: does this line declare `#[allow(...)]` (or inner `#![allow(...)]`)
+/// with `clippy::too_many_arguments` among the allowed lints?
+///
+/// Anchors on `trim_start().starts_with("#[" | "#![")`, so prose in doc
+/// comments or string literals (e.g. `let s = "#[allow(...)]";`) cannot match.
+fn line_forbids_too_many_args(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    let rest = trimmed
+        .strip_prefix("#![")
+        .or_else(|| trimmed.strip_prefix("#["));
+    let Some(rest) = rest else {
+        return false;
+    };
+    let rest = rest.trim_start();
+    let Some(rest) = rest.strip_prefix("allow") else {
+        return false;
+    };
+    let rest = rest.trim_start();
+    let Some(rest) = rest.strip_prefix('(') else {
+        return false;
+    };
+    let Some(end) = rest.find(')') else {
+        return false;
+    };
+    rest[..end]
+        .split(',')
+        .any(|tok| tok.trim() == "clippy::too_many_arguments")
+}
+
+/// Pure: scan a file's text for forbidden allows, exempting code inside a
+/// `#[cfg(test)]`-gated `mod` / `fn` / item block.
+///
+/// Test-gating is tracked with a brace-depth stack. Brace counting is naive
+/// (`{`/`}` in string literals can skew it), but Rust source that compiles
+/// balances these lexically in the common case; on mismatch we err toward
+/// flagging (a dropped frame surfaces, rather than hides, a violation).
+fn scan_file_for_too_many_args(path: &str, content: &str) -> Vec<TooManyArgsFinding> {
+    let mut findings = Vec::new();
+    let mut depth: i32 = 0;
+    let mut test_frames: Vec<i32> = Vec::new();
+    let mut pending_cfg_test = false;
+
+    for (idx, line) in content.lines().enumerate() {
+        let trimmed = line.trim_start();
+        let is_attr = trimmed.starts_with("#[") || trimmed.starts_with("#![");
+        let is_cfg_test =
+            trimmed.starts_with("#[cfg(test)]") || trimmed.starts_with("#![cfg(test)]");
+
+        if test_frames.is_empty() && line_forbids_too_many_args(line) {
+            findings.push(TooManyArgsFinding {
+                path: path.to_string(),
+                line: idx + 1,
+                text: line.to_string(),
+            });
+        }
+
+        let opens = line.matches('{').count() as i32;
+        let closes = line.matches('}').count() as i32;
+
+        if pending_cfg_test {
+            if opens > 0 {
+                test_frames.push(depth + 1);
+                pending_cfg_test = false;
+            } else if !is_attr && !trimmed.is_empty() && !trimmed.starts_with("//") {
+                pending_cfg_test = false;
+            }
+        }
+        if is_cfg_test {
+            pending_cfg_test = true;
+        }
+
+        depth += opens - closes;
+
+        while let Some(&frame) = test_frames.last() {
+            if depth < frame {
+                test_frames.pop();
+            } else {
+                break;
+            }
+        }
+    }
+
+    findings
+}
+
+/// Validate that no forbidden allow attributes are present.
+fn evaluate_too_many_args(findings: &[TooManyArgsFinding]) -> CheckOutcome {
+    if findings.is_empty() {
+        return CheckOutcome::Passed {
+            output: String::new(),
+        };
+    }
+    let body = findings
+        .iter()
+        .map(|f| format!("  {}:{}: {}", f.path, f.line, f.text.trim()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    CheckOutcome::Failed {
+        output: format!(
+            "Forbidden `#[allow(clippy::too_many_arguments)]` \
+             (use a Params/Config struct — see CLAUDE.md):\n{body}\n"
+        ),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Imperative Shell — I/O, side effects, orchestration
 // ---------------------------------------------------------------------------
@@ -381,6 +506,12 @@ pub fn run(args: &LintArgs) -> Result<()> {
             CheckResult {
                 name: check.name.to_string(),
                 outcome: run_typescript_check(),
+            }
+        } else if check.id == CheckId::TooManyArgsAllow {
+            let findings = collect_too_many_args()?;
+            CheckResult {
+                name: check.name.to_string(),
+                outcome: evaluate_too_many_args(&findings),
             }
         } else {
             let effective_args: Option<Vec<&str>> = if fix { fix_args(check.id) } else { None };
@@ -522,6 +653,24 @@ fn collect_publish_versions() -> Result<Vec<PublishEntry>> {
     Ok(results)
 }
 
+/// Collect forbidden-allow findings across workspace Rust source.
+fn collect_too_many_args() -> Result<Vec<TooManyArgsFinding>> {
+    let mut findings = Vec::new();
+    let patterns = &[
+        "crates/*/src/**/*.rs",
+        "lib/*/src/**/*.rs",
+        "xtask/src/**/*.rs",
+    ];
+    for pattern in patterns {
+        for entry in glob::glob(pattern).into_iter().flatten().flatten() {
+            let content = fs::read_to_string(&entry)?;
+            let path = entry.display().to_string();
+            findings.extend(scan_file_for_too_many_args(&path, &content));
+        }
+    }
+    Ok(findings)
+}
+
 /// Collect staged .rs files (added/copied/modified) from the git index.
 fn collect_staged_rust_files() -> Result<Vec<String>> {
     let output = cmd!(
@@ -631,6 +780,7 @@ mod tests {
         assert!(!should_skip(CheckId::FileLength, &base));
         assert!(!should_skip(CheckId::PublishVersion, &base));
         assert!(!should_skip(CheckId::TypeScript, &base));
+        assert!(!should_skip(CheckId::TooManyArgsAllow, &base));
     }
 
     #[test]
@@ -818,6 +968,158 @@ mod tests {
         ));
     }
 
+    // --- line_forbids_too_many_args ---
+
+    #[test]
+    fn line_forbids_singleton_outer() {
+        assert!(line_forbids_too_many_args(
+            "#[allow(clippy::too_many_arguments)]"
+        ));
+    }
+
+    #[test]
+    fn line_forbids_singleton_inner() {
+        assert!(line_forbids_too_many_args(
+            "#![allow(clippy::too_many_arguments)]"
+        ));
+    }
+
+    #[test]
+    fn line_forbids_grouped_allow() {
+        assert!(line_forbids_too_many_args(
+            "#[allow(dead_code, clippy::too_many_arguments, unused)]"
+        ));
+    }
+
+    #[test]
+    fn line_forbids_with_whitespace_variants() {
+        assert!(line_forbids_too_many_args(
+            "    #[ allow ( clippy::too_many_arguments ) ]"
+        ));
+    }
+
+    #[test]
+    fn line_does_not_match_doc_comment() {
+        assert!(!line_forbids_too_many_args(
+            "/// Avoid `#[allow(clippy::too_many_arguments)]` — use a Params struct."
+        ));
+        assert!(!line_forbids_too_many_args(
+            "// #[allow(clippy::too_many_arguments)]"
+        ));
+    }
+
+    #[test]
+    fn line_does_not_match_string_literal() {
+        assert!(!line_forbids_too_many_args(
+            "let s = \"#[allow(clippy::too_many_arguments)]\";"
+        ));
+    }
+
+    #[test]
+    fn line_does_not_match_other_allows() {
+        assert!(!line_forbids_too_many_args("#[allow(dead_code)]"));
+        assert!(!line_forbids_too_many_args(
+            "#[allow(clippy::unwrap_used, clippy::expect_used)]"
+        ));
+    }
+
+    // --- scan_file_for_too_many_args ---
+
+    #[test]
+    fn scan_flags_top_level_violation() {
+        let src = "\
+#[allow(clippy::too_many_arguments)]
+fn wide(a: u32, b: u32, c: u32, d: u32, e: u32, f: u32, g: u32, h: u32) {}
+";
+        let findings = scan_file_for_too_many_args("a.rs", src);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].line, 1);
+    }
+
+    #[test]
+    fn scan_exempts_cfg_test_mod() {
+        let src = "\
+#[cfg(test)]
+mod tests {
+    #[allow(clippy::too_many_arguments)]
+    fn helper(a: u32, b: u32, c: u32, d: u32, e: u32, f: u32, g: u32, h: u32) {}
+}
+";
+        let findings = scan_file_for_too_many_args("a.rs", src);
+        assert!(findings.is_empty(), "test-gated allow must be exempt");
+    }
+
+    #[test]
+    fn scan_exempts_cfg_test_mod_with_intervening_attr() {
+        let src = "\
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    #[allow(clippy::too_many_arguments)]
+    fn helper() {}
+}
+";
+        let findings = scan_file_for_too_many_args("a.rs", src);
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn scan_flags_after_test_mod_closes() {
+        let src = "\
+#[cfg(test)]
+mod tests {
+    fn ok() {}
+}
+
+#[allow(clippy::too_many_arguments)]
+fn bad(a: u32, b: u32, c: u32, d: u32, e: u32, f: u32, g: u32, h: u32) {}
+";
+        let findings = scan_file_for_too_many_args("a.rs", src);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].line, 6);
+    }
+
+    #[test]
+    fn scan_does_not_extend_cfg_test_to_unrelated_item() {
+        // `#[cfg(test)]` on a `const` (no braces) must not exempt later code.
+        let src = "\
+#[cfg(test)]
+const MARKER: u32 = 1;
+
+#[allow(clippy::too_many_arguments)]
+fn bad() {}
+";
+        let findings = scan_file_for_too_many_args("a.rs", src);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].line, 4);
+    }
+
+    // --- evaluate_too_many_args ---
+
+    #[test]
+    fn evaluate_empty_passes() {
+        assert!(matches!(
+            evaluate_too_many_args(&[]),
+            CheckOutcome::Passed { .. }
+        ));
+    }
+
+    #[test]
+    fn evaluate_with_findings_fails_with_path_line() {
+        let findings = vec![TooManyArgsFinding {
+            path: "crates/foo/src/lib.rs".to_string(),
+            line: 42,
+            text: "#[allow(clippy::too_many_arguments)]".to_string(),
+        }];
+        match evaluate_too_many_args(&findings) {
+            CheckOutcome::Failed { output } => {
+                assert!(output.contains("crates/foo/src/lib.rs:42"));
+                assert!(output.contains("Params/Config struct"));
+            }
+            _ => panic!("expected Failed"),
+        }
+    }
+
     /// Helper: build a LintArgs with all flags defaulted to false.
     fn default_lint_args() -> LintArgs {
         LintArgs {
@@ -830,6 +1132,7 @@ mod tests {
             no_file_length: false,
             no_publish_version: false,
             no_typescript: false,
+            no_too_many_args: false,
             dynamodb_tests: false,
             fix: false,
             staged_only: false,

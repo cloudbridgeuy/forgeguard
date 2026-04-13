@@ -19,6 +19,7 @@ Checks run in this order:
 | 5 | Rail | `cargo rail unify --check` | yes | `cargo rail unify` |
 | 6 | FileLength | custom: all `.rs` files under `crates/*/src/` must be <= 1000 lines | no | unchanged |
 | 7 | TypeScript | `npx tsc --noEmit` in `infra/control-plane/` | no | unchanged |
+| 8 | TooManyArgsAllow | custom: forbid `#[allow(clippy::too_many_arguments)]` across `crates/*/src`, `lib/*/src`, `xtask/src` — test-gated blocks exempt. See [params-struct-rule.md](./params-struct-rule.md) | no | unchanged |
 
 Optional checks are gracefully skipped if the tool is not installed.
 
@@ -35,6 +36,7 @@ Optional checks are gracefully skipped if the tool is not installed.
 | `--no-rail` | Skip cargo-rail unify |
 | `--no-file-length` | Skip file length check |
 | `--no-typescript` | Skip TypeScript compilation check |
+| `--no-too-many-args` | Skip the `#[allow(clippy::too_many_arguments)]` ban check |
 | `--install-hooks` | Install git pre-commit hook |
 | `--uninstall-hooks` | Remove git pre-commit hook |
 | `--hooks-status` | Show hook installation status |
