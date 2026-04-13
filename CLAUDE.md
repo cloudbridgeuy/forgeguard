@@ -167,6 +167,7 @@ Each crate's `README.md` describes what it owns and its pure/I/O classification.
 | [Control Plane](./.claude/context/control-plane.md)                | CP scaffold, proxy-config endpoint, OrgStore trait, auth, ETag, testing |
 | [Infra: Control Plane](./.claude/context/infra-control-plane.md)   | CDK project, 1Password integration, DynamoDB Global Table, xtask infra  |
 | [Cluster Mode](./.claude/context/cluster.md)                       | TieredCache, Redis wiring, config, health stats, future slices          |
+| [Dependency Constraints](./.claude/context/dependency-constraints.md) | Pingora version pins (rand, prometheus), jsonwebtoken crypto, reqwest TLS |
 | [Design Documents](./.claude/context/)                             | Full ForgeGuard architecture and technical specifications               |
 
 ### Local-Only Documents (MUST NOT commit)
