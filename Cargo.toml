@@ -111,7 +111,7 @@ jsonwebtoken = "9.3"
 
 # Lambda
 lambda_http = "0.14"
-lambda_runtime = "0.13"
+lambda_runtime = "1.1"
 
 # Caching
 lru = "0.12"
