@@ -55,15 +55,15 @@ mod tests {
     use super::*;
 
     fn make_config() -> PipelineConfig {
-        PipelineConfig::new(
-            RouteMatcher::new(&[]).unwrap(),
-            PublicRouteMatcher::new(&[]).unwrap(),
-            FlagConfig::default(),
-            ProjectId::new("test").unwrap(),
-            DefaultPolicy::Deny,
-            false,
-            vec![],
-        )
+        PipelineConfig::new(crate::PipelineConfigParams {
+            route_matcher: RouteMatcher::new(&[]).unwrap(),
+            public_route_matcher: PublicRouteMatcher::new(&[]).unwrap(),
+            flag_config: FlagConfig::default(),
+            project_id: ProjectId::new("test").unwrap(),
+            default_policy: DefaultPolicy::Deny,
+            debug_mode: false,
+            auth_providers: vec![],
+        })
     }
 
     #[test]

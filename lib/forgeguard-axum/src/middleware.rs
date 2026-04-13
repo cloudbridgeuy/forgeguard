@@ -140,7 +140,7 @@ mod tests {
     use forgeguard_http::{
         DefaultPolicy, HttpMethod, PublicAuthMode, PublicRoute, PublicRouteMatcher, RouteMatcher,
     };
-    use forgeguard_proxy_core::PipelineConfig;
+    use forgeguard_proxy_core::{PipelineConfig, PipelineConfigParams};
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
@@ -153,15 +153,15 @@ mod tests {
     ) -> ForgeGuard {
         let route_matcher = RouteMatcher::new(&[]).unwrap();
         let public_route_matcher = PublicRouteMatcher::new(public_routes).unwrap();
-        let config = PipelineConfig::new(
+        let config = PipelineConfig::new(PipelineConfigParams {
             route_matcher,
             public_route_matcher,
-            FlagConfig::default(),
-            ProjectId::new("test").unwrap(),
+            flag_config: FlagConfig::default(),
+            project_id: ProjectId::new("test").unwrap(),
             default_policy,
             debug_mode,
-            vec![],
-        );
+            auth_providers: vec![],
+        });
         let chain = IdentityChain::new(vec![]);
         let engine = Arc::new(StaticPolicyEngine::new(PolicyDecision::Allow));
         ForgeGuard::new(config, chain, engine)

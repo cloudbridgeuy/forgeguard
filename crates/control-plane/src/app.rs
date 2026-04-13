@@ -18,7 +18,7 @@ use forgeguard_core::{FlagConfig, ProjectId};
 use forgeguard_http::{
     DefaultPolicy, PublicAuthMode, PublicRoute, PublicRouteMatcher, RouteMatcher,
 };
-use forgeguard_proxy_core::PipelineConfig;
+use forgeguard_proxy_core::{PipelineConfig, PipelineConfigParams};
 use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 
@@ -93,15 +93,15 @@ fn build_forgeguard() -> color_eyre::Result<Arc<ForgeGuard>> {
         ),
     ];
     let public_route_matcher = PublicRouteMatcher::new(&public_routes)?;
-    let pipeline_config = PipelineConfig::new(
+    let pipeline_config = PipelineConfig::new(PipelineConfigParams {
         route_matcher,
         public_route_matcher,
-        FlagConfig::default(),
-        ProjectId::new("forgeguard-cp")?,
-        DefaultPolicy::Passthrough,
-        false,
-        vec![],
-    );
+        flag_config: FlagConfig::default(),
+        project_id: ProjectId::new("forgeguard-cp")?,
+        default_policy: DefaultPolicy::Passthrough,
+        debug_mode: false,
+        auth_providers: vec![],
+    });
     let chain = IdentityChain::new(vec![]);
     let engine: Arc<dyn forgeguard_authz_core::PolicyEngine> =
         Arc::new(StaticPolicyEngine::new(PolicyDecision::Allow));

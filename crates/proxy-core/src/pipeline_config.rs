@@ -22,26 +22,28 @@ pub struct PipelineConfig {
     auth_providers: Vec<String>,
 }
 
+/// Parameters for constructing a [`PipelineConfig`].
+pub struct PipelineConfigParams {
+    pub route_matcher: RouteMatcher,
+    pub public_route_matcher: PublicRouteMatcher,
+    pub flag_config: FlagConfig,
+    pub project_id: ProjectId,
+    pub default_policy: DefaultPolicy,
+    pub debug_mode: bool,
+    pub auth_providers: Vec<String>,
+}
+
 impl PipelineConfig {
     /// Construct a new `PipelineConfig` from its constituent parts.
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        route_matcher: RouteMatcher,
-        public_route_matcher: PublicRouteMatcher,
-        flag_config: FlagConfig,
-        project_id: ProjectId,
-        default_policy: DefaultPolicy,
-        debug_mode: bool,
-        auth_providers: Vec<String>,
-    ) -> Self {
+    pub fn new(params: PipelineConfigParams) -> Self {
         Self {
-            route_matcher,
-            public_route_matcher,
-            flag_config,
-            project_id,
-            default_policy,
-            debug_mode,
-            auth_providers,
+            route_matcher: params.route_matcher,
+            public_route_matcher: params.public_route_matcher,
+            flag_config: params.flag_config,
+            project_id: params.project_id,
+            default_policy: params.default_policy,
+            debug_mode: params.debug_mode,
+            auth_providers: params.auth_providers,
         }
     }
 
@@ -99,15 +101,15 @@ mod tests {
         let flag_config = FlagConfig::default();
         let project_id = ProjectId::new("test-project").unwrap();
 
-        PipelineConfig::new(
+        PipelineConfig::new(PipelineConfigParams {
             route_matcher,
             public_route_matcher,
             flag_config,
             project_id,
             default_policy,
             debug_mode,
-            vec!["jwt".to_string()],
-        )
+            auth_providers: vec!["jwt".to_string()],
+        })
     }
 
     #[test]
@@ -137,15 +139,15 @@ mod tests {
         )];
         let route_matcher = RouteMatcher::new(&routes).unwrap();
         let public_route_matcher = PublicRouteMatcher::new(&[]).unwrap();
-        let config = PipelineConfig::new(
+        let config = PipelineConfig::new(PipelineConfigParams {
             route_matcher,
             public_route_matcher,
-            FlagConfig::default(),
-            ProjectId::new("test-project").unwrap(),
-            DefaultPolicy::Deny,
-            false,
-            vec![],
-        );
+            flag_config: FlagConfig::default(),
+            project_id: ProjectId::new("test-project").unwrap(),
+            default_policy: DefaultPolicy::Deny,
+            debug_mode: false,
+            auth_providers: vec![],
+        });
 
         let matched = config.route_matcher().match_request("GET", "/health");
         assert!(matched.is_some());
@@ -162,15 +164,15 @@ mod tests {
         )];
         let route_matcher = RouteMatcher::new(&[]).unwrap();
         let public_route_matcher = PublicRouteMatcher::new(&public_routes).unwrap();
-        let config = PipelineConfig::new(
+        let config = PipelineConfig::new(PipelineConfigParams {
             route_matcher,
             public_route_matcher,
-            FlagConfig::default(),
-            ProjectId::new("test-project").unwrap(),
-            DefaultPolicy::Deny,
-            false,
-            vec![],
-        );
+            flag_config: FlagConfig::default(),
+            project_id: ProjectId::new("test-project").unwrap(),
+            default_policy: DefaultPolicy::Deny,
+            debug_mode: false,
+            auth_providers: vec![],
+        });
 
         let result = config.public_route_matcher().check("GET", "/public");
         assert!(result.is_public());
@@ -180,15 +182,15 @@ mod tests {
     fn multiple_auth_providers() {
         let route_matcher = RouteMatcher::new(&[]).unwrap();
         let public_route_matcher = PublicRouteMatcher::new(&[]).unwrap();
-        let config = PipelineConfig::new(
+        let config = PipelineConfig::new(PipelineConfigParams {
             route_matcher,
             public_route_matcher,
-            FlagConfig::default(),
-            ProjectId::new("test-project").unwrap(),
-            DefaultPolicy::Deny,
-            false,
-            vec!["jwt".to_string(), "api-key".to_string()],
-        );
+            flag_config: FlagConfig::default(),
+            project_id: ProjectId::new("test-project").unwrap(),
+            default_policy: DefaultPolicy::Deny,
+            debug_mode: false,
+            auth_providers: vec!["jwt".to_string(), "api-key".to_string()],
+        });
 
         assert_eq!(config.auth_providers().len(), 2);
         assert_eq!(config.auth_providers()[0], "jwt");
@@ -197,15 +199,15 @@ mod tests {
 
     #[test]
     fn empty_auth_providers() {
-        let config = PipelineConfig::new(
-            RouteMatcher::new(&[]).unwrap(),
-            PublicRouteMatcher::new(&[]).unwrap(),
-            FlagConfig::default(),
-            ProjectId::new("test-project").unwrap(),
-            DefaultPolicy::Passthrough,
-            false,
-            vec![],
-        );
+        let config = PipelineConfig::new(PipelineConfigParams {
+            route_matcher: RouteMatcher::new(&[]).unwrap(),
+            public_route_matcher: PublicRouteMatcher::new(&[]).unwrap(),
+            flag_config: FlagConfig::default(),
+            project_id: ProjectId::new("test-project").unwrap(),
+            default_policy: DefaultPolicy::Passthrough,
+            debug_mode: false,
+            auth_providers: vec![],
+        });
 
         assert!(config.auth_providers().is_empty());
     }

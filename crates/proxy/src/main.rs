@@ -18,7 +18,7 @@ use forgeguard_authz::VpPolicyEngine;
 use forgeguard_http::{
     apply_overrides, load_config, ConfigOverrides, PublicRouteMatcher, RouteMatcher,
 };
-use forgeguard_proxy_core::PipelineConfig;
+use forgeguard_proxy_core::{PipelineConfig, PipelineConfigParams};
 
 use crate::cli::{App, Commands};
 use crate::proxy::{ForgeGuardProxy, ProxyParams};
@@ -100,15 +100,15 @@ fn run(app: App) -> color_eyre::Result<()> {
         ),
     }
 
-    let pipeline_config = PipelineConfig::new(
+    let pipeline_config = PipelineConfig::new(PipelineConfigParams {
         route_matcher,
-        public_matcher,
-        config.features().clone(),
-        config.project_id().clone(),
-        config.default_policy(),
-        opts.debug,
-        config.auth().chain_order().to_vec(),
-    );
+        public_route_matcher: public_matcher,
+        flag_config: config.features().clone(),
+        project_id: config.project_id().clone(),
+        default_policy: config.default_policy(),
+        debug_mode: opts.debug,
+        auth_providers: config.auth().chain_order().to_vec(),
+    });
 
     let signing = if let Some(signing_config) = config.signing() {
         let pem = std::fs::read_to_string(signing_config.key_path()).map_err(|e| {

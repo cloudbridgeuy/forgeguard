@@ -374,15 +374,15 @@ mod tests {
     ) -> PipelineConfig {
         let route_matcher = RouteMatcher::new(routes).unwrap();
         let public_matcher = PublicRouteMatcher::new(public_routes).unwrap();
-        PipelineConfig::new(
+        PipelineConfig::new(crate::PipelineConfigParams {
             route_matcher,
-            public_matcher,
-            FlagConfig::default(),
-            ProjectId::new("test-project").unwrap(),
+            public_route_matcher: public_matcher,
+            flag_config: FlagConfig::default(),
+            project_id: ProjectId::new("test-project").unwrap(),
             default_policy,
             debug_mode,
-            vec!["jwt".to_string()],
-        )
+            auth_providers: vec!["jwt".to_string()],
+        })
     }
 
     fn make_config_with_flags(
@@ -393,15 +393,15 @@ mod tests {
     ) -> PipelineConfig {
         let route_matcher = RouteMatcher::new(routes).unwrap();
         let public_matcher = PublicRouteMatcher::new(public_routes).unwrap();
-        PipelineConfig::new(
+        PipelineConfig::new(crate::PipelineConfigParams {
             route_matcher,
-            public_matcher,
+            public_route_matcher: public_matcher,
             flag_config,
-            ProjectId::new("test-project").unwrap(),
+            project_id: ProjectId::new("test-project").unwrap(),
             default_policy,
-            false,
-            vec!["jwt".to_string()],
-        )
+            debug_mode: false,
+            auth_providers: vec!["jwt".to_string()],
+        })
     }
 
     fn allow_engine() -> StaticPolicyEngine {
