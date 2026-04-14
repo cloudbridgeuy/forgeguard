@@ -78,6 +78,11 @@ pub(crate) fn build_vp_stack_name(env: ForgeguardEnv) -> String {
     format!("forgeguard-{env}-vp")
 }
 
+/// Build the Cognito CloudFormation stack name for a given environment.
+pub(crate) fn build_cognito_stack_name(env: ForgeguardEnv) -> String {
+    format!("forgeguard-{env}-cognito")
+}
+
 /// Build the 1Password vault name for a given environment.
 pub(crate) fn build_vault_name(env: ForgeguardEnv) -> String {
     format!("forgeguard-{env}")
@@ -295,6 +300,24 @@ mod tests {
     #[test]
     fn build_vp_stack_name_dev() {
         assert_eq!(build_vp_stack_name(ForgeguardEnv::Dev), "forgeguard-dev-vp");
+    }
+
+    // --- build_cognito_stack_name ---
+
+    #[test]
+    fn build_cognito_stack_name_prod() {
+        assert_eq!(
+            build_cognito_stack_name(ForgeguardEnv::Prod),
+            "forgeguard-prod-cognito"
+        );
+    }
+
+    #[test]
+    fn build_cognito_stack_name_dev() {
+        assert_eq!(
+            build_cognito_stack_name(ForgeguardEnv::Dev),
+            "forgeguard-dev-cognito"
+        );
     }
 
     // --- build_vault_name ---

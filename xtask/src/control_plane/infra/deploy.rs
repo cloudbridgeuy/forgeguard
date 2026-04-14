@@ -22,7 +22,10 @@ pub(crate) async fn run(
     let stack_name = op_core::build_stack_name(env);
     let lambda_stack_name = op_core::build_lambda_stack_name(env);
     let vp_stack_name = op_core::build_vp_stack_name(env);
-    println!("Deploying {stack_name}, {lambda_stack_name}, {vp_stack_name}...");
+    let cognito_stack_name = op_core::build_cognito_stack_name(env);
+    println!(
+        "Deploying {stack_name}, {lambda_stack_name}, {cognito_stack_name}, {vp_stack_name}..."
+    );
     op::run_cdk_with_op(
         ".env",
         env,
@@ -50,6 +53,14 @@ pub(crate) async fn run(
     let vp_outputs = op::read_stack_outputs(&cf_client, &vp_stack_name).await?;
     let policy_store_id = op::find_stack_output(&vp_outputs, "PolicyStoreId")?;
 
+    // Cognito outputs
+    let cognito_outputs = op::read_stack_outputs(&cf_client, &cognito_stack_name).await?;
+    let user_pool_id = op::find_stack_output(&cognito_outputs, "UserPoolId")?;
+    let user_pool_arn = op::find_stack_output(&cognito_outputs, "UserPoolArn")?;
+    let app_client_id = op::find_stack_output(&cognito_outputs, "AppClientId")?;
+    let jwks_url = op::find_stack_output(&cognito_outputs, "JwksUrl")?;
+    let issuer = op::find_stack_output(&cognito_outputs, "Issuer")?;
+
     // 5. Store outputs in 1Password
     let vault = op_core::build_vault_name(env);
     op::store_in_op(&vault, "dynamodb", "table-name", &table_name, op_account)?;
@@ -65,6 +76,23 @@ pub(crate) async fn run(
         &policy_store_id,
         op_account,
     )?;
+    op::store_in_op(&vault, "cognito", "user-pool-id", &user_pool_id, op_account)?;
+    op::store_in_op(
+        &vault,
+        "cognito",
+        "user-pool-arn",
+        &user_pool_arn,
+        op_account,
+    )?;
+    op::store_in_op(
+        &vault,
+        "cognito",
+        "app-client-id",
+        &app_client_id,
+        op_account,
+    )?;
+    op::store_in_op(&vault, "cognito", "jwks-url", &jwks_url, op_account)?;
+    op::store_in_op(&vault, "cognito", "issuer", &issuer, op_account)?;
 
     println!("Deploy complete.");
     println!("  Table name:    {table_name}");
@@ -74,6 +102,11 @@ pub(crate) async fn run(
     println!("  Saga trigger:  {saga_arn}");
     println!("  DLQ ARN:       {dlq_arn}");
     println!("  Policy store:  {policy_store_id}");
+    println!("  User pool ID:  {user_pool_id}");
+    println!("  User pool ARN: {user_pool_arn}");
+    println!("  App client ID: {app_client_id}");
+    println!("  JWKS URL:      {jwks_url}");
+    println!("  Issuer:        {issuer}");
 
     Ok(())
 }
