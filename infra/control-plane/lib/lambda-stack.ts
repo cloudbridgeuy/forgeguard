@@ -13,13 +13,15 @@ import { Construct } from "constructs";
 interface LambdaStackProps extends cdk.StackProps {
   environment: string;
   table: dynamodb.ITableV2;
+  userPoolId: string;
+  appClientId: string;
 }
 
 export class LambdaStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: LambdaStackProps) {
     super(scope, id, props);
 
-    const { environment, table } = props;
+    const { environment, table, userPoolId, appClientId } = props;
     const placeholderCode = lambda.Code.fromAsset(
       path.join(__dirname, "../assets/placeholder"),
     );
@@ -36,6 +38,9 @@ export class LambdaStack extends cdk.Stack {
       timeout: cdk.Duration.seconds(30),
       environment: {
         TABLE_NAME: table.tableName,
+        FORGEGUARD_CP_JWKS_URL: `https://cognito-idp.${this.region}.amazonaws.com/${userPoolId}/.well-known/jwks.json`,
+        FORGEGUARD_CP_ISSUER: `https://cognito-idp.${this.region}.amazonaws.com/${userPoolId}`,
+        FORGEGUARD_CP_AUDIENCE: appClientId,
       },
     });
 
