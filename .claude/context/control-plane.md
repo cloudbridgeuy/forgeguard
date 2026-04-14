@@ -96,22 +96,37 @@ JSON file mapping `org_id` to its org entry. Each entry has a `name` (display na
 
 Auth is handled by the `forgeguard-axum` middleware, which runs the ForgeGuard auth pipeline (`evaluate_pipeline` from proxy-core) before requests reach handlers.
 
-In dev mode, the control plane uses `DefaultPolicy::Passthrough` with an empty `IdentityChain` and `StaticPolicyEngine(Allow)` -- all requests pass through without auth enforcement.
+**Two modes** controlled by the `--jwks-url` / `FORGEGUARD_CP_JWKS_URL` flag:
 
-**Not yet implemented:** Cognito JWT auth (#41) for production auth.
+| Mode | When | Behavior |
+|------|------|----------|
+| Dev (no auth) | `--jwks-url` omitted | All routes Anonymous, empty `IdentityChain`, `StaticPolicyEngine(Allow)` |
+| Auth enabled | `--jwks-url` + `--issuer` provided | Only `/health` is Anonymous, all API routes require a valid Cognito JWT via `CognitoJwtResolver` |
+
+When auth is enabled, the `IdentityChain` contains a `CognitoJwtResolver` constructed from the JWKS URL and issuer. Claims mapping: `sub` → user_id, `custom:org_id` → tenant_id, `cognito:groups` → groups. The optional `--audience` flag enables audience claim validation against the Cognito app client ID.
+
+The `AuthConfig` struct (`app.rs`) validates the JWKS URL at construction time (Parse Don't Validate) and is `pub` so `fg-lambdas` can import it. The Lambda binary reads the same config from `FORGEGUARD_CP_JWKS_URL`, `FORGEGUARD_CP_ISSUER`, `FORGEGUARD_CP_AUDIENCE` env vars (injected by the CDK Lambda stack from Cognito stack outputs).
+
+**Not yet implemented:** VP authorization (#41 V4), Ed25519 machine auth (#41 V3).
 
 ## Testing
 
 - 8 store tests (`store.rs`) -- parsing, validation, ETag determinism, multiple orgs, unknown fields
-- 4 handler integration tests (`handlers.rs`) -- full HTTP pipeline via `tower::ServiceExt::oneshot` with `forgeguard-axum` middleware layer
+- 14 handler integration tests (`handlers.rs`) -- full HTTP pipeline via `tower::ServiceExt::oneshot` with `forgeguard-axum` middleware layer, auth via `StaticApiKeyResolver` (`x-api-key: test-key`)
 
 Store tests use `build_org_store()` with inline JSON to build `InMemoryOrgStore` instances. Tests that call `store.get()` use `#[tokio::test]` since the store is async.
+
+Handler tests use `StaticApiKeyResolver` with a known test key. All test requests include `x-api-key: test-key`. The `unauthenticated_request_returns_401` test verifies the auth boundary.
 
 ## Running
 
 ```sh
-# Quick start with test config (in-memory store)
+# Quick start with test config, no auth (dev mode)
 cargo run -p forgeguard_control_plane -- --config examples/control-plane/orgs.test.json
+
+# With Cognito auth (requires deployed Cognito stack)
+cargo run -p forgeguard_control_plane -- --config examples/control-plane/orgs.test.json \
+  --jwks-url "$JWKS_URL" --issuer "$ISSUER" --audience "$APP_CLIENT_ID"
 
 # DynamoDB store
 cargo run -p forgeguard_control_plane -- --store dynamodb --dynamodb-table forgeguard-orgs
@@ -126,6 +141,9 @@ cargo run -p forgeguard_control_plane -- --store dynamodb --dynamodb-table forge
 | `--dynamodb-table` | `FORGEGUARD_CP_DYNAMODB_TABLE` | DynamoDB table name (required when `--store=dynamodb`) |
 | `--listen` | `FORGEGUARD_CP_LISTEN` | Listen address (default: `127.0.0.1:3001`) |
 | `--log-level` | `FORGEGUARD_CP_LOG_LEVEL` | Log level filter (default: `info`) |
+| `--jwks-url` | `FORGEGUARD_CP_JWKS_URL` | JWKS URL for Cognito JWT auth. Omit for dev mode (no auth) |
+| `--issuer` | `FORGEGUARD_CP_ISSUER` | JWT issuer URL. Required when `--jwks-url` is set |
+| `--audience` | `FORGEGUARD_CP_AUDIENCE` | JWT audience (Cognito app client ID). Optional |
 
 See `crates/control-plane/README.md` for full usage instructions and curl examples.
 
@@ -136,7 +154,7 @@ crates/control-plane/src/
   lib.rs           -- library root: pub mod app + internal modules
   app.rs           -- public router builders: dynamodb_router(), memory_router()
   main.rs          -- binary entry point: CLI parsing, delegates to app:: (shell)
-  cli.rs           -- clap CLI: --store, --config, --dynamodb-table, --listen, --log-level
+  cli.rs           -- clap CLI: --store, --config, --dynamodb-table, --listen, --log-level, --jwks-url, --issuer, --audience
   config.rs        -- OrgConfig (versioned), RouteEntry, PublicRouteEntry (serde DTOs)
   store.rs         -- OrgStore trait (async), InMemoryOrgStore, AnyOrgStore, OrgRecord, build/load/etag
   dynamo_store.rs  -- DynamoOrgStore (DynamoDB-backed OrgStore implementation)
@@ -154,5 +172,7 @@ The crate is both lib+bin. `app.rs` exposes `dynamodb_router()` and `memory_rout
 ## What's NOT Here Yet
 
 - CORS middleware (no browser clients -- deferred to #40 dashboard)
-- Cognito JWT auth for production (deferred to #41)
+- Ed25519 machine authentication (#41 V3)
+- VP authorization with PrincipalKind routing (#41 V4)
+- Key lifecycle endpoints for Ed25519 (#41 V2)
 - Hot-reload of config file

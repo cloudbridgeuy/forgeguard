@@ -80,6 +80,22 @@ All flags use clap's `env` attribute — precedence is: CLI flag > env var > def
 - **Tags:** `project=forgeguard`, `environment={env}`
 - **Outputs:** TableName, TableArn
 
+### Cognito User Pool (`forgeguard-{env}-cognito`)
+
+- **Pool name:** `forgeguard-{env}-dashboard-users`
+- **Self-signup:** disabled (admin-created users only)
+- **Sign-in:** username or email
+- **MFA:** optional (TOTP only, no SMS)
+- **Password policy:** 12+ chars, upper, lower, digit, symbol
+- **Custom attribute:** `org_id` (immutable)
+- **Groups:** `admin` (precedence 0), `owner` (10), `member` (20)
+- **App client:** `forgeguard-{env}-dashboard` — no secret, SRP auth, PKCE OAuth
+- **Domain:** `forgeguard-{env}.auth.{region}.amazoncognito.com`
+- **Outputs:** UserPoolId, UserPoolArn, AppClientId, JwksUrl, Issuer
+- **1Password items:** `cognito/user-pool-id`, `cognito/user-pool-arn`, `cognito/app-client-id`, `cognito/jwks-url`, `cognito/issuer`
+
+The Lambda stack reads Cognito outputs as cross-stack references and injects them as env vars (`FORGEGUARD_CP_JWKS_URL`, `FORGEGUARD_CP_ISSUER`, `FORGEGUARD_CP_AUDIENCE`) into the control-plane function.
+
 ## FCIS Split (xtask)
 
 | Module | Role | Pure? |
