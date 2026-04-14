@@ -217,15 +217,17 @@ fn not_found() -> Response {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use axum::Router;
+    use forgeguard_authn_core::static_api_key::{ApiKeyEntry, StaticApiKeyResolver};
     use forgeguard_authn_core::IdentityChain;
     use forgeguard_authz_core::{PolicyDecision, PolicyEngine, StaticPolicyEngine};
     use forgeguard_axum::{forgeguard_layer, ForgeGuard};
-    use forgeguard_core::{FlagConfig, ProjectId};
+    use forgeguard_core::{FlagConfig, GroupName, ProjectId, TenantId, UserId};
     use forgeguard_http::{
         DefaultPolicy, PublicAuthMode, PublicRoute, PublicRouteMatcher, RouteMatcher,
     };
@@ -234,6 +236,8 @@ mod tests {
     use tower::ServiceExt;
 
     use crate::store::{build_org_store, InMemoryOrgStore};
+
+    const TEST_API_KEY: &str = "test-key";
 
     fn build_test_store() -> Arc<InMemoryOrgStore> {
         let json = r#"{
@@ -257,43 +261,11 @@ mod tests {
 
     fn test_app(store: Arc<InMemoryOrgStore>) -> Router {
         let route_matcher = RouteMatcher::new(&[]).unwrap();
-        let public_routes = vec![
-            PublicRoute::new(
-                "GET".parse().unwrap(),
-                "/health".to_string(),
-                PublicAuthMode::Anonymous,
-            ),
-            PublicRoute::new(
-                "POST".parse().unwrap(),
-                "/api/v1/organizations".to_string(),
-                PublicAuthMode::Anonymous,
-            ),
-            PublicRoute::new(
-                "GET".parse().unwrap(),
-                "/api/v1/organizations".to_string(),
-                PublicAuthMode::Anonymous,
-            ),
-            PublicRoute::new(
-                "GET".parse().unwrap(),
-                "/api/v1/organizations/{org_id}".to_string(),
-                PublicAuthMode::Anonymous,
-            ),
-            PublicRoute::new(
-                "PUT".parse().unwrap(),
-                "/api/v1/organizations/{org_id}".to_string(),
-                PublicAuthMode::Anonymous,
-            ),
-            PublicRoute::new(
-                "DELETE".parse().unwrap(),
-                "/api/v1/organizations/{org_id}".to_string(),
-                PublicAuthMode::Anonymous,
-            ),
-            PublicRoute::new(
-                "GET".parse().unwrap(),
-                "/api/v1/organizations/{org_id}/proxy-config".to_string(),
-                PublicAuthMode::Anonymous,
-            ),
-        ];
+        let public_routes = vec![PublicRoute::new(
+            "GET".parse().unwrap(),
+            "/health".to_string(),
+            PublicAuthMode::Anonymous,
+        )];
         let public_route_matcher = PublicRouteMatcher::new(&public_routes).unwrap();
         let config = PipelineConfig::new(PipelineConfigParams {
             route_matcher,
@@ -302,9 +274,20 @@ mod tests {
             project_id: ProjectId::new("test").unwrap(),
             default_policy: DefaultPolicy::Passthrough,
             debug_mode: false,
-            auth_providers: vec![],
+            auth_providers: vec!["api-key".to_string()],
         });
-        let chain = IdentityChain::new(vec![]);
+
+        let mut keys = HashMap::new();
+        keys.insert(
+            TEST_API_KEY.to_owned(),
+            ApiKeyEntry::new(
+                UserId::new("test-user").unwrap(),
+                Some(TenantId::new("test-org").unwrap()),
+                vec![GroupName::new("admin").unwrap()],
+            ),
+        );
+        let resolver = StaticApiKeyResolver::new(keys);
+        let chain = IdentityChain::new(vec![Arc::new(resolver)]);
         let engine: Arc<dyn PolicyEngine> =
             Arc::new(StaticPolicyEngine::new(PolicyDecision::Allow));
         let fg = Arc::new(ForgeGuard::new(config, chain, engine));
@@ -330,12 +313,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unauthenticated_request_returns_401() {
+        let store = build_test_store();
+        let app = test_app(store);
+
+        let request = Request::builder()
+            .uri("/api/v1/organizations")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
     async fn returns_200_for_valid_org() {
         let store = build_test_store();
         let app = test_app(store);
 
         let request = Request::builder()
             .uri("/api/v1/organizations/org-acme/proxy-config")
+            .header("x-api-key", TEST_API_KEY)
             .body(Body::empty())
             .unwrap();
 
@@ -359,6 +357,7 @@ mod tests {
 
         let request = Request::builder()
             .uri("/api/v1/organizations/org-unknown/proxy-config")
+            .header("x-api-key", TEST_API_KEY)
             .body(Body::empty())
             .unwrap();
 
@@ -374,6 +373,7 @@ mod tests {
         let app = test_app(Arc::clone(&store));
         let request = Request::builder()
             .uri("/api/v1/organizations/org-acme/proxy-config")
+            .header("x-api-key", TEST_API_KEY)
             .body(Body::empty())
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
@@ -390,6 +390,7 @@ mod tests {
         let app = test_app(store);
         let request = Request::builder()
             .uri("/api/v1/organizations/org-acme/proxy-config")
+            .header("x-api-key", TEST_API_KEY)
             .header("if-none-match", &etag)
             .body(Body::empty())
             .unwrap();
@@ -404,6 +405,7 @@ mod tests {
 
         let request = Request::builder()
             .uri("/api/v1/organizations/org-acme/proxy-config")
+            .header("x-api-key", TEST_API_KEY)
             .header("if-none-match", "\"stale\"")
             .body(Body::empty())
             .unwrap();
@@ -451,6 +453,7 @@ mod tests {
             .method("POST")
             .uri("/api/v1/organizations")
             .header("content-type", "application/json")
+            .header("x-api-key", TEST_API_KEY)
             .body(Body::from(body))
             .unwrap();
 
@@ -467,6 +470,7 @@ mod tests {
         let app = test_app(store);
         let request = Request::builder()
             .uri("/api/v1/organizations/org-new")
+            .header("x-api-key", TEST_API_KEY)
             .body(Body::empty())
             .unwrap();
 
@@ -490,6 +494,7 @@ mod tests {
             .method("POST")
             .uri("/api/v1/organizations")
             .header("content-type", "application/json")
+            .header("x-api-key", TEST_API_KEY)
             .body(Body::from(body))
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
@@ -502,6 +507,7 @@ mod tests {
             .method("POST")
             .uri("/api/v1/organizations")
             .header("content-type", "application/json")
+            .header("x-api-key", TEST_API_KEY)
             .body(Body::from(body))
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
@@ -518,6 +524,7 @@ mod tests {
             .method("POST")
             .uri("/api/v1/organizations")
             .header("content-type", "application/json")
+            .header("x-api-key", TEST_API_KEY)
             .body(Body::from(body))
             .unwrap();
 
@@ -532,6 +539,7 @@ mod tests {
 
         let request = Request::builder()
             .uri("/api/v1/organizations/org-nope")
+            .header("x-api-key", TEST_API_KEY)
             .body(Body::empty())
             .unwrap();
 
@@ -549,6 +557,7 @@ mod tests {
         let app = test_app(Arc::clone(&store));
         let request = Request::builder()
             .uri("/api/v1/organizations")
+            .header("x-api-key", TEST_API_KEY)
             .body(Body::empty())
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
@@ -564,6 +573,7 @@ mod tests {
             .method("POST")
             .uri("/api/v1/organizations")
             .header("content-type", "application/json")
+            .header("x-api-key", TEST_API_KEY)
             .body(Body::from(body))
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
@@ -573,6 +583,7 @@ mod tests {
         let app = test_app(store);
         let request = Request::builder()
             .uri("/api/v1/organizations")
+            .header("x-api-key", TEST_API_KEY)
             .body(Body::empty())
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
@@ -597,6 +608,7 @@ mod tests {
                 .method("POST")
                 .uri("/api/v1/organizations")
                 .header("content-type", "application/json")
+                .header("x-api-key", TEST_API_KEY)
                 .body(Body::from(body))
                 .unwrap();
             let response = app.oneshot(request).await.unwrap();
@@ -607,6 +619,7 @@ mod tests {
         let app = test_app(store);
         let request = Request::builder()
             .uri("/api/v1/organizations?limit=2")
+            .header("x-api-key", TEST_API_KEY)
             .body(Body::empty())
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
@@ -629,6 +642,7 @@ mod tests {
             .method("POST")
             .uri("/api/v1/organizations")
             .header("content-type", "application/json")
+            .header("x-api-key", TEST_API_KEY)
             .body(Body::from(body))
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
@@ -641,6 +655,7 @@ mod tests {
             .method("PUT")
             .uri("/api/v1/organizations/org-upd")
             .header("content-type", "application/json")
+            .header("x-api-key", TEST_API_KEY)
             .body(Body::from(body))
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
@@ -653,6 +668,7 @@ mod tests {
         let app = test_app(store);
         let request = Request::builder()
             .uri("/api/v1/organizations/org-upd")
+            .header("x-api-key", TEST_API_KEY)
             .body(Body::empty())
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
@@ -673,6 +689,7 @@ mod tests {
             .method("POST")
             .uri("/api/v1/organizations")
             .header("content-type", "application/json")
+            .header("x-api-key", TEST_API_KEY)
             .body(Body::from(body))
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
@@ -693,6 +710,7 @@ mod tests {
             .method("PUT")
             .uri("/api/v1/organizations/org-cfg")
             .header("content-type", "application/json")
+            .header("x-api-key", TEST_API_KEY)
             .body(Body::from(body))
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
@@ -702,6 +720,7 @@ mod tests {
         let app = test_app(store);
         let request = Request::builder()
             .uri("/api/v1/organizations/org-cfg/proxy-config")
+            .header("x-api-key", TEST_API_KEY)
             .body(Body::empty())
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
@@ -722,6 +741,7 @@ mod tests {
             .method("PUT")
             .uri("/api/v1/organizations/org-unknown")
             .header("content-type", "application/json")
+            .header("x-api-key", TEST_API_KEY)
             .body(Body::from(body))
             .unwrap();
 
@@ -742,6 +762,7 @@ mod tests {
             .method("POST")
             .uri("/api/v1/organizations")
             .header("content-type", "application/json")
+            .header("x-api-key", TEST_API_KEY)
             .body(Body::from(body))
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
@@ -752,6 +773,7 @@ mod tests {
         let request = Request::builder()
             .method("DELETE")
             .uri("/api/v1/organizations/org-del")
+            .header("x-api-key", TEST_API_KEY)
             .body(Body::empty())
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
@@ -761,6 +783,7 @@ mod tests {
         let app = test_app(store);
         let request = Request::builder()
             .uri("/api/v1/organizations/org-del")
+            .header("x-api-key", TEST_API_KEY)
             .body(Body::empty())
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
@@ -776,6 +799,7 @@ mod tests {
         let request = Request::builder()
             .method("DELETE")
             .uri("/api/v1/organizations/org-acme")
+            .header("x-api-key", TEST_API_KEY)
             .body(Body::empty())
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
@@ -785,6 +809,7 @@ mod tests {
         let app = test_app(store);
         let request = Request::builder()
             .uri("/api/v1/organizations/org-acme")
+            .header("x-api-key", TEST_API_KEY)
             .body(Body::empty())
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
@@ -792,7 +817,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_already_deleted_returns_404() {
+    async fn delete_already_deleted_returns_204() {
         let store = empty_store();
 
         // Create then delete
@@ -802,6 +827,7 @@ mod tests {
             .method("POST")
             .uri("/api/v1/organizations")
             .header("content-type", "application/json")
+            .header("x-api-key", TEST_API_KEY)
             .body(Body::from(body))
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
@@ -811,6 +837,7 @@ mod tests {
         let request = Request::builder()
             .method("DELETE")
             .uri("/api/v1/organizations/org-gone")
+            .header("x-api-key", TEST_API_KEY)
             .body(Body::empty())
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
@@ -821,6 +848,7 @@ mod tests {
         let request = Request::builder()
             .method("DELETE")
             .uri("/api/v1/organizations/org-gone")
+            .header("x-api-key", TEST_API_KEY)
             .body(Body::empty())
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
@@ -835,6 +863,7 @@ mod tests {
         let request = Request::builder()
             .method("DELETE")
             .uri("/api/v1/organizations/org-nope")
+            .header("x-api-key", TEST_API_KEY)
             .body(Body::empty())
             .unwrap();
 

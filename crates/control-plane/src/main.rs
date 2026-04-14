@@ -3,6 +3,7 @@
 mod cli;
 
 use clap::Parser;
+use forgeguard_control_plane::app::AuthConfig;
 use tracing_subscriber::EnvFilter;
 
 use cli::{Cli, StoreBackend};
@@ -32,13 +33,33 @@ async fn main() {
 }
 
 async fn run(cli: Cli) -> color_eyre::Result<()> {
+    let auth = match (cli.jwks_url, cli.issuer) {
+        (Some(jwks_url), Some(issuer)) => {
+            tracing::info!("JWT authentication enabled");
+            Some(AuthConfig::new(&jwks_url, issuer, cli.audience)?)
+        }
+        (Some(_), None) => {
+            return Err(color_eyre::eyre::eyre!(
+                "--issuer is required when --jwks-url is set"
+            ));
+        }
+        (None, Some(_)) => {
+            tracing::warn!("--issuer provided without --jwks-url, ignoring auth config");
+            None
+        }
+        (None, None) => {
+            tracing::warn!("no --jwks-url provided, running without auth");
+            None
+        }
+    };
+
     let router = match cli.store {
         StoreBackend::Memory => {
             let config_path = cli.config.ok_or_else(|| {
                 color_eyre::eyre::eyre!("--config is required when --store=memory")
             })?;
             tracing::info!(path = %config_path.display(), "loading organization config from file");
-            forgeguard_control_plane::app::memory_router(&config_path)?
+            forgeguard_control_plane::app::memory_router(&config_path, auth.as_ref())?
         }
         StoreBackend::DynamoDb => {
             let table_name = cli
@@ -48,7 +69,7 @@ async fn run(cli: Cli) -> color_eyre::Result<()> {
                     color_eyre::eyre::eyre!("--dynamodb-table is required when --store=dynamodb")
                 })?;
             tracing::info!(%table_name, "using DynamoDB store");
-            forgeguard_control_plane::app::dynamodb_router(&table_name).await?
+            forgeguard_control_plane::app::dynamodb_router(&table_name, auth.as_ref()).await?
         }
     };
 

@@ -1846,6 +1846,7 @@ dependencies = [
  "clap",
  "color-eyre",
  "forgeguard-axum",
+ "forgeguard_authn",
  "forgeguard_authn_core",
  "forgeguard_authz_core",
  "forgeguard_core",
@@ -1860,6 +1861,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "url",
  "xxhash-rust",
 ]
 

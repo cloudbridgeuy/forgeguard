@@ -34,4 +34,16 @@ pub(crate) struct Cli {
     /// Log level filter (e.g., info, debug, trace).
     #[arg(long, default_value = "info", env = "FORGEGUARD_CP_LOG_LEVEL")]
     pub log_level: String,
+
+    /// JWKS URL for JWT authentication. When set, enables auth on all API routes.
+    #[arg(long, env = "FORGEGUARD_CP_JWKS_URL")]
+    pub jwks_url: Option<String>,
+
+    /// Token issuer (required when --jwks-url is set).
+    #[arg(long, env = "FORGEGUARD_CP_ISSUER")]
+    pub issuer: Option<String>,
+
+    /// Cognito app client ID for audience validation (optional).
+    #[arg(long, env = "FORGEGUARD_CP_AUDIENCE")]
+    pub audience: Option<String>,
 }

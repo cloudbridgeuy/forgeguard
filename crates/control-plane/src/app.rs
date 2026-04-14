@@ -11,6 +11,7 @@ use std::time::Duration;
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::Router;
+use forgeguard_authn::{CognitoJwtResolver, JwtResolverConfig};
 use forgeguard_authn_core::IdentityChain;
 use forgeguard_authz_core::{PolicyDecision, StaticPolicyEngine};
 use forgeguard_axum::{forgeguard_layer, ForgeGuard};
@@ -25,11 +26,47 @@ use tower_http::trace::TraceLayer;
 use crate::dynamo_store::DynamoOrgStore;
 use crate::store::{self, AnyOrgStore, OrgStore};
 
+/// Authentication configuration for the control plane.
+///
+/// When present, all API routes require a valid JWT. Only `/health` remains
+/// anonymous. Constructed via [`AuthConfig::new`], which validates the JWKS
+/// URL at the boundary (Parse Don't Validate).
+pub struct AuthConfig {
+    jwks_url: url::Url,
+    issuer: String,
+    audience: Option<String>,
+}
+
+impl AuthConfig {
+    /// Create a new `AuthConfig`, validating the JWKS URL.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `jwks_url` is not a valid URL.
+    pub fn new(
+        jwks_url: &str,
+        issuer: impl Into<String>,
+        audience: Option<String>,
+    ) -> color_eyre::Result<Self> {
+        let jwks_url: url::Url = jwks_url
+            .parse()
+            .map_err(|e| color_eyre::eyre::eyre!("invalid JWKS URL: {e}"))?;
+        Ok(Self {
+            jwks_url,
+            issuer: issuer.into(),
+            audience,
+        })
+    }
+}
+
 /// Build a control-plane `Router` backed by DynamoDB.
 ///
 /// Creates the AWS SDK client, DynamoDB store, ForgeGuard pipeline, and
 /// wires all routes. This is the entry point for Lambda deployments.
-pub async fn dynamodb_router(table_name: &str) -> color_eyre::Result<Router> {
+pub async fn dynamodb_router(
+    table_name: &str,
+    auth: Option<&AuthConfig>,
+) -> color_eyre::Result<Router> {
     let sdk_config = aws_config::defaults(aws_config::BehaviorVersion::latest())
         .load()
         .await;
@@ -38,7 +75,7 @@ pub async fn dynamodb_router(table_name: &str) -> color_eyre::Result<Router> {
         client,
         table_name.to_string(),
     )));
-    let fg = build_forgeguard()?;
+    let fg = build_forgeguard(auth)?;
     Ok(build_router(s, fg))
 }
 
@@ -46,52 +83,59 @@ pub async fn dynamodb_router(table_name: &str) -> color_eyre::Result<Router> {
 ///
 /// Loads organizations from the JSON file at `config_path`. Used by the
 /// standalone binary with `--store=memory`.
-pub fn memory_router(config_path: &Path) -> color_eyre::Result<Router> {
+pub fn memory_router(config_path: &Path, auth: Option<&AuthConfig>) -> color_eyre::Result<Router> {
     let inner = store::load_config_file(config_path)?;
     let s = Arc::new(AnyOrgStore::Memory(inner));
-    let fg = build_forgeguard()?;
+    let fg = build_forgeguard(auth)?;
     Ok(build_router(s, fg))
 }
 
-fn build_forgeguard() -> color_eyre::Result<Arc<ForgeGuard>> {
+/// Build an anonymous public route from method and path strings.
+fn anon_route(method: &str, path: &str) -> forgeguard_http::Result<PublicRoute> {
+    Ok(PublicRoute::new(
+        method.parse()?,
+        path.to_string(),
+        PublicAuthMode::Anonymous,
+    ))
+}
+
+/// All API routes that the control plane serves, expressed as (method, path) pairs.
+const API_ROUTES: &[(&str, &str)] = &[
+    ("POST", "/api/v1/organizations"),
+    ("GET", "/api/v1/organizations"),
+    ("GET", "/api/v1/organizations/{org_id}"),
+    ("PUT", "/api/v1/organizations/{org_id}"),
+    ("DELETE", "/api/v1/organizations/{org_id}"),
+    ("GET", "/api/v1/organizations/{org_id}/proxy-config"),
+];
+
+fn build_forgeguard(auth: Option<&AuthConfig>) -> color_eyre::Result<Arc<ForgeGuard>> {
     let route_matcher = RouteMatcher::new(&[])?;
-    let public_routes = vec![
-        PublicRoute::new(
-            "GET".parse()?,
-            "/health".to_string(),
-            PublicAuthMode::Anonymous,
-        ),
-        PublicRoute::new(
-            "POST".parse()?,
-            "/api/v1/organizations".to_string(),
-            PublicAuthMode::Anonymous,
-        ),
-        PublicRoute::new(
-            "GET".parse()?,
-            "/api/v1/organizations".to_string(),
-            PublicAuthMode::Anonymous,
-        ),
-        PublicRoute::new(
-            "GET".parse()?,
-            "/api/v1/organizations/{org_id}".to_string(),
-            PublicAuthMode::Anonymous,
-        ),
-        PublicRoute::new(
-            "PUT".parse()?,
-            "/api/v1/organizations/{org_id}".to_string(),
-            PublicAuthMode::Anonymous,
-        ),
-        PublicRoute::new(
-            "DELETE".parse()?,
-            "/api/v1/organizations/{org_id}".to_string(),
-            PublicAuthMode::Anonymous,
-        ),
-        PublicRoute::new(
-            "GET".parse()?,
-            "/api/v1/organizations/{org_id}/proxy-config".to_string(),
-            PublicAuthMode::Anonymous,
-        ),
-    ];
+
+    let health_route = anon_route("GET", "/health")?;
+
+    let (public_routes, chain, auth_providers) = match auth {
+        Some(auth) => {
+            let mut config = JwtResolverConfig::new(auth.jwks_url.clone(), &auth.issuer);
+            if let Some(ref aud) = auth.audience {
+                config = config.with_audience(aud);
+            }
+            let resolver = CognitoJwtResolver::new(config);
+            let chain = IdentityChain::new(vec![Arc::new(resolver)]);
+
+            (vec![health_route], chain, vec!["jwt".to_string()])
+        }
+        None => {
+            let mut routes = vec![health_route];
+            for &(method, path) in API_ROUTES {
+                routes.push(anon_route(method, path)?);
+            }
+            let chain = IdentityChain::new(vec![]);
+
+            (routes, chain, vec![])
+        }
+    };
+
     let public_route_matcher = PublicRouteMatcher::new(&public_routes)?;
     let pipeline_config = PipelineConfig::new(PipelineConfigParams {
         route_matcher,
@@ -100,9 +144,8 @@ fn build_forgeguard() -> color_eyre::Result<Arc<ForgeGuard>> {
         project_id: ProjectId::new("forgeguard-cp")?,
         default_policy: DefaultPolicy::Passthrough,
         debug_mode: false,
-        auth_providers: vec![],
+        auth_providers,
     });
-    let chain = IdentityChain::new(vec![]);
     let engine: Arc<dyn forgeguard_authz_core::PolicyEngine> =
         Arc::new(StaticPolicyEngine::new(PolicyDecision::Allow));
     Ok(Arc::new(ForgeGuard::new(pipeline_config, chain, engine)))

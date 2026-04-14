@@ -5,6 +5,7 @@
 //! Wraps the Axum router from `forgeguard_control_plane` with `lambda_http`
 //! so it can serve requests behind a Lambda function URL.
 
+use forgeguard_control_plane::app::AuthConfig;
 use lambda_http::Error;
 
 #[tokio::main]
@@ -18,9 +19,25 @@ async fn main() -> Result<(), Error> {
     let table_name = std::env::var("TABLE_NAME")
         .map_err(|_| Error::from("TABLE_NAME environment variable is required"))?;
 
+    let auth = match std::env::var("FORGEGUARD_CP_JWKS_URL") {
+        Ok(jwks_url) => {
+            let issuer = std::env::var("FORGEGUARD_CP_ISSUER").map_err(|_| {
+                Error::from("FORGEGUARD_CP_ISSUER is required when FORGEGUARD_CP_JWKS_URL is set")
+            })?;
+            let audience = std::env::var("FORGEGUARD_CP_AUDIENCE").ok();
+            let config = AuthConfig::new(&jwks_url, issuer, audience)
+                .map_err(|e| Error::from(format!("invalid auth config: {e:#}")))?;
+            Some(config)
+        }
+        Err(_) => {
+            tracing::warn!("FORGEGUARD_CP_JWKS_URL not set, running without auth");
+            None
+        }
+    };
+
     tracing::info!(%table_name, "building control-plane router");
 
-    let router = forgeguard_control_plane::app::dynamodb_router(&table_name)
+    let router = forgeguard_control_plane::app::dynamodb_router(&table_name, auth.as_ref())
         .await
         .map_err(|e| Error::from(format!("failed to build router: {e:#}")))?;
 
