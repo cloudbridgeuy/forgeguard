@@ -58,7 +58,7 @@ jobs:
           sudo apt-get install -y gcc-aarch64-linux-gnu
 
       - name: Cache cargo registry and index
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry/index/
@@ -69,7 +69,7 @@ jobs:
             ${{ runner.os }}-${{ matrix.target }}-cargo-
 
       - name: Cache target directory
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: target/
           key: ${{ runner.os }}-${{ matrix.target }}-target-${{ hashFiles('**/Cargo.lock') }}
