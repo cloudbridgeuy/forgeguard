@@ -10,29 +10,10 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  detect:
-    name: Detect Changes
-    runs-on: ubuntu-latest
-    if: "!startsWith(github.event.head_commit.message, 'chore: bump version')"
-    outputs:
-      cargo-args: ${{ steps.changes.outputs.cargo-args }}
-      rebuild-all: ${{ steps.changes.outputs.rebuild-all }}
-      count: ${{ steps.changes.outputs.count }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-
-      - name: Detect affected crates
-        id: changes
-        uses: loadingalias/cargo-rail-action@v1
-
   test:
     name: Test Suite
     runs-on: ubuntu-latest
-    needs: [detect]
-    if: "!startsWith(github.event.head_commit.message, 'chore: bump version') && needs.detect.outputs.count != '0'"
+    if: "!startsWith(github.event.head_commit.message, 'chore: bump version')"
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -61,13 +42,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-target-
 
-      - name: Run tests (all crates)
-        if: needs.detect.outputs.rebuild-all == 'true'
+      - name: Run tests
         run: cargo test --workspace --verbose
-
-      - name: Run tests (affected crates only)
-        if: needs.detect.outputs.rebuild-all != 'true' && needs.detect.outputs.count != '0'
-        run: cargo test ${{ needs.detect.outputs.cargo-args }} --verbose
 
       - name: Run clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
@@ -78,8 +54,7 @@ jobs:
   build:
     name: Build Check
     runs-on: ${{ matrix.os }}
-    needs: [detect]
-    if: "!startsWith(github.event.head_commit.message, 'chore: bump version') && needs.detect.outputs.count != '0'"
+    if: "!startsWith(github.event.head_commit.message, 'chore: bump version')"
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
@@ -137,7 +112,7 @@ jobs:
             ${{ runner.os }}-wasm-cargo-
 
       - name: Check WASM compilation (SDK + FFI WASM)
-        run: cargo check -p forgegate_sdk -p forgegate_ffi_wasm --target wasm32-unknown-unknown
+        run: cargo check -p forgeguard_sdk -p forgeguard_ffi_wasm --target wasm32-unknown-unknown
 
   unused-deps:
     name: Check Unused Dependencies
