@@ -19,8 +19,8 @@ tracing = { workspace = true }
 [dev-dependencies]
 forgeguard_authn_core = { workspace = true } #unified
 forgeguard_authz_core = { workspace = true } #unified
-forgeguard_core = { path = "../../crates/core" }
-forgeguard_http = { path = "../../crates/http" }
+forgeguard_core = { workspace = true } #unified
+forgeguard_http = { workspace = true } #unified
 http-body-util = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt"] }

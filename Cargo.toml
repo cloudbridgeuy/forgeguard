@@ -47,15 +47,15 @@ anstream = "1.0"
 async-trait = "0.1"
 
 aws-config = "1"
-
-# AWS SDKs
-aws_lambda_events = { version = "0.16", features = ["dynamodb"] }
 aws-sdk-cloudformation = "1"
 aws-sdk-cognitoidentityprovider = "1"
 aws-sdk-dynamodb = "1"
 aws-sdk-lambda = "1"
 aws-sdk-sfn = "1"
 aws-sdk-verifiedpermissions = "1"
+
+# AWS SDKs
+aws_lambda_events = { version = "0.16", features = ["dynamodb"] }
 
 # HTTP framework
 axum = { version = "0.8", features = ["macros"] }
@@ -96,6 +96,7 @@ forgeguard_authz = { version = "0.0.0", path = "crates/authz" }
 forgeguard_authz_core = { path = "crates/authz-core", version = "^0.0.0", features = [
   "test-support",
 ] } #unified
+forgeguard_control_plane = { path = "crates/control-plane", version = "^0.0.0" } #unified
 
 # Internal crates — pure
 forgeguard_core = { version = "0.0.0", path = "crates/core" }
