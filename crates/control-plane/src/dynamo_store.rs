@@ -217,7 +217,8 @@ impl OrgStore for DynamoOrgStore {
             .put_item()
             .table_name(&self.table_name)
             .set_item(Some(item))
-            .condition_expression("attribute_not_exists(pk)")
+            .condition_expression("attribute_not_exists(#pk)")
+            .expression_attribute_names("#pk", pk())
             .send()
             .await;
 
@@ -260,7 +261,9 @@ impl OrgStore for DynamoOrgStore {
                 .client
                 .scan()
                 .table_name(&self.table_name)
-                .filter_expression("begins_with(pk, :org_prefix) AND sk = :meta")
+                .filter_expression("begins_with(#pk, :org_prefix) AND #sk = :meta")
+                .expression_attribute_names("#pk", pk())
+                .expression_attribute_names("#sk", sk())
                 .expression_attribute_values(
                     ":org_prefix",
                     AttributeValue::S(ORG_PREFIX.to_string()),
@@ -313,7 +316,8 @@ impl OrgStore for DynamoOrgStore {
             .put_item()
             .table_name(&self.table_name)
             .set_item(Some(item))
-            .condition_expression("attribute_exists(pk)")
+            .condition_expression("attribute_exists(#pk)")
+            .expression_attribute_names("#pk", pk())
             .send()
             .await;
 
@@ -373,12 +377,16 @@ mod tests {
     }
 
     /// Generate a unique table name per test run.
+    /// Uses an atomic counter to avoid collisions when tests run in parallel.
     fn unique_table_name() -> String {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
         let ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        format!("test-{ts}")
+        format!("test-{ts}-{n}")
     }
 
     /// Create a test table using key names from the shared schema file.

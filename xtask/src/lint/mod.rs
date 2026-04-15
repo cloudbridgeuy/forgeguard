@@ -17,7 +17,6 @@ enum CheckId {
     Check,
     Clippy,
     Test,
-    DynamoDbTest,
     Rail,
     FileLength,
     PublishVersion,
@@ -89,10 +88,6 @@ pub struct LintArgs {
     #[arg(long)]
     pub no_too_many_args: bool,
 
-    /// Run DynamoDB integration tests (requires DynamoDB Local)
-    #[arg(long)]
-    pub dynamodb_tests: bool,
-
     /// Auto-fix where possible (fmt applies formatting, clippy applies fixes)
     #[arg(long)]
     pub fix: bool,
@@ -154,19 +149,6 @@ const CHECKS: &[Check] = &[
         optional: false,
     },
     Check {
-        id: CheckId::DynamoDbTest,
-        name: "cargo test -p forgeguard_control_plane --features dynamodb-tests",
-        program: "cargo",
-        args: &[
-            "test",
-            "-p",
-            "forgeguard_control_plane",
-            "--features",
-            "dynamodb-tests",
-        ],
-        optional: false,
-    },
-    Check {
         id: CheckId::Rail,
         name: "cargo rail unify --check",
         program: "cargo",
@@ -210,7 +192,6 @@ fn should_skip(id: CheckId, args: &LintArgs) -> bool {
         CheckId::Check => args.no_check,
         CheckId::Clippy => args.no_clippy,
         CheckId::Test => args.no_test,
-        CheckId::DynamoDbTest => !args.dynamodb_tests,
         CheckId::Rail => args.no_rail,
         CheckId::FileLength => args.no_file_length,
         CheckId::PublishVersion => args.no_publish_version,
@@ -774,8 +755,6 @@ mod tests {
         assert!(!should_skip(CheckId::Check, &base));
         assert!(!should_skip(CheckId::Clippy, &base));
         assert!(!should_skip(CheckId::Test, &base));
-        // DynamoDbTest is opt-in: skipped by default when flag is false
-        assert!(should_skip(CheckId::DynamoDbTest, &base));
         assert!(!should_skip(CheckId::Rail, &base));
         assert!(!should_skip(CheckId::FileLength, &base));
         assert!(!should_skip(CheckId::PublishVersion, &base));
@@ -789,16 +768,6 @@ mod tests {
         args.no_fmt = true;
         assert!(should_skip(CheckId::Fmt, &args));
         assert!(!should_skip(CheckId::Check, &args));
-    }
-
-    #[test]
-    fn test_should_skip_dynamodb_opt_in() {
-        let mut args = default_lint_args();
-        // Off by default
-        assert!(should_skip(CheckId::DynamoDbTest, &args));
-        // Enabled when flag is set
-        args.dynamodb_tests = true;
-        assert!(!should_skip(CheckId::DynamoDbTest, &args));
     }
 
     // --- fix_args ---
@@ -829,7 +798,6 @@ mod tests {
     fn test_fix_args_returns_none_for_unmodified_checks() {
         assert!(fix_args(CheckId::Check).is_none());
         assert!(fix_args(CheckId::Test).is_none());
-        assert!(fix_args(CheckId::DynamoDbTest).is_none());
         assert!(fix_args(CheckId::FileLength).is_none());
         assert!(fix_args(CheckId::PublishVersion).is_none());
         assert!(fix_args(CheckId::TypeScript).is_none());
@@ -1133,7 +1101,6 @@ fn bad() {}
             no_publish_version: false,
             no_typescript: false,
             no_too_many_args: false,
-            dynamodb_tests: false,
             fix: false,
             staged_only: false,
             install_hooks: false,

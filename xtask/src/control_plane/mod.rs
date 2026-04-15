@@ -6,6 +6,7 @@ mod lambda;
 pub(crate) mod lambda_core;
 pub(crate) mod op;
 pub(crate) mod op_core;
+mod test;
 
 use clap::{Args, Subcommand};
 use color_eyre::eyre::Result;
@@ -24,6 +25,8 @@ enum ControlPlaneCommands {
     Infra(infra::InfraArgs),
     /// Lambda build and deployment
     Lambda(lambda::LambdaArgs),
+    /// Run DynamoDB integration tests with automatic container management
+    Test(test::TestArgs),
 }
 
 pub async fn run(args: &ControlPlaneArgs) -> Result<()> {
@@ -31,5 +34,6 @@ pub async fn run(args: &ControlPlaneArgs) -> Result<()> {
         ControlPlaneCommands::Cedar(a) => cedar::run(a).await,
         ControlPlaneCommands::Infra(a) => infra::run(a).await,
         ControlPlaneCommands::Lambda(a) => lambda::run(a).await,
+        ControlPlaneCommands::Test(a) => test::run(a).await,
     }
 }

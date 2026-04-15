@@ -19,7 +19,7 @@
 - **Infrastructure:** `cargo xtask control-plane infra {deploy,diff,destroy,status}` — CDK + 1Password, see [infra-control-plane.md](./.claude/context/infra-control-plane.md)
 - **Cedar sync:** `cargo xtask control-plane cedar {status,diff,sync}` — VP policy management, see [verified-permissions.md](./.claude/context/verified-permissions.md)
 - **Dogfooding config:** `forgeguard.toml` is the control plane's own authorization model; `forgeguard.example.toml` is the proxy reference config
-- **DynamoDB tests:** `cargo xtask lint --dynamodb-tests` (requires `docker compose up -d dynamodb-local`)
+- **DynamoDB tests:** `cargo xtask control-plane test` — auto-starts dynamodb-local via docker/podman
 - **Integration tests:** `cargo test -p forgeguard_proxy` — see [demo-app.md](./.claude/context/demo-app.md)
 - **Demo app:** native or Docker Compose — see [demo-app.md](./.claude/context/demo-app.md)
 - **AWS defaults:** region `us-east-2`, profile `admin` — e.g. `--region us-east-2 --profile admin`
