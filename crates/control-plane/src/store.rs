@@ -178,39 +178,20 @@ impl OrgStore for InMemoryOrgStore {
             }
         }
 
-        // Generate key material synchronously — `ThreadRng` is not `Send`,
-        // so it must be dropped before any `.await`.
-        let (private_pem, public_pem, key_id, now, entry) = {
-            let mut rng = rand::thread_rng();
-            let signing_key = ed25519_dalek::SigningKey::generate(&mut rng);
-
-            let private_pem = signing_key
-                .to_pkcs8_pem(LineEnding::LF)
-                .map_err(|e| Error::Store(format!("failed to encode private key: {e}")))?
-                .to_string();
-            let public_pem = signing_key
-                .verifying_key()
-                .to_public_key_pem(LineEnding::LF)
-                .map_err(|e| Error::Store(format!("failed to encode public key: {e}")))?;
-
-            let now = Utc::now();
-            let key_id = generate_key_id();
-
-            let entry = SigningKeyEntry::new(
-                key_id.clone(),
-                public_pem.clone(),
-                SigningKeyStatus::Active,
-                now,
-                None,
-            )?;
-
-            (private_pem, public_pem, key_id, now, entry)
-        };
+        // Synchronous — `ThreadRng` is not `Send`, must complete before `.await`.
+        let result = generate_key_material()?;
+        let entry = SigningKeyEntry::new(
+            result.key_id().to_string(),
+            result.public_key_pem().to_string(),
+            SigningKeyStatus::Active,
+            result.created_at(),
+            None,
+        )?;
 
         let mut guard = self.signing_keys.write().await;
         guard.entry(org_id.clone()).or_default().push(entry);
 
-        Ok(GenerateKeyResult::new(key_id, private_pem, public_pem, now))
+        Ok(result)
     }
 
     async fn list_keys(&self, org_id: &OrganizationId) -> Result<Vec<SigningKeyEntry>> {
@@ -250,12 +231,37 @@ struct RawOrgEntry {
     config: OrgConfig,
 }
 
-// Called from generate_key (handler wired in a later task).
+// Handlers wired in a later task; suppress dead-code warnings until then.
 #[allow(dead_code)]
-fn generate_key_id() -> String {
+pub(crate) fn generate_key_id() -> String {
     let bytes: [u8; 16] = rand::random();
     let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
     format!("key-{hex}")
+}
+
+/// Generate an Ed25519 keypair and return the constituent parts.
+///
+/// `ThreadRng` is not `Send`, so this function is intentionally synchronous.
+/// Callers must invoke it *before* any `.await` point.
+// Handlers wired in a later task; suppress dead-code warnings until then.
+#[allow(dead_code)]
+pub(crate) fn generate_key_material() -> Result<GenerateKeyResult> {
+    let mut rng = rand::thread_rng();
+    let signing_key = ed25519_dalek::SigningKey::generate(&mut rng);
+
+    let private_pem = signing_key
+        .to_pkcs8_pem(LineEnding::LF)
+        .map_err(|e| Error::Store(format!("failed to encode private key: {e}")))?
+        .to_string();
+    let public_pem = signing_key
+        .verifying_key()
+        .to_public_key_pem(LineEnding::LF)
+        .map_err(|e| Error::Store(format!("failed to encode public key: {e}")))?;
+
+    let now = Utc::now();
+    let key_id = generate_key_id();
+
+    Ok(GenerateKeyResult::new(key_id, private_pem, public_pem, now))
 }
 
 pub(crate) fn compute_etag(config: &OrgConfig) -> Result<String> {
