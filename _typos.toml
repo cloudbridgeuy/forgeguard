@@ -5,3 +5,7 @@ extend-ignore-identifiers-re = [
 
 [default.extend-identifiers]
 AttributeIDSupressMenu = "AttributeIDSupressMenu"
+
+[default.extend-words]
+esource = "esource"
+inh = "inh"
