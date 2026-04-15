@@ -4,6 +4,25 @@
 [advisories]
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
+ignore = [
+    # daemonize is a transitive dep via Pingora; upstream is unmaintained.
+    # Pinned until Pingora migrates or replaces it.
+    "RUSTSEC-2025-0069",
+    # derivative is a transitive dep; unmaintained with no actively used alternative in our graph.
+    "RUSTSEC-2024-0388",
+    # protobuf 2.x pulled in transitively by prometheus 0.13; we cannot upgrade
+    # prometheus until Pingora 0.8 upgrades its default registry (see
+    # .claude/context/dependency-constraints.md).
+    "RUSTSEC-2024-0437",
+    # rand 0.8 pinned by Pingora and ed25519-dalek (see dependency-constraints.md).
+    # The unsound path requires a custom logger calling rand::rng(); not applicable here.
+    "RUSTSEC-2026-0097",
+    # rustls-webpki name-constraint advisories only apply to TLS clients that
+    # validate certificates with name constraints; our rustls paths use
+    # webpki-root-certs and do not rely on name constraints.
+    "RUSTSEC-2026-0098",
+    "RUSTSEC-2026-0099",
+]
 
 [licenses]
 allow = [
@@ -19,6 +38,8 @@ allow = [
     "BSL-1.0",
     "MPL-2.0",
     "CC0-1.0",
+    # webpki-root-certs bundles Mozilla's CA list under CDLA-Permissive-2.0
+    "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.8
 
