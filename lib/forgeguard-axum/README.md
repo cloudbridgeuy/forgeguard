@@ -19,7 +19,7 @@ Requires **Axum 0.8+**.
 # use forgeguard_authz_core::{PolicyDecision, PolicyEngine, StaticPolicyEngine};
 # use forgeguard_core::{FlagConfig, ProjectId, QualifiedAction, UserId, TenantId};
 # use forgeguard_http::{DefaultPolicy, HttpMethod, PublicAuthMode, PublicRoute, PublicRouteMatcher, RouteMapping, RouteMatcher};
-# use forgeguard_proxy_core::PipelineConfig;
+# use forgeguard_proxy_core::{PipelineConfig, PipelineConfigParams};
 use axum::{Router, routing::get, middleware};
 
 // 1. Define your routes
@@ -43,15 +43,15 @@ let public_routes = vec![
 ];
 
 // 3. Build the pipeline config
-let pipeline_config = PipelineConfig::new(
-    RouteMatcher::new(&routes).unwrap(),
-    PublicRouteMatcher::new(&public_routes).unwrap(),
-    FlagConfig::default(),
-    ProjectId::new("my-project").unwrap(),
-    DefaultPolicy::Deny,  // reject unmatched routes
-    false,                 // debug_mode
-    vec!["api-key".to_string()],
-);
+let pipeline_config = PipelineConfig::new(PipelineConfigParams {
+    route_matcher: RouteMatcher::new(&routes).unwrap(),
+    public_route_matcher: PublicRouteMatcher::new(&public_routes).unwrap(),
+    flag_config: FlagConfig::default(),
+    project_id: ProjectId::new("my-project").unwrap(),
+    default_policy: DefaultPolicy::Deny, // reject unmatched routes
+    debug_mode: false,
+    auth_providers: vec!["api-key".to_string()],
+});
 
 // 4. Build the identity chain (who is the caller?)
 let mut keys = HashMap::new();
