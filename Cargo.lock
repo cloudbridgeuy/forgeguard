@@ -726,9 +726,9 @@ dependencies = [
 
 [[package]]
 name = "aws_lambda_events"
-version = "0.16.1"
+version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "144ec7565561115498a288850cc6a42b279e09b6c4b88f623eecb9c8ca96c08c"
+checksum = "474e5c215398b56aa1c8021cb51907d132c022737dc86b1b5ac9a3fa0fa25fdc"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -742,22 +742,6 @@ dependencies = [
  "serde_dynamo",
  "serde_json",
  "serde_with",
-]
-
-[[package]]
-name = "aws_lambda_events"
-version = "1.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "474e5c215398b56aa1c8021cb51907d132c022737dc86b1b5ac9a3fa0fa25fdc"
-dependencies = [
- "base64 0.22.1",
- "bytes",
- "http 1.4.0",
- "http-body 1.0.1",
- "http-serde",
- "query_map",
- "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -1630,7 +1614,7 @@ version = "0.0.0"
 dependencies = [
  "aws-config",
  "aws-sdk-sfn",
- "aws_lambda_events 0.16.1",
+ "aws_lambda_events",
  "color-eyre",
  "forgeguard_control_plane",
  "lambda_http",
@@ -2223,11 +2207,6 @@ name = "hashbrown"
 version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4f467dd6dccf739c208452f8014c75c18bb8301b050ad1cfb27153803edb0f51"
-dependencies = [
- "allocator-api2",
- "equivalent",
- "foldhash 0.2.0",
-]
 
 [[package]]
 name = "heck"
@@ -2758,7 +2737,7 @@ version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c54938eab7a90e46a59fef2332f7fbcd5cfeba74a8bfc741e3f48a2504e96cd2"
 dependencies = [
- "aws_lambda_events 1.1.2",
+ "aws_lambda_events",
  "bytes",
  "encoding_rs",
  "futures-util",
@@ -3363,7 +3342,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "91bb5030596a3d442c0866ac68afe29c14ba558e77c726dcdf7016b0dbb359d9"
 dependencies = [
  "arrayvec",
- "hashbrown 0.17.0",
+ "hashbrown 0.16.1",
  "parking_lot",
  "rand 0.8.5",
 ]
