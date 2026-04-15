@@ -1,6 +1,7 @@
 import * as cdk from "aws-cdk-lib";
 import { aws_dynamodb as dynamodb } from "aws-cdk-lib";
 import { Construct } from "constructs";
+import schema from "../schema/dynamodb.json";
 
 interface DynamoDbStackProps extends cdk.StackProps {
   environment: string;
@@ -21,8 +22,8 @@ export class DynamoDbStack extends cdk.Stack {
 
     this.table = new dynamodb.TableV2(this, "OrgsTable", {
       tableName: `forgeguard-${props.environment}-orgs`,
-      partitionKey: { name: "PK", type: dynamodb.AttributeType.STRING },
-      sortKey: { name: "SK", type: dynamodb.AttributeType.STRING },
+      partitionKey: { name: schema.partitionKey, type: dynamodb.AttributeType.STRING },
+      sortKey: { name: schema.sortKey, type: dynamodb.AttributeType.STRING },
       billing: dynamodb.Billing.onDemand(),
       removalPolicy: cdk.RemovalPolicy.RETAIN,
       dynamoStream: dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,

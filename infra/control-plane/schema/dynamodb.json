@@ -1,0 +1,4 @@
+{
+  "partitionKey": "PK",
+  "sortKey": "SK"
+}

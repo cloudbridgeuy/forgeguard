@@ -2,6 +2,10 @@
 //!
 //! Activated via `--store=dynamodb --dynamodb-table <TABLE>` on the
 //! control-plane binary.
+//!
+//! Key attribute names (`PK`, `SK`) are read from the shared schema file
+//! at `infra/control-plane/schema/dynamodb.json` — the single source of
+//! truth consumed by both CDK (TypeScript) and Rust.
 
 use std::collections::HashMap;
 
@@ -14,11 +18,50 @@ use crate::error::{Error, Result};
 use crate::store::{compute_etag, OrgRecord, OrgStore};
 
 // ---------------------------------------------------------------------------
-// Key schema constants
+// Key schema — single source of truth from shared JSON
 // ---------------------------------------------------------------------------
 
-const PK: &str = "pk";
-const SK: &str = "sk";
+/// Parsed DynamoDB key schema from the shared JSON file.
+#[derive(serde::Deserialize)]
+struct KeySchema {
+    #[serde(rename = "partitionKey")]
+    partition_key: String,
+    #[serde(rename = "sortKey")]
+    sort_key: String,
+}
+
+/// Schema JSON baked in at compile time. Build fails if the file is missing.
+const SCHEMA_JSON: &str = include_str!("../../../infra/control-plane/schema/dynamodb.json");
+
+fn key_schema() -> &'static KeySchema {
+    use std::sync::OnceLock;
+    static SCHEMA: OnceLock<KeySchema> = OnceLock::new();
+    SCHEMA.get_or_init(|| {
+        // Safety: the JSON is baked in at compile time via include_str!.
+        // A parse failure here means the checked-in file is malformed —
+        // a programmer error, not a runtime condition.
+        match serde_json::from_str(SCHEMA_JSON) {
+            Ok(s) => s,
+            Err(e) => {
+                // OnceLock requires a value, not a Result.
+                // This is a compile-time-embedded constant; log and abort.
+                tracing::error!("BUG: dynamodb.json schema is invalid: {e}");
+                std::process::abort();
+            }
+        }
+    })
+}
+
+/// Partition key attribute name (e.g. `"PK"`).
+fn pk() -> &'static str {
+    &key_schema().partition_key
+}
+
+/// Sort key attribute name (e.g. `"SK"`).
+fn sk() -> &'static str {
+    &key_schema().sort_key
+}
+
 const SK_META: &str = "META";
 const ORG_PREFIX: &str = "ORG#";
 
@@ -55,8 +98,8 @@ fn to_item(
 ) -> Result<HashMap<String, AttributeValue>> {
     let mut item = HashMap::new();
 
-    put_s(&mut item, PK, format!("{ORG_PREFIX}{}", org.org_id()));
-    put_s(&mut item, SK, SK_META);
+    put_s(&mut item, pk(), format!("{ORG_PREFIX}{}", org.org_id()));
+    put_s(&mut item, sk(), SK_META);
     put_s(&mut item, "name", org.name());
     put_s(&mut item, "status", org.status().to_string());
     put_s(&mut item, "created_at", org.created_at().to_rfc3339());
@@ -85,7 +128,7 @@ fn to_item(
 /// Validation failures produce `Error::Store`. Raw `AttributeValue` maps
 /// never leak past this function (Parse Don't Validate).
 fn from_item(item: &HashMap<String, AttributeValue>) -> Result<OrgRecord> {
-    let pk = get_s(item, PK)?;
+    let pk = get_s(item, pk())?;
     let org_id_str = pk
         .strip_prefix(ORG_PREFIX)
         .ok_or_else(|| Error::Store(format!("pk missing {ORG_PREFIX} prefix: {pk}")))?;
@@ -188,14 +231,14 @@ impl OrgStore for DynamoOrgStore {
     }
 
     async fn get(&self, org_id: &OrganizationId) -> Result<Option<OrgRecord>> {
-        let pk = format!("{ORG_PREFIX}{org_id}");
+        let pk_value = format!("{ORG_PREFIX}{org_id}");
 
         let result = self
             .client
             .get_item()
             .table_name(&self.table_name)
-            .key(PK, AttributeValue::S(pk))
-            .key(SK, AttributeValue::S(SK_META.to_string()))
+            .key(pk(), AttributeValue::S(pk_value))
+            .key(sk(), AttributeValue::S(SK_META.to_string()))
             .send()
             .await
             .map_err(map_sdk_error)?;
@@ -284,13 +327,13 @@ impl OrgStore for DynamoOrgStore {
     }
 
     async fn delete(&self, org_id: &OrganizationId) -> Result<()> {
-        let pk = format!("{ORG_PREFIX}{org_id}");
+        let pk_value = format!("{ORG_PREFIX}{org_id}");
 
         self.client
             .delete_item()
             .table_name(&self.table_name)
-            .key(PK, AttributeValue::S(pk))
-            .key(SK, AttributeValue::S(SK_META.to_string()))
+            .key(pk(), AttributeValue::S(pk_value))
+            .key(sk(), AttributeValue::S(SK_META.to_string()))
             .send()
             .await
             .map_err(map_sdk_error)?;
@@ -338,35 +381,36 @@ mod tests {
         format!("test-{ts}")
     }
 
-    /// Create a test table with pk (S) hash key and sk (S) range key.
+    /// Create a test table using key names from the shared schema file.
+    /// This ensures test tables match the production CDK-provisioned table.
     async fn create_test_table(client: &aws_sdk_dynamodb::Client, table_name: &str) {
         client
             .create_table()
             .table_name(table_name)
             .attribute_definitions(
                 AttributeDefinition::builder()
-                    .attribute_name(PK)
+                    .attribute_name(pk())
                     .attribute_type(ScalarAttributeType::S)
                     .build()
                     .unwrap(),
             )
             .attribute_definitions(
                 AttributeDefinition::builder()
-                    .attribute_name(SK)
+                    .attribute_name(sk())
                     .attribute_type(ScalarAttributeType::S)
                     .build()
                     .unwrap(),
             )
             .key_schema(
                 KeySchemaElement::builder()
-                    .attribute_name(PK)
+                    .attribute_name(pk())
                     .key_type(KeyType::Hash)
                     .build()
                     .unwrap(),
             )
             .key_schema(
                 KeySchemaElement::builder()
-                    .attribute_name(SK)
+                    .attribute_name(sk())
                     .key_type(KeyType::Range)
                     .build()
                     .unwrap(),
