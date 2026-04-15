@@ -113,10 +113,22 @@ The `AuthConfig` struct (`app.rs`) validates the JWKS URL at construction time (
 
 - 8 store tests (`store.rs`) -- parsing, validation, ETag determinism, multiple orgs, unknown fields
 - 14 handler integration tests (`handlers.rs`) -- full HTTP pipeline via `tower::ServiceExt::oneshot` with `forgeguard-axum` middleware layer, auth via `StaticApiKeyResolver` (`x-api-key: test-key`)
+- 11 DynamoDB integration tests (`dynamo_store.rs`) -- feature-gated behind `dynamodb-tests`, run via `cargo xtask control-plane test`
 
 Store tests use `build_org_store()` with inline JSON to build `InMemoryOrgStore` instances. Tests that call `store.get()` use `#[tokio::test]` since the store is async.
 
 Handler tests use `StaticApiKeyResolver` with a known test key. All test requests include `x-api-key: test-key`. The `unauthenticated_request_returns_401` test verifies the auth boundary.
+
+### DynamoDB Integration Tests
+
+`cargo xtask control-plane test` manages the full lifecycle:
+1. Detects docker or podman on PATH
+2. Starts `amazon/dynamodb-local` on a random port (`-p 0:8000`)
+3. Discovers the assigned port and sets `DYNAMODB_ENDPOINT`
+4. Runs `cargo test -p forgeguard_control_plane --features dynamodb-tests`
+5. Stops the container (guaranteed via RAII guard, even on failure)
+
+DynamoDB key attribute names (`PK`, `SK`) are read from the shared schema file `infra/control-plane/schema/dynamodb.json` — the single source of truth consumed by both CDK and Rust via `include_str!`.
 
 ## Running
 
