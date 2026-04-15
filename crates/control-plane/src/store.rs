@@ -2,12 +2,16 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use chrono::Utc;
+use ed25519_dalek::pkcs8::spki::der::pem::LineEnding;
+use ed25519_dalek::pkcs8::EncodePrivateKey as _;
+use ed25519_dalek::pkcs8::EncodePublicKey as _;
 use forgeguard_core::{OrgStatus, Organization, OrganizationId};
 use serde::Deserialize;
 
 use crate::config::OrgConfig;
 use crate::dynamo_store::DynamoOrgStore;
 use crate::error::{Error, Result};
+use crate::signing_key::{GenerateKeyResult, SigningKeyEntry, SigningKeyStatus};
 
 /// Abstraction over organization config storage.
 ///
@@ -42,6 +46,27 @@ pub(crate) trait OrgStore: Send + Sync {
         &self,
         org_id: &OrganizationId,
     ) -> impl std::future::Future<Output = Result<()>> + Send;
+
+    // Handlers wired in a later task; suppress dead-code warnings until then.
+
+    #[allow(dead_code)]
+    fn generate_key(
+        &self,
+        org_id: &OrganizationId,
+    ) -> impl std::future::Future<Output = Result<GenerateKeyResult>> + Send;
+
+    #[allow(dead_code)]
+    fn list_keys(
+        &self,
+        org_id: &OrganizationId,
+    ) -> impl std::future::Future<Output = Result<Vec<SigningKeyEntry>>> + Send;
+
+    #[allow(dead_code)]
+    fn revoke_key(
+        &self,
+        org_id: &OrganizationId,
+        key_id: &str,
+    ) -> impl std::future::Future<Output = Result<()>> + Send;
 }
 
 #[derive(Debug, Clone)]
@@ -72,12 +97,16 @@ impl OrgRecord {
 #[derive(Debug)]
 pub(crate) struct InMemoryOrgStore {
     orgs: tokio::sync::RwLock<BTreeMap<OrganizationId, OrgRecord>>,
+    // Used by generate_key / list_keys / revoke_key (handlers wired later).
+    #[allow(dead_code)]
+    signing_keys: tokio::sync::RwLock<BTreeMap<OrganizationId, Vec<SigningKeyEntry>>>,
 }
 
 impl InMemoryOrgStore {
     pub(crate) fn new(orgs: BTreeMap<OrganizationId, OrgRecord>) -> Self {
         Self {
             orgs: tokio::sync::RwLock::new(orgs),
+            signing_keys: tokio::sync::RwLock::new(BTreeMap::new()),
         }
     }
 }
@@ -137,6 +166,77 @@ impl OrgStore for InMemoryOrgStore {
         guard.remove(org_id);
         Ok(())
     }
+
+    async fn generate_key(&self, org_id: &OrganizationId) -> Result<GenerateKeyResult> {
+        // Verify the organization exists before generating key material.
+        {
+            let orgs = self.orgs.read().await;
+            if !orgs.contains_key(org_id) {
+                return Err(Error::NotFound(format!(
+                    "organization '{org_id}' not found"
+                )));
+            }
+        }
+
+        // Generate key material synchronously — `ThreadRng` is not `Send`,
+        // so it must be dropped before any `.await`.
+        let (private_pem, public_pem, key_id, now, entry) = {
+            let mut rng = rand::thread_rng();
+            let signing_key = ed25519_dalek::SigningKey::generate(&mut rng);
+
+            let private_pem = signing_key
+                .to_pkcs8_pem(LineEnding::LF)
+                .map_err(|e| Error::Store(format!("failed to encode private key: {e}")))?
+                .to_string();
+            let public_pem = signing_key
+                .verifying_key()
+                .to_public_key_pem(LineEnding::LF)
+                .map_err(|e| Error::Store(format!("failed to encode public key: {e}")))?;
+
+            let now = Utc::now();
+            let key_id = generate_key_id();
+
+            let entry = SigningKeyEntry::new(
+                key_id.clone(),
+                public_pem.clone(),
+                SigningKeyStatus::Active,
+                now,
+                None,
+            )?;
+
+            (private_pem, public_pem, key_id, now, entry)
+        };
+
+        let mut guard = self.signing_keys.write().await;
+        guard.entry(org_id.clone()).or_default().push(entry);
+
+        Ok(GenerateKeyResult::new(key_id, private_pem, public_pem, now))
+    }
+
+    async fn list_keys(&self, org_id: &OrganizationId) -> Result<Vec<SigningKeyEntry>> {
+        let guard = self.signing_keys.read().await;
+        match guard.get(org_id) {
+            Some(keys) => Ok(keys.clone()),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    async fn revoke_key(&self, org_id: &OrganizationId, key_id: &str) -> Result<()> {
+        let mut guard = self.signing_keys.write().await;
+        let keys = guard.get_mut(org_id).ok_or_else(|| {
+            Error::NotFound(format!("no signing keys found for organization '{org_id}'"))
+        })?;
+        let entry = keys
+            .iter_mut()
+            .find(|k| k.key_id() == key_id)
+            .ok_or_else(|| {
+                Error::NotFound(format!(
+                    "signing key '{key_id}' not found for organization '{org_id}'"
+                ))
+            })?;
+        entry.revoke();
+        Ok(())
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -148,6 +248,14 @@ struct RawOrgFile {
 struct RawOrgEntry {
     name: String,
     config: OrgConfig,
+}
+
+// Called from generate_key (handler wired in a later task).
+#[allow(dead_code)]
+fn generate_key_id() -> String {
+    let bytes: [u8; 16] = rand::random();
+    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    format!("key-{hex}")
 }
 
 pub(crate) fn compute_etag(config: &OrgConfig) -> Result<String> {
@@ -235,6 +343,27 @@ impl OrgStore for AnyOrgStore {
         match self {
             Self::Memory(s) => s.delete(org_id).await,
             Self::DynamoDb(s) => s.delete(org_id).await,
+        }
+    }
+
+    async fn generate_key(&self, org_id: &OrganizationId) -> Result<GenerateKeyResult> {
+        match self {
+            Self::Memory(s) => s.generate_key(org_id).await,
+            Self::DynamoDb(s) => s.generate_key(org_id).await,
+        }
+    }
+
+    async fn list_keys(&self, org_id: &OrganizationId) -> Result<Vec<SigningKeyEntry>> {
+        match self {
+            Self::Memory(s) => s.list_keys(org_id).await,
+            Self::DynamoDb(s) => s.list_keys(org_id).await,
+        }
+    }
+
+    async fn revoke_key(&self, org_id: &OrganizationId, key_id: &str) -> Result<()> {
+        match self {
+            Self::Memory(s) => s.revoke_key(org_id, key_id).await,
+            Self::DynamoDb(s) => s.revoke_key(org_id, key_id).await,
         }
     }
 }
@@ -611,5 +740,124 @@ mod tests {
         // List with offset past end
         let empty = store.list(10, 10).await.unwrap();
         assert!(empty.is_empty());
+    }
+
+    // -- Signing key tests --
+
+    fn make_store_with_org(org_id_str: &str) -> InMemoryOrgStore {
+        let store = InMemoryOrgStore::new(BTreeMap::new());
+        let now = Utc::now();
+        let org = Organization::new(
+            OrganizationId::new(org_id_str).unwrap(),
+            "Test Org".to_string(),
+            OrgStatus::Draft,
+            now,
+        );
+        let config: OrgConfig = serde_json::from_value(serde_json::json!({
+            "version": "2026-04-07",
+            "project_id": "proj",
+            "upstream_url": "https://example.com",
+            "default_policy": "deny"
+        }))
+        .unwrap();
+        let etag = compute_etag(&config).unwrap();
+        let record = OrgRecord::new(org, config, etag);
+        store
+            .orgs
+            .try_write()
+            .unwrap()
+            .insert(OrganizationId::new(org_id_str).unwrap(), record);
+        store
+    }
+
+    #[tokio::test]
+    async fn generate_key_happy_path() {
+        let store = make_store_with_org("org-keys");
+        let org_id = OrganizationId::new("org-keys").unwrap();
+
+        let result = store.generate_key(&org_id).await.unwrap();
+        assert!(!result.key_id().is_empty());
+        assert!(result.private_key_pem().contains("PRIVATE KEY"));
+        assert!(result.public_key_pem().contains("PUBLIC KEY"));
+        assert!(result.created_at() <= Utc::now());
+    }
+
+    #[tokio::test]
+    async fn generate_key_nonexistent_org_returns_error() {
+        let store = InMemoryOrgStore::new(BTreeMap::new());
+        let org_id = OrganizationId::new("org-ghost").unwrap();
+
+        let result = store.generate_key(&org_id).await;
+        assert!(result.is_err());
+        let err = result.err().unwrap();
+        assert!(
+            matches!(err, Error::NotFound(_)),
+            "expected NotFound, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_keys_returns_generated_keys() {
+        let store = make_store_with_org("org-list");
+        let org_id = OrganizationId::new("org-list").unwrap();
+
+        store.generate_key(&org_id).await.unwrap();
+        store.generate_key(&org_id).await.unwrap();
+
+        let keys = store.list_keys(&org_id).await.unwrap();
+        assert_eq!(keys.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn list_keys_no_keys_returns_empty() {
+        let store = make_store_with_org("org-empty");
+        let org_id = OrganizationId::new("org-empty").unwrap();
+
+        let keys = store.list_keys(&org_id).await.unwrap();
+        assert!(keys.is_empty());
+    }
+
+    #[tokio::test]
+    async fn revoke_key_happy_path() {
+        let store = make_store_with_org("org-revoke");
+        let org_id = OrganizationId::new("org-revoke").unwrap();
+
+        let generated = store.generate_key(&org_id).await.unwrap();
+        store.revoke_key(&org_id, generated.key_id()).await.unwrap();
+
+        let keys = store.list_keys(&org_id).await.unwrap();
+        assert_eq!(keys.len(), 1);
+        assert_eq!(*keys[0].status(), SigningKeyStatus::Revoked);
+    }
+
+    #[tokio::test]
+    async fn revoke_key_nonexistent_org_returns_error() {
+        let store = InMemoryOrgStore::new(BTreeMap::new());
+        let org_id = OrganizationId::new("org-ghost").unwrap();
+
+        let result = store.revoke_key(&org_id, "key-abc").await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, Error::NotFound(_)),
+            "expected NotFound, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn revoke_key_nonexistent_key_returns_error() {
+        let store = make_store_with_org("org-badkey");
+        let org_id = OrganizationId::new("org-badkey").unwrap();
+
+        // Generate one key, then try to revoke a different key_id
+        store.generate_key(&org_id).await.unwrap();
+
+        let result = store.revoke_key(&org_id, "key-nonexistent").await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, Error::NotFound(_)),
+            "expected NotFound, got: {err:?}"
+        );
     }
 }

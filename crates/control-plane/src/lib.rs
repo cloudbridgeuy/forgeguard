@@ -6,4 +6,5 @@ mod config;
 mod dynamo_store;
 mod error;
 mod handlers;
+mod signing_key;
 mod store;

@@ -15,6 +15,7 @@ use forgeguard_core::{OrgStatus, Organization, OrganizationId};
 
 use crate::config::OrgConfig;
 use crate::error::{Error, Result};
+use crate::signing_key::{GenerateKeyResult, SigningKeyEntry};
 use crate::store::{compute_etag, OrgRecord, OrgStore};
 
 // ---------------------------------------------------------------------------
@@ -344,6 +345,24 @@ impl OrgStore for DynamoOrgStore {
 
         // Idempotent: always Ok(()) regardless of whether the item existed.
         Ok(())
+    }
+
+    async fn generate_key(&self, _org_id: &OrganizationId) -> Result<GenerateKeyResult> {
+        Err(Error::Store(
+            "not yet implemented: DynamoDB generate_key".into(),
+        ))
+    }
+
+    async fn list_keys(&self, _org_id: &OrganizationId) -> Result<Vec<SigningKeyEntry>> {
+        Err(Error::Store(
+            "not yet implemented: DynamoDB list_keys".into(),
+        ))
+    }
+
+    async fn revoke_key(&self, _org_id: &OrganizationId, _key_id: &str) -> Result<()> {
+        Err(Error::Store(
+            "not yet implemented: DynamoDB revoke_key".into(),
+        ))
     }
 }
 

@@ -28,6 +28,7 @@ axum = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
 color-eyre = { workspace = true }
+ed25519-dalek = { workspace = true, features = ["rand_core"] }
 forgeguard-axum = { workspace = true }
 forgeguard_authn = { workspace = true }
 forgeguard_authn_core = { workspace = true }
@@ -35,6 +36,7 @@ forgeguard_authz_core = { workspace = true }
 forgeguard_core = { workspace = true }
 forgeguard_http = { workspace = true }
 forgeguard_proxy_core = { workspace = true }
+rand = { workspace = true } #unified
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
