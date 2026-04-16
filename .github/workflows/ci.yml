@@ -13,7 +13,7 @@ jobs:
   plan:
     name: CI Plan
     runs-on: ubuntu-latest
-    if: "!startsWith(github.event.head_commit.message, 'chore: bump version')"
+    if: "!(github.event_name == 'push' && startsWith(github.event.head_commit.message, 'chore: bump version'))"
     outputs:
       mode: ${{ steps.extract.outputs.mode }}
       crates: ${{ steps.extract.outputs.crates }}
@@ -103,7 +103,7 @@ jobs:
     name: Test Suite
     needs: [plan]
     runs-on: ubuntu-latest
-    if: "needs.plan.outputs.test == 'true' && !startsWith(github.event.head_commit.message, 'chore: bump version')"
+    if: "needs.plan.outputs.test == 'true' && !(github.event_name == 'push' && startsWith(github.event.head_commit.message, 'chore: bump version'))"
     env:
       MODE: ${{ needs.plan.outputs.mode }}
       CRATES: ${{ needs.plan.outputs.crates }}
@@ -113,8 +113,6 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
 
       - name: Cache cargo registry and index
         uses: actions/cache@v5
@@ -177,14 +175,11 @@ jobs:
               ;;
           esac
 
-      - name: Check formatting
-        run: cargo fmt -- --check
-
   build:
     name: Build Check
     needs: [plan]
     runs-on: ${{ matrix.os }}
-    if: "needs.plan.outputs.build == 'true' && !startsWith(github.event.head_commit.message, 'chore: bump version')"
+    if: "needs.plan.outputs.build == 'true' && !(github.event_name == 'push' && startsWith(github.event.head_commit.message, 'chore: bump version'))"
     env:
       MODE: ${{ needs.plan.outputs.mode }}
       CRATES: ${{ needs.plan.outputs.crates }}
@@ -250,7 +245,7 @@ jobs:
     needs: [plan]
     runs-on: ubuntu-latest
     if: |
-      !startsWith(github.event.head_commit.message, 'chore: bump version') &&
+      !(github.event_name == 'push' && startsWith(github.event.head_commit.message, 'chore: bump version')) &&
       needs.plan.outputs.build == 'true' &&
       (needs.plan.outputs.mode == 'workspace' ||
        contains(needs.plan.outputs.crates, 'forgeguard_sdk') ||
@@ -283,7 +278,7 @@ jobs:
     name: Rustdoc Build
     needs: [plan]
     runs-on: ubuntu-latest
-    if: "needs.plan.outputs.docs == 'true' && !startsWith(github.event.head_commit.message, 'chore: bump version')"
+    if: "needs.plan.outputs.docs == 'true' && !(github.event_name == 'push' && startsWith(github.event.head_commit.message, 'chore: bump version'))"
     env:
       RUSTDOCFLAGS: "-D warnings"
     steps:
@@ -311,6 +306,7 @@ jobs:
           key: ${{ runner.os }}-docs-target-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-docs-target-
+            ${{ runner.os }}-target-
 
       - name: Build rustdoc
         run: cargo doc --workspace --no-deps --document-private-items
@@ -318,7 +314,7 @@ jobs:
   unused-deps:
     name: Check Unused Dependencies
     runs-on: ubuntu-latest
-    if: "!startsWith(github.event.head_commit.message, 'chore: bump version')"
+    if: "!(github.event_name == 'push' && startsWith(github.event.head_commit.message, 'chore: bump version'))"
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -338,7 +334,7 @@ jobs:
   deny:
     name: Dependency Audit
     runs-on: ubuntu-latest
-    if: "!startsWith(github.event.head_commit.message, 'chore: bump version')"
+    if: "!(github.event_name == 'push' && startsWith(github.event.head_commit.message, 'chore: bump version'))"
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -349,10 +345,24 @@ jobs:
   typos:
     name: Check Typos
     runs-on: ubuntu-latest
-    if: "!startsWith(github.event.head_commit.message, 'chore: bump version')"
+    if: "!(github.event_name == 'push' && startsWith(github.event.head_commit.message, 'chore: bump version'))"
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
 
       - name: Check for typos
         uses: crate-ci/typos@master
+
+  fmt:
+    name: Formatting
+    runs-on: ubuntu-latest
+    if: "!(github.event_name == 'push' && startsWith(github.event.head_commit.message, 'chore: bump version'))"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Check formatting
+        run: cargo fmt -- --check

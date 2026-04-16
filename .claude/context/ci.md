@@ -8,7 +8,8 @@ every push/PR to `main` and `develop` and gates merges.
 | Job                       | Purpose                                                                 |
 | ------------------------- | ----------------------------------------------------------------------- |
 | CI Plan                   | Runs `cargo rail plan`; produces surface gates, mode, and crates list consumed by all downstream jobs. Also skipped on `chore: bump version` commits. |
-| Test Suite                | `cargo test --workspace`, clippy, rustfmt |
+| Formatting                | `cargo fmt -- --check`; always runs (no `needs:`, no surface gate) |
+| Test Suite                | `cargo test --workspace`, clippy |
 | Build Check               | `cargo check --workspace --exclude xtask` on ubuntu + macos |
 | WASM Build Check          | `cargo check -p forgeguard_sdk -p forgeguard_ffi_wasm --target wasm32-unknown-unknown` |
 | Rustdoc Build             | `cargo doc --workspace --no-deps --document-private-items`; `RUSTDOCFLAGS: "-D warnings"` is set, so doc-comment errors fail the job |
