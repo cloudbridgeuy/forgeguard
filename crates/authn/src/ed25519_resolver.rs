@@ -252,6 +252,7 @@ mod tests {
         assert!(identity.groups().is_empty());
         assert!(identity.expiry().is_none());
         assert_eq!(identity.resolver(), "ed25519");
+        assert!(identity.extra().is_none());
     }
 
     #[tokio::test]
