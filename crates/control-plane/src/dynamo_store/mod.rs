@@ -102,7 +102,6 @@ impl DynamoOrgStore {
     /// Write an updated `signing_keys` JSON list back to the org item.
     ///
     /// Uses `attribute_exists(#pk)` to ensure the org still exists.
-    #[allow(dead_code)]
     async fn write_signing_keys(
         &self,
         org_id: &OrganizationId,
@@ -265,7 +264,6 @@ fn map_put_item_error(
 
 /// Map an `UpdateItem` SDK error, converting `ConditionalCheckFailedException`
 /// into the provided domain error.
-#[allow(dead_code)]
 fn map_update_item_error(
     sdk_err: aws_sdk_dynamodb::error::SdkError<
         aws_sdk_dynamodb::operation::update_item::UpdateItemError,

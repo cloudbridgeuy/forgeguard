@@ -47,21 +47,16 @@ pub(crate) trait OrgStore: Send + Sync {
         org_id: &OrganizationId,
     ) -> impl std::future::Future<Output = Result<()>> + Send;
 
-    // Handlers wired in a later task; suppress dead-code warnings until then.
-
-    #[allow(dead_code)]
     fn generate_key(
         &self,
         org_id: &OrganizationId,
     ) -> impl std::future::Future<Output = Result<GenerateKeyResult>> + Send;
 
-    #[allow(dead_code)]
     fn list_keys(
         &self,
         org_id: &OrganizationId,
     ) -> impl std::future::Future<Output = Result<Vec<SigningKeyEntry>>> + Send;
 
-    #[allow(dead_code)]
     fn revoke_key(
         &self,
         org_id: &OrganizationId,
@@ -97,8 +92,6 @@ impl OrgRecord {
 #[derive(Debug)]
 pub(crate) struct InMemoryOrgStore {
     orgs: tokio::sync::RwLock<BTreeMap<OrganizationId, OrgRecord>>,
-    // Used by generate_key / list_keys / revoke_key (handlers wired later).
-    #[allow(dead_code)]
     signing_keys: tokio::sync::RwLock<BTreeMap<OrganizationId, Vec<SigningKeyEntry>>>,
 }
 
@@ -231,8 +224,6 @@ struct RawOrgEntry {
     config: OrgConfig,
 }
 
-// Handlers wired in a later task; suppress dead-code warnings until then.
-#[allow(dead_code)]
 pub(crate) fn generate_key_id() -> String {
     let bytes: [u8; 16] = rand::random();
     let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
@@ -243,8 +234,6 @@ pub(crate) fn generate_key_id() -> String {
 ///
 /// `ThreadRng` is not `Send`, so this function is intentionally synchronous.
 /// Callers must invoke it *before* any `.await` point.
-// Handlers wired in a later task; suppress dead-code warnings until then.
-#[allow(dead_code)]
 pub(crate) fn generate_key_material() -> Result<GenerateKeyResult> {
     let mut rng = rand::thread_rng();
     let signing_key = ed25519_dalek::SigningKey::generate(&mut rng);

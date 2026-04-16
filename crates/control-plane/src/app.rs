@@ -107,6 +107,9 @@ const API_ROUTES: &[(&str, &str)] = &[
     ("PUT", "/api/v1/organizations/{org_id}"),
     ("DELETE", "/api/v1/organizations/{org_id}"),
     ("GET", "/api/v1/organizations/{org_id}/proxy-config"),
+    ("POST", "/api/v1/organizations/{org_id}/keys"),
+    ("GET", "/api/v1/organizations/{org_id}/keys"),
+    ("DELETE", "/api/v1/organizations/{org_id}/keys/{key_id}"),
 ];
 
 fn build_forgeguard(auth: Option<&AuthConfig>) -> color_eyre::Result<Arc<ForgeGuard>> {
@@ -169,6 +172,14 @@ fn build_router<S: OrgStore + 'static>(store: Arc<S>, fg: Arc<ForgeGuard>) -> Ro
         .route(
             "/api/v1/organizations/{org_id}/proxy-config",
             get(handlers::proxy_config_handler::<S>),
+        )
+        .route(
+            "/api/v1/organizations/{org_id}/keys",
+            post(handlers::generate_key_handler::<S>).get(handlers::list_keys_handler::<S>),
+        )
+        .route(
+            "/api/v1/organizations/{org_id}/keys/{key_id}",
+            axum::routing::delete(handlers::revoke_key_handler::<S>),
         )
         .with_state(store)
         .layer(axum::middleware::from_fn_with_state(fg, forgeguard_layer))

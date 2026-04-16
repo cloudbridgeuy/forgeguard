@@ -119,9 +119,6 @@ impl<'de> Deserialize<'de> for SigningKeyEntry {
     }
 }
 
-// Handlers wired in a later task; suppress dead-code on items only used by
-// store trait impls that are themselves `#[allow(dead_code)]`.
-#[allow(dead_code)]
 impl SigningKeyEntry {
     /// Create a new signing key entry.
     ///
@@ -171,6 +168,7 @@ impl SigningKeyEntry {
     ///
     /// Active keys are always usable. Rotating keys are usable until their
     /// `expires_at` timestamp. Revoked keys are never usable.
+    #[allow(dead_code)] // Used by proxy key verification (future slice)
     pub(crate) fn is_active(&self, now: DateTime<Utc>) -> bool {
         match &self.status {
             SigningKeyStatus::Active => true,
@@ -190,7 +188,6 @@ impl SigningKeyEntry {
 // ---------------------------------------------------------------------------
 
 /// Result of key generation — carries the private key (returned once, never stored).
-#[allow(dead_code)]
 pub(crate) struct GenerateKeyResult {
     key_id: String,
     private_key_pem: String,
@@ -198,7 +195,6 @@ pub(crate) struct GenerateKeyResult {
     created_at: DateTime<Utc>,
 }
 
-#[allow(dead_code)]
 impl GenerateKeyResult {
     pub(crate) fn new(
         key_id: String,

@@ -1,3 +1,5 @@
+mod keys;
+
 use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
@@ -10,6 +12,8 @@ use serde::Deserialize;
 
 use crate::config::OrgConfig;
 use crate::store::{OrgRecord, OrgStore};
+
+pub(crate) use keys::{generate_key_handler, list_keys_handler, revoke_key_handler};
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct CreateOrgRequest {
@@ -214,14 +218,16 @@ fn not_found() -> Response {
         .into_response()
 }
 
+// ---------------------------------------------------------------------------
+// Test support — shared helpers for handler tests across submodules
+// ---------------------------------------------------------------------------
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
-mod tests {
+pub(super) mod test_support {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use axum::body::Body;
-    use axum::http::{Request, StatusCode};
     use axum::Router;
     use forgeguard_authn_core::static_api_key::{ApiKeyEntry, StaticApiKeyResolver};
     use forgeguard_authn_core::IdentityChain;
@@ -232,14 +238,12 @@ mod tests {
         DefaultPolicy, PublicAuthMode, PublicRoute, PublicRouteMatcher, RouteMatcher,
     };
     use forgeguard_proxy_core::{PipelineConfig, PipelineConfigParams};
-    use http_body_util::BodyExt;
-    use tower::ServiceExt;
 
     use crate::store::{build_org_store, InMemoryOrgStore};
 
-    const TEST_API_KEY: &str = "test-key";
+    pub const TEST_API_KEY: &str = "test-key";
 
-    fn build_test_store() -> Arc<InMemoryOrgStore> {
+    pub fn build_test_store() -> Arc<InMemoryOrgStore> {
         let json = r#"{
             "organizations": {
                 "org-acme": {
@@ -259,7 +263,7 @@ mod tests {
         Arc::new(build_org_store(json).unwrap())
     }
 
-    fn test_app(store: Arc<InMemoryOrgStore>) -> Router {
+    pub fn test_app(store: Arc<InMemoryOrgStore>) -> Router {
         let route_matcher = RouteMatcher::new(&[]).unwrap();
         let public_routes = vec![PublicRoute::new(
             "GET".parse().unwrap(),
@@ -308,9 +312,53 @@ mod tests {
                 "/api/v1/organizations/{org_id}/proxy-config",
                 axum::routing::get(super::proxy_config_handler::<InMemoryOrgStore>),
             )
+            .route(
+                "/api/v1/organizations/{org_id}/keys",
+                axum::routing::post(super::keys::generate_key_handler::<InMemoryOrgStore>)
+                    .get(super::keys::list_keys_handler::<InMemoryOrgStore>),
+            )
+            .route(
+                "/api/v1/organizations/{org_id}/keys/{key_id}",
+                axum::routing::delete(super::keys::revoke_key_handler::<InMemoryOrgStore>),
+            )
             .with_state(store)
             .layer(axum::middleware::from_fn_with_state(fg, forgeguard_layer))
     }
+
+    pub fn create_org_json(org_id: &str, name: &str) -> serde_json::Value {
+        serde_json::json!({
+            "org_id": org_id,
+            "name": name,
+            "config": {
+                "version": "2026-04-07",
+                "project_id": "proj",
+                "upstream_url": "https://example.com",
+                "default_policy": "deny",
+                "routes": [],
+                "public_routes": [],
+                "features": {}
+            }
+        })
+    }
+
+    pub fn empty_store() -> Arc<InMemoryOrgStore> {
+        Arc::new(InMemoryOrgStore::new(std::collections::BTreeMap::new()))
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use std::sync::Arc;
+
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    use super::test_support::{
+        build_test_store, create_org_json, empty_store, test_app, TEST_API_KEY,
+    };
 
     #[tokio::test]
     async fn unauthenticated_request_returns_401() {
@@ -422,26 +470,6 @@ mod tests {
     }
 
     // ── Create + Get tests ─────────────────────────────────────────
-
-    fn create_org_json(org_id: &str, name: &str) -> serde_json::Value {
-        serde_json::json!({
-            "org_id": org_id,
-            "name": name,
-            "config": {
-                "version": "2026-04-07",
-                "project_id": "proj",
-                "upstream_url": "https://example.com",
-                "default_policy": "deny",
-                "routes": [],
-                "public_routes": [],
-                "features": {}
-            }
-        })
-    }
-
-    fn empty_store() -> Arc<InMemoryOrgStore> {
-        Arc::new(InMemoryOrgStore::new(std::collections::BTreeMap::new()))
-    }
 
     #[tokio::test]
     async fn create_and_get_org() {
