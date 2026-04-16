@@ -104,4 +104,13 @@ mod tests {
         let err = Error::InvalidCredential("unrecognized format".to_owned());
         assert_eq!(err.to_string(), "invalid credential: unrecognized format");
     }
+
+    #[test]
+    fn display_missing_org_id() {
+        let err = Error::MissingOrgId;
+        assert_eq!(
+            err.to_string(),
+            "missing X-ForgeGuard-Org-Id header in signed request"
+        );
+    }
 }
