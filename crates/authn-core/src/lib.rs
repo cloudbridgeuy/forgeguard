@@ -7,6 +7,7 @@ pub mod identity;
 pub mod jwt_claims;
 pub mod resolver;
 pub mod signing;
+pub mod signing_key_store;
 pub mod static_api_key;
 
 #[cfg(feature = "test-support")]
@@ -18,6 +19,7 @@ pub use error::{Error, Result};
 pub use identity::{Identity, IdentityParams};
 pub use jwt_claims::JwtClaims;
 pub use resolver::IdentityResolver;
+pub use signing_key_store::{InMemorySigningKeyStore, SigningKeyStore};
 pub use static_api_key::StaticApiKeyResolver;
 
 #[cfg(feature = "test-support")]
