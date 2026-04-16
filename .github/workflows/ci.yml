@@ -262,6 +262,42 @@ jobs:
       - name: Check WASM compilation (SDK + FFI WASM)
         run: cargo check -p forgeguard_sdk -p forgeguard_ffi_wasm --target wasm32-unknown-unknown
 
+  docs:
+    name: Rustdoc Build
+    needs: [plan]
+    runs-on: ubuntu-latest
+    if: "needs.plan.outputs.docs == 'true' && !startsWith(github.event.head_commit.message, 'chore: bump version')"
+    env:
+      RUSTDOCFLAGS: "-D warnings"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and index
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: ${{ runner.os }}-docs-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-docs-cargo-
+
+      - name: Cache target directory
+        uses: actions/cache@v5
+        with:
+          path: target/
+          key: ${{ runner.os }}-docs-target-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-docs-target-
+
+      - name: Build rustdoc
+        run: cargo doc --workspace --no-deps --document-private-items
+
   unused-deps:
     name: Check Unused Dependencies
     runs-on: ubuntu-latest
