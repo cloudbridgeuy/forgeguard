@@ -144,13 +144,51 @@ Auth is handled by the `forgeguard-axum` middleware, which runs the ForgeGuard a
 | Mode | When | Behavior |
 |------|------|----------|
 | Dev (no auth) | `--jwks-url` omitted | All routes Anonymous, empty `IdentityChain`, `StaticPolicyEngine(Allow)` |
-| Auth enabled | `--jwks-url` + `--issuer` provided | Only `/health` is Anonymous, all API routes require a valid Cognito JWT via `CognitoJwtResolver` |
+| Auth enabled | `--jwks-url` + `--issuer` provided | Only `/health` is Anonymous; all API routes require a valid credential resolved by the `IdentityChain` |
 
-When auth is enabled, the `IdentityChain` contains a `CognitoJwtResolver` constructed from the JWKS URL and issuer. Claims mapping: `sub` → user_id, `custom:org_id` → tenant_id, `cognito:groups` → groups. The optional `--audience` flag enables audience claim validation against the Cognito app client ID.
+When auth is enabled, the `IdentityChain` contains resolvers tried in order:
+
+1. `CognitoJwtResolver` — Cognito JWT via `Authorization: Bearer`. Claims mapping: `sub` → user_id, `custom:org_id` → tenant_id, `cognito:groups` → groups. The optional `--audience` flag enables audience claim validation against the Cognito app client ID.
+2. `Ed25519SignatureResolver` — Ed25519 signed requests from BYOC proxies (see below).
 
 The `AuthConfig` struct (`app.rs`) validates the JWKS URL at construction time (Parse Don't Validate) and is `pub` so `fg-lambdas` can import it. The Lambda binary reads the same config from `FORGEGUARD_CP_JWKS_URL`, `FORGEGUARD_CP_ISSUER`, `FORGEGUARD_CP_AUDIENCE` env vars (injected by the CDK Lambda stack from Cognito stack outputs).
 
-**Not yet implemented:** VP authorization (#41 V4), Ed25519 machine auth (#41 V3).
+### Ed25519 Machine Authentication (V3)
+
+BYOC proxies authenticate to the control plane using Ed25519 signed requests. This is only active when `--store=dynamodb` AND `--jwks-url` (auth) are both configured.
+
+**Signed request flow:**
+
+```
+BYOC Proxy                              Control Plane
+──────────                              ─────────────
+1. Build identity headers (X-ForgeGuard-*)
+2. Sign canonical payload (Ed25519, private key)
+3. Inject 4 protocol headers + identity headers
+                                        4. extract_credential (priority 3)
+                                           → Credential::SignedRequest
+                                        5. Ed25519SignatureResolver:
+                                           a. Extract org_id from X-ForgeGuard-Org-Id
+                                           b. Look up public key via DynamoSigningKeyStore
+                                           c. Rebuild canonical payload, verify signature
+                                           d. Check timestamp drift (≤ 5 min)
+                                        6. Identity(user_id=key_id, tenant_id=org_id,
+                                                    resolver="ed25519")
+```
+
+**Required headers from the proxy:**
+
+| Header | Content |
+|--------|---------|
+| `X-ForgeGuard-Signature` | `v1:{base64(ed25519_sig)}` |
+| `X-ForgeGuard-Timestamp` | Unix milliseconds |
+| `X-ForgeGuard-Key-Id` | Key identifier (used for lookup and becomes user_id) |
+| `X-ForgeGuard-Trace-Id` | Per-request UUID v7 |
+| `X-ForgeGuard-Org-Id` | Organization identifier (identity header, becomes tenant_id) |
+
+**Wiring in `app.rs`:** `dynamodb_router()` creates a `DynamoSigningKeyStore` (backed by the same DynamoDB table), wraps it in `Ed25519SignatureResolver`, and appends it to the `IdentityChain` after `CognitoJwtResolver`. Memory mode never gets the Ed25519 resolver.
+
+**Not yet implemented:** VP authorization (#41 V4).
 
 ## Testing
 
@@ -219,6 +257,7 @@ crates/control-plane/src/
     tests.rs          -- handler integration tests (split from mod.rs to satisfy 1000-line cap)
     keys.rs           -- generate_key, list_keys, revoke_key handlers + tests
   signing_key.rs      -- SigningKeyEntry, KeyStatus, Ed25519 key generation
+  signing_key_store.rs -- DynamoSigningKeyStore (implements SigningKeyStore from authn-core)
   error.rs            -- Error enum, Result alias
 ```
 
@@ -231,7 +270,7 @@ The crate is both lib+bin. `app.rs` exposes `dynamodb_router()` and `memory_rout
 
 ## Key Management
 
-Three endpoints manage Ed25519 signing keys per organization. Keys are used for outbound request signing (see [request-signing.md](./request-signing.md)).
+Three endpoints manage Ed25519 signing keys per organization. The private key is used by the BYOC proxy for outbound request signing (see [request-signing.md](./request-signing.md)); the public key is stored in the control plane and used by `DynamoSigningKeyStore` to verify inbound signed requests from the proxy.
 
 ### Endpoints
 
@@ -301,6 +340,5 @@ curl -s -X DELETE \
 ## What's NOT Here Yet
 
 - CORS middleware (no browser clients -- deferred to #40 dashboard)
-- Ed25519 machine authentication (#41 V3)
 - VP authorization with PrincipalKind routing (#41 V4)
 - Hot-reload of config file

@@ -77,12 +77,16 @@ Upstream config accepts multiple public keys. Zero-downtime rotation:
 
 The demo app (`examples/todo-app/app.py`) verifies signatures when `FORGEGUARD_PUBLIC_KEY` env var points to the public key PEM. Uses the `cryptography` Python package. Every authenticated response includes `"signature_verified": true/false` in the identity object.
 
+## Inbound Verification (Control Plane)
+
+The control plane verifies signed requests from BYOC proxies using the same Ed25519 keys. See [control-plane.md](./control-plane.md) for the full flow.
+
+`Credential::SignedRequest` (in `authn-core`) is the inbound credential type. `Ed25519SignatureResolver` (in `authn`) performs the verification using `DynamoSigningKeyStore` (in `control-plane`).
+
 ## Future Scope (deferred)
 
 | Item | Issue | Notes |
 |------|-------|-------|
-| `Credential::ServiceSignature` | #39 | Inbound credential type for control plane |
-| `Ed25519SignatureResolver` | #34, #39 | Inbound verification resolver |
 | Body hashing | #34 | Canonical payload includes body hash for POST |
 | SDK `verify()` wiring | #39 | Pure function exists, wiring deferred |
 

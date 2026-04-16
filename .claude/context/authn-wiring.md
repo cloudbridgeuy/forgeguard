@@ -44,14 +44,18 @@ Pure (no I/O)                           I/O
 ─────────────                           ────
 authn-core:                             authn:
   IdentityResolver trait                  CognitoJwtResolver (JWKS fetch)
-  Credential enum (Bearer | ApiKey)
+  Credential enum                         Ed25519SignatureResolver (key lookup + verify)
+    (Bearer | ApiKey | SignedRequest)
   Identity struct                       proxy/main.rs:
   IdentityChain (resolver chain)          build_identity_chain() — constructs
   StaticApiKeyResolver (HashMap)            resolvers from ProxyConfig
-
-http:
+  SigningKeyStore trait
+  InMemorySigningKeyStore               control-plane/app.rs:
+                                          dynamodb_router() — wires
+http:                                       [CognitoJwtResolver, Ed25519SignatureResolver]
   RawJwtConfig → JwtConfig (Parse Don't Validate)
   RawApiKeyEntry → ApiKeyConfig (validates UserId/TenantId/GroupName)
+  extract_credential() — header → Credential (priority: Bearer, ApiKey, SignedRequest)
 ```
 
 ## Config Parsing Flow
@@ -70,7 +74,12 @@ http:
 |------|------|
 | `crates/http/src/config_raw.rs` | Raw serde structs: `RawAuthnConfig`, `RawJwtConfig`, `RawApiKeyEntry` |
 | `crates/http/src/config.rs` | Validated types: `JwtConfig`, `ApiKeyConfig` + parsing + tests |
+| `crates/http/src/credential.rs` | `extract_credential()` — maps HTTP headers to `Credential` enum |
 | `crates/authn/src/config.rs` | `JwtResolverConfig` (resolver's own config, built from `JwtConfig`) |
 | `crates/authn/src/resolver.rs` | `CognitoJwtResolver` implementation |
+| `crates/authn/src/ed25519_resolver.rs` | `Ed25519SignatureResolver` implementation |
 | `crates/authn-core/src/static_api_key.rs` | `StaticApiKeyResolver` implementation |
+| `crates/authn-core/src/signing_key_store.rs` | `SigningKeyStore` trait + `InMemorySigningKeyStore` |
 | `crates/proxy/src/main.rs` | `build_identity_chain()` — wires resolvers from config |
+| `crates/control-plane/src/app.rs` | `dynamodb_router()` — wires `[CognitoJwtResolver, Ed25519SignatureResolver]` |
+| `crates/control-plane/src/signing_key_store.rs` | `DynamoSigningKeyStore` — DynamoDB-backed `SigningKeyStore` |
