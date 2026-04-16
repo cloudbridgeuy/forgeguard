@@ -68,7 +68,7 @@ impl SigningKeyStore for DynamoSigningKeyStore {
                 signing_keys_from_item(&item).map_err(|e| invalid_credential(e.to_string()))?;
 
             let entry = keys.iter().find(|k| k.key_id() == key_id).ok_or_else(|| {
-                invalid_credential(format!("no active key '{key_id}' for org '{org_id}'"))
+                invalid_credential(format!("signing key '{key_id}' not found for org '{org_id}'"))
             })?;
 
             let now = Utc::now();
@@ -277,8 +277,8 @@ mod tests {
         let err = result.unwrap_err();
         let msg = err.to_string();
         assert!(
-            msg.contains("no active key"),
-            "expected 'no active key' in error, got: {msg}"
+            msg.contains("not found"),
+            "expected 'not found' in error, got: {msg}"
         );
     }
 
