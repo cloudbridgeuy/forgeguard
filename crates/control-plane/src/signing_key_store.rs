@@ -15,6 +15,11 @@ use aws_sdk_dynamodb::types::AttributeValue;
 
 use crate::dynamo_store::{map_sdk_error, pk, signing_keys_from_item, sk, ORG_PREFIX, SK_META};
 
+/// Shorthand: wrap a message in `forgeguard_authn_core::Error::InvalidCredential`.
+fn invalid_credential(msg: impl Into<String>) -> forgeguard_authn_core::Error {
+    forgeguard_authn_core::Error::InvalidCredential(msg.into())
+}
+
 /// DynamoDB-backed signing key store.
 ///
 /// Implements [`SigningKeyStore`] by reading the org item from DynamoDB,
@@ -53,28 +58,22 @@ impl SigningKeyStore for DynamoSigningKeyStore {
                 .key(sk(), AttributeValue::S(SK_META.to_string()))
                 .send()
                 .await
-                .map_err(|e| {
-                    forgeguard_authn_core::Error::InvalidCredential(map_sdk_error(e).to_string())
-                })?;
+                .map_err(|e| invalid_credential(map_sdk_error(e).to_string()))?;
 
-            let item = result.item.ok_or_else(|| {
-                forgeguard_authn_core::Error::InvalidCredential(format!(
-                    "organization '{org_id}' not found"
-                ))
-            })?;
+            let item = result
+                .item
+                .ok_or_else(|| invalid_credential(format!("organization '{org_id}' not found")))?;
 
-            let keys = signing_keys_from_item(&item)
-                .map_err(|e| forgeguard_authn_core::Error::InvalidCredential(e.to_string()))?;
+            let keys =
+                signing_keys_from_item(&item).map_err(|e| invalid_credential(e.to_string()))?;
 
             let entry = keys.iter().find(|k| k.key_id() == key_id).ok_or_else(|| {
-                forgeguard_authn_core::Error::InvalidCredential(format!(
-                    "no active key '{key_id}' for org '{org_id}'"
-                ))
+                invalid_credential(format!("no active key '{key_id}' for org '{org_id}'"))
             })?;
 
             let now = Utc::now();
             if !entry.is_active(now) {
-                return Err(forgeguard_authn_core::Error::InvalidCredential(format!(
+                return Err(invalid_credential(format!(
                     "key '{key_id}' for org '{org_id}' is not active (status: {})",
                     entry.status()
                 )));
