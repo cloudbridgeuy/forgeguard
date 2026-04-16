@@ -164,7 +164,7 @@ BYOC Proxy                              Control Plane
 ──────────                              ─────────────
 1. Build identity headers (X-ForgeGuard-*)
 2. Sign canonical payload (Ed25519, private key)
-3. Inject 4 protocol headers + identity headers
+3. Inject 4 protocol headers + identity headers (e.g., `X-ForgeGuard-Org-Id`)
                                         4. extract_credential (priority 3)
                                            → Credential::SignedRequest
                                         5. Ed25519SignatureResolver:
