@@ -187,6 +187,7 @@ impl SigningKeyEntry {
 // ---------------------------------------------------------------------------
 
 /// Result of key generation — carries the private key (returned once, never stored).
+#[derive(Debug)]
 pub(crate) struct GenerateKeyResult {
     key_id: String,
     private_key_pem: String,
