@@ -21,6 +21,9 @@ Authentication and authorization are handled by the `forgeguard-axum` middleware
 | `PUT` | `/api/v1/organizations/{org_id}` | Update organization name and/or config |
 | `DELETE` | `/api/v1/organizations/{org_id}` | Delete organization |
 | `GET` | `/api/v1/organizations/{org_id}/proxy-config` | Per-org proxy config with ETag caching |
+| `POST` | `/api/v1/organizations/{org_id}/keys` | Generate Ed25519 signing key |
+| `GET` | `/api/v1/organizations/{org_id}/keys` | List signing keys for an org |
+| `DELETE` | `/api/v1/organizations/{org_id}/keys/{key_id}` | Revoke a signing key |
 
 ### Response Codes (proxy-config)
 
@@ -58,7 +61,29 @@ curl -si \
   http://localhost:3001/api/v1/organizations/org-acme/proxy-config
 ```
 
-### 2. With your own orgs
+### 2. Key Management
+
+Generate, list, and revoke Ed25519 signing keys for outbound request signing.
+
+```sh
+# Generate a new signing key -> 201
+# The private key is returned ONLY on creation -- store it securely.
+curl -s -X POST \
+  -H 'x-api-key: test-key' \
+  http://localhost:3001/api/v1/organizations/org-acme/keys | jq .
+
+# List signing keys -> 200 (public metadata only, no private keys)
+curl -s \
+  -H 'x-api-key: test-key' \
+  http://localhost:3001/api/v1/organizations/org-acme/keys | jq .
+
+# Revoke a signing key -> 204 (idempotent -- also 204 for nonexistent keys)
+curl -s -X DELETE \
+  -H 'x-api-key: test-key' \
+  http://localhost:3001/api/v1/organizations/org-acme/keys/key-abc123
+```
+
+### 3. With your own orgs
 
 For real AWS resources, copy the sample and fill in your values:
 

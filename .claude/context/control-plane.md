@@ -111,9 +111,10 @@ The `AuthConfig` struct (`app.rs`) validates the JWKS URL at construction time (
 
 ## Testing
 
-- 8 store tests (`store.rs`) -- parsing, validation, ETag determinism, multiple orgs, unknown fields
-- 14 handler integration tests (`handlers.rs`) -- full HTTP pipeline via `tower::ServiceExt::oneshot` with `forgeguard-axum` middleware layer, auth via `StaticApiKeyResolver` (`x-api-key: test-key`)
-- 11 DynamoDB integration tests (`dynamo_store.rs`) -- feature-gated behind `dynamodb-tests`, run via `cargo xtask control-plane test`
+- 23 store tests (`store.rs`) -- parsing, validation, ETag determinism, multiple orgs, unknown fields, key lifecycle
+- 18 handler integration tests (`handlers/mod.rs`) -- full HTTP pipeline via `tower::ServiceExt::oneshot` with `forgeguard-axum` middleware layer, auth via `StaticApiKeyResolver` (`x-api-key: test-key`)
+- 7 key handler integration tests (`handlers/keys.rs`) -- generate, revoke (incl. idempotent), list keys
+- 17 DynamoDB integration tests (`dynamo_store/tests.rs`) -- feature-gated behind `dynamodb-tests`, run via `cargo xtask control-plane test`
 
 Store tests use `build_org_store()` with inline JSON to build `InMemoryOrgStore` instances. Tests that call `store.get()` use `#[tokio::test]` since the store is async.
 
@@ -163,15 +164,18 @@ See `crates/control-plane/README.md` for full usage instructions and curl exampl
 
 ```
 crates/control-plane/src/
-  lib.rs           -- library root: pub mod app + internal modules
-  app.rs           -- public router builders: dynamodb_router(), memory_router()
-  main.rs          -- binary entry point: CLI parsing, delegates to app:: (shell)
-  cli.rs           -- clap CLI: --store, --config, --dynamodb-table, --listen, --log-level, --jwks-url, --issuer, --audience
-  config.rs        -- OrgConfig (versioned), RouteEntry, PublicRouteEntry (serde DTOs)
-  store.rs         -- OrgStore trait (async), InMemoryOrgStore, AnyOrgStore, OrgRecord, build/load/etag
-  dynamo_store.rs  -- DynamoOrgStore (DynamoDB-backed OrgStore implementation)
-  handlers.rs      -- health_handler, proxy_config_handler<S: OrgStore> (shell) + integration tests
-  error.rs         -- Error enum, Result alias
+  lib.rs              -- library root: pub mod app + internal modules
+  app.rs              -- public router builders: dynamodb_router(), memory_router()
+  main.rs             -- binary entry point: CLI parsing, delegates to app:: (shell)
+  cli.rs              -- clap CLI: --store, --config, --dynamodb-table, --listen, --log-level, --jwks-url, --issuer, --audience
+  config.rs           -- OrgConfig (versioned), RouteEntry, PublicRouteEntry (serde DTOs)
+  store.rs            -- OrgStore trait (async), InMemoryOrgStore, AnyOrgStore, OrgRecord, build/load/etag
+  dynamo_store/       -- DynamoOrgStore (DynamoDB-backed OrgStore implementation)
+  handlers/
+    mod.rs            -- health, CRUD, proxy_config handlers + integration tests
+    keys.rs           -- generate_key, list_keys, revoke_key handlers + tests
+  signing_key.rs      -- SigningKeyEntry, KeyStatus, Ed25519 key generation
+  error.rs            -- Error enum, Result alias
 ```
 
 The crate is both lib+bin. `app.rs` exposes `dynamodb_router()` and `memory_router()` so `fg-lambdas` can import the Axum router and wrap it with `lambda_http`. All internal types stay `pub(crate)`.
@@ -181,10 +185,78 @@ The crate is both lib+bin. `app.rs` exposes `dynamodb_router()` and `memory_rout
 - `examples/control-plane/orgs.test.json` — multi-org config for local dev (`--store=memory`)
 - `examples/control-plane/orgs.sample.json` — template with placeholder values
 
+## Key Management
+
+Three endpoints manage Ed25519 signing keys per organization. Keys are used for outbound request signing (see [request-signing.md](./request-signing.md)).
+
+### Endpoints
+
+| Method | Path | Description | Success |
+|--------|------|-------------|---------|
+| `POST` | `/api/v1/organizations/{org_id}/keys` | Generate a new Ed25519 signing key | 201 |
+| `GET` | `/api/v1/organizations/{org_id}/keys` | List signing keys for an org | 200 |
+| `DELETE` | `/api/v1/organizations/{org_id}/keys/{key_id}` | Revoke a signing key | 204 |
+
+All endpoints return 404 if the organization does not exist, except DELETE which returns 204 regardless (idempotent).
+
+### Generate Key (POST)
+
+Returns the full keypair on creation. The private key is returned only once and is not stored by the control plane -- the caller must persist it.
+
+```sh
+curl -s -X POST \
+  -H 'x-api-key: test-key' \
+  http://localhost:3001/api/v1/organizations/org-acme/keys | jq .
+```
+
+Response (201):
+
+```json
+{
+  "key_id": "key-...",
+  "private_key": "-----BEGIN PRIVATE KEY-----\n...",
+  "public_key": "-----BEGIN PUBLIC KEY-----\n...",
+  "created_at": "2026-04-15T12:00:00+00:00"
+}
+```
+
+### List Keys (GET)
+
+Returns public metadata for all active keys. Never includes private keys.
+
+```sh
+curl -s \
+  -H 'x-api-key: test-key' \
+  http://localhost:3001/api/v1/organizations/org-acme/keys | jq .
+```
+
+Response (200):
+
+```json
+[
+  {
+    "key_id": "key-...",
+    "public_key": "-----BEGIN PUBLIC KEY-----\n...",
+    "status": "active",
+    "created_at": "2026-04-15T12:00:00+00:00"
+  }
+]
+```
+
+### Revoke Key (DELETE)
+
+Idempotent -- returns 204 whether the key existed or not.
+
+```sh
+curl -s -X DELETE \
+  -H 'x-api-key: test-key' \
+  http://localhost:3001/api/v1/organizations/org-acme/keys/key-abc123
+# 204 No Content
+```
+
 ## What's NOT Here Yet
 
 - CORS middleware (no browser clients -- deferred to #40 dashboard)
 - Ed25519 machine authentication (#41 V3)
 - VP authorization with PrincipalKind routing (#41 V4)
-- Key lifecycle endpoints for Ed25519 (#41 V2)
 - Hot-reload of config file
