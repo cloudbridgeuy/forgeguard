@@ -168,7 +168,6 @@ impl SigningKeyEntry {
     ///
     /// Active keys are always usable. Rotating keys are usable until their
     /// `expires_at` timestamp. Revoked keys are never usable.
-    #[allow(dead_code)] // Used by proxy key verification (future slice)
     pub(crate) fn is_active(&self, now: DateTime<Utc>) -> bool {
         match &self.status {
             SigningKeyStatus::Active => true,
