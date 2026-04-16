@@ -54,17 +54,17 @@ fn key_schema() -> &'static KeySchema {
 }
 
 /// Partition key attribute name (e.g. `"PK"`).
-fn pk() -> &'static str {
+pub(crate) fn pk() -> &'static str {
     &key_schema().partition_key
 }
 
 /// Sort key attribute name (e.g. `"SK"`).
-fn sk() -> &'static str {
+pub(crate) fn sk() -> &'static str {
     &key_schema().sort_key
 }
 
-const SK_META: &str = "META";
-const ORG_PREFIX: &str = "ORG#";
+pub(crate) const SK_META: &str = "META";
+pub(crate) const ORG_PREFIX: &str = "ORG#";
 
 // ---------------------------------------------------------------------------
 // DynamoOrgStore
@@ -265,7 +265,7 @@ fn parse_datetime(item: &HashMap<String, AttributeValue>, key: &str) -> Result<D
 // SDK error mapping
 // ---------------------------------------------------------------------------
 
-fn map_sdk_error<E: std::fmt::Display>(err: E) -> Error {
+pub(crate) fn map_sdk_error<E: std::fmt::Display>(err: E) -> Error {
     Error::Store(err.to_string())
 }
 
@@ -324,7 +324,9 @@ fn map_update_item_error(
 /// Deserialize the `signing_keys` JSON string attribute from a DynamoDB item.
 ///
 /// Returns an empty `Vec` when the attribute is absent (new org, no keys yet).
-fn signing_keys_from_item(item: &HashMap<String, AttributeValue>) -> Result<Vec<SigningKeyEntry>> {
+pub(crate) fn signing_keys_from_item(
+    item: &HashMap<String, AttributeValue>,
+) -> Result<Vec<SigningKeyEntry>> {
     match get_s_opt(item, "signing_keys") {
         Some(json) => serde_json::from_str(&json)
             .map_err(|e| Error::Store(format!("deserialize signing_keys: {e}"))),

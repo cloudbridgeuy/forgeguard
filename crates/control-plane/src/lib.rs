@@ -9,4 +9,5 @@ pub(crate) mod etag;
 mod handlers;
 pub(crate) mod metrics;
 mod signing_key;
+mod signing_key_store;
 mod store;
