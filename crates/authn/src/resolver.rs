@@ -176,6 +176,17 @@ mod tests {
         jsonwebtoken::encode(&header, claims, encoding_key).unwrap()
     }
 
+    /// Construct a `SignedRequest` credential for testing.
+    fn make_signed_request() -> Credential {
+        Credential::SignedRequest {
+            key_id: "key-001".into(),
+            timestamp: 1_700_000_000_000,
+            signature: "v1:AAAA".into(),
+            trace_id: "trace-abc".into(),
+            identity_headers: vec![("X-ForgeGuard-Org-Id".into(), "org-123".into())],
+        }
+    }
+
     #[test]
     fn can_resolve_bearer_returns_true() {
         let config = test_config();
@@ -196,14 +207,7 @@ mod tests {
     fn can_resolve_signed_request_returns_false() {
         let config = test_config();
         let resolver = CognitoJwtResolver::new(config);
-        let cred = Credential::SignedRequest {
-            key_id: "key-001".into(),
-            timestamp: 1_700_000_000_000,
-            signature: "v1:AAAA".into(),
-            trace_id: "trace-abc".into(),
-            identity_headers: vec![("X-ForgeGuard-Org-Id".into(), "org-123".into())],
-        };
-        assert!(!resolver.can_resolve(&cred));
+        assert!(!resolver.can_resolve(&make_signed_request()));
     }
 
     #[test]

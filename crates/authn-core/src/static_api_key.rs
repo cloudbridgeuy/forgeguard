@@ -67,9 +67,9 @@ impl IdentityResolver for StaticApiKeyResolver {
                 })),
                 None => Err(Error::InvalidCredential("unknown API key".into())),
             },
-            _ => Err(Error::InvalidCredential(
-                "expected ApiKey credential".into(),
-            )),
+            Credential::Bearer(_) | Credential::SignedRequest { .. } => Err(
+                Error::InvalidCredential("expected ApiKey credential".into()),
+            ),
         };
         Box::pin(std::future::ready(result))
     }
@@ -79,6 +79,17 @@ impl IdentityResolver for StaticApiKeyResolver {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// Construct a `SignedRequest` credential for testing.
+    fn make_signed_request() -> Credential {
+        Credential::SignedRequest {
+            key_id: "key-001".into(),
+            timestamp: 1_700_000_000_000,
+            signature: "v1:AAAA".into(),
+            trace_id: "trace-abc".into(),
+            identity_headers: vec![("X-ForgeGuard-Org-Id".into(), "org-123".into())],
+        }
+    }
 
     /// Helper: build a resolver with one known key.
     fn make_resolver() -> StaticApiKeyResolver {
@@ -146,15 +157,7 @@ mod tests {
     #[test]
     fn signed_request_credential_returns_can_resolve_false() {
         let resolver = make_resolver();
-        let cred = Credential::SignedRequest {
-            key_id: "key-001".into(),
-            timestamp: 1_700_000_000_000,
-            signature: "v1:AAAA".into(),
-            trace_id: "trace-abc".into(),
-            identity_headers: vec![("X-ForgeGuard-Org-Id".into(), "org-123".into())],
-        };
-
-        assert!(!resolver.can_resolve(&cred));
+        assert!(!resolver.can_resolve(&make_signed_request()));
     }
 
     #[tokio::test]

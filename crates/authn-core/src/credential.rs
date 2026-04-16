@@ -46,6 +46,17 @@ impl Credential {
 mod tests {
     use super::*;
 
+    /// Construct a `SignedRequest` credential for testing.
+    fn make_signed_request(identity_headers: Vec<(String, String)>) -> Credential {
+        Credential::SignedRequest {
+            key_id: "key-001".into(),
+            timestamp: 1_700_000_000_000,
+            signature: "v1:AAAA".into(),
+            trace_id: "trace-abc".into(),
+            identity_headers,
+        }
+    }
+
     #[test]
     fn type_name_bearer() {
         let cred = Credential::Bearer("tok_abc".into());
@@ -76,28 +87,16 @@ mod tests {
 
     #[test]
     fn type_name_signed_request() {
-        let cred = Credential::SignedRequest {
-            key_id: "key-001".into(),
-            timestamp: 1_700_000_000_000,
-            signature: "v1:AAAA".into(),
-            trace_id: "trace-abc".into(),
-            identity_headers: vec![("X-ForgeGuard-Org-Id".into(), "org-123".into())],
-        };
+        let cred = make_signed_request(vec![("X-ForgeGuard-Org-Id".into(), "org-123".into())]);
         assert_eq!(cred.type_name(), "signed-request");
     }
 
     #[test]
     fn serde_round_trip_signed_request() {
-        let cred = Credential::SignedRequest {
-            key_id: "key-001".into(),
-            timestamp: 1_700_000_000_000,
-            signature: "v1:AAAA".into(),
-            trace_id: "trace-abc".into(),
-            identity_headers: vec![
-                ("X-ForgeGuard-Org-Id".into(), "org-123".into()),
-                ("X-ForgeGuard-Custom".into(), "value".into()),
-            ],
-        };
+        let cred = make_signed_request(vec![
+            ("X-ForgeGuard-Org-Id".into(), "org-123".into()),
+            ("X-ForgeGuard-Custom".into(), "value".into()),
+        ]);
         let json = serde_json::to_string(&cred).unwrap();
         let deserialized: Credential = serde_json::from_str(&json).unwrap();
         assert_eq!(cred, deserialized);
