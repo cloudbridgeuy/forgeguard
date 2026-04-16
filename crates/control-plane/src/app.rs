@@ -11,7 +11,8 @@ use std::time::Duration;
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::Router;
-use forgeguard_authn::{CognitoJwtResolver, JwtResolverConfig};
+use forgeguard_authn::{CognitoJwtResolver, Ed25519SignatureResolver, JwtResolverConfig};
+use forgeguard_authn_core::resolver::IdentityResolver;
 use forgeguard_authn_core::IdentityChain;
 use forgeguard_authz_core::{PolicyDecision, StaticPolicyEngine};
 use forgeguard_axum::{forgeguard_layer, ForgeGuard};
@@ -24,6 +25,7 @@ use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::dynamo_store::DynamoOrgStore;
+use crate::signing_key_store::DynamoSigningKeyStore;
 use crate::store::{self, AnyOrgStore, OrgStore};
 
 /// Authentication configuration for the control plane.
@@ -72,10 +74,16 @@ pub async fn dynamodb_router(
         .await;
     let client = aws_sdk_dynamodb::Client::new(&sdk_config);
     let s = Arc::new(AnyOrgStore::DynamoDb(DynamoOrgStore::new(
-        client,
+        client.clone(),
         table_name.to_string(),
     )));
-    let fg = build_forgeguard(auth)?;
+    let ed25519_resolver: Option<Arc<dyn IdentityResolver>> = if auth.is_some() {
+        let key_store = DynamoSigningKeyStore::new(client, table_name.to_string());
+        Some(Arc::new(Ed25519SignatureResolver::new(key_store)))
+    } else {
+        None
+    };
+    let fg = build_forgeguard(auth, ed25519_resolver)?;
     Ok(build_router(s, fg))
 }
 
@@ -86,7 +94,7 @@ pub async fn dynamodb_router(
 pub fn memory_router(config_path: &Path, auth: Option<&AuthConfig>) -> color_eyre::Result<Router> {
     let inner = store::load_config_file(config_path)?;
     let s = Arc::new(AnyOrgStore::Memory(inner));
-    let fg = build_forgeguard(auth)?;
+    let fg = build_forgeguard(auth, None)?;
     Ok(build_router(s, fg))
 }
 
@@ -112,7 +120,10 @@ const API_ROUTES: &[(&str, &str)] = &[
     ("DELETE", "/api/v1/organizations/{org_id}/keys/{key_id}"),
 ];
 
-fn build_forgeguard(auth: Option<&AuthConfig>) -> color_eyre::Result<Arc<ForgeGuard>> {
+fn build_forgeguard(
+    auth: Option<&AuthConfig>,
+    ed25519_resolver: Option<Arc<dyn IdentityResolver>>,
+) -> color_eyre::Result<Arc<ForgeGuard>> {
     let route_matcher = RouteMatcher::new(&[])?;
 
     let health_route = anon_route("GET", "/health")?;
@@ -124,14 +135,19 @@ fn build_forgeguard(auth: Option<&AuthConfig>) -> color_eyre::Result<Arc<ForgeGu
             if let Some(ref aud) = auth.audience {
                 config = config.with_audience(aud);
             }
-            let resolver = CognitoJwtResolver::new(config);
-            let chain = IdentityChain::new(vec![Arc::new(resolver)]);
+            let cognito_resolver = CognitoJwtResolver::new(config);
 
-            (
-                vec![health_route, metrics_route],
-                chain,
-                vec!["jwt".to_string()],
-            )
+            let mut resolvers: Vec<Arc<dyn IdentityResolver>> = vec![Arc::new(cognito_resolver)];
+            let mut providers = vec!["jwt".to_string()];
+
+            if let Some(resolver) = ed25519_resolver {
+                resolvers.push(resolver);
+                providers.push("ed25519".to_string());
+            }
+
+            let chain = IdentityChain::new(resolvers);
+
+            (vec![health_route, metrics_route], chain, providers)
         }
         None => {
             let mut routes = vec![health_route, metrics_route];

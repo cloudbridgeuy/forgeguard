@@ -24,14 +24,12 @@ fn invalid_credential(msg: impl Into<String>) -> forgeguard_authn_core::Error {
 ///
 /// Implements [`SigningKeyStore`] by reading the org item from DynamoDB,
 /// finding the key entry, and converting the stored PEM to a [`VerifyingKey`].
-#[allow(dead_code)] // Wired by proxy key verification (future slice)
 pub(crate) struct DynamoSigningKeyStore {
     client: aws_sdk_dynamodb::Client,
     table_name: String,
 }
 
 impl DynamoSigningKeyStore {
-    #[allow(dead_code)] // Wired by proxy key verification (future slice)
     pub(crate) fn new(client: aws_sdk_dynamodb::Client, table_name: String) -> Self {
         Self { client, table_name }
     }
@@ -68,7 +66,9 @@ impl SigningKeyStore for DynamoSigningKeyStore {
                 signing_keys_from_item(&item).map_err(|e| invalid_credential(e.to_string()))?;
 
             let entry = keys.iter().find(|k| k.key_id() == key_id).ok_or_else(|| {
-                invalid_credential(format!("signing key '{key_id}' not found for org '{org_id}'"))
+                invalid_credential(format!(
+                    "signing key '{key_id}' not found for org '{org_id}'"
+                ))
             })?;
 
             let now = Utc::now();
