@@ -5638,6 +5638,7 @@ version = "0.1.0"
 dependencies = [
  "aws-config",
  "aws-sdk-cloudformation",
+ "aws-sdk-dynamodb",
  "aws-sdk-lambda",
  "aws-sdk-verifiedpermissions",
  "chrono",

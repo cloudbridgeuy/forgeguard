@@ -1,6 +1,8 @@
 mod cedar;
 pub(crate) mod cedar_core;
 pub(crate) mod cedar_io;
+mod dev;
+pub(crate) mod dynamo_local;
 mod infra;
 mod lambda;
 pub(crate) mod lambda_core;
@@ -21,6 +23,8 @@ pub struct ControlPlaneArgs {
 enum ControlPlaneCommands {
     /// Cedar policy store management
     Cedar(cedar::CedarArgs),
+    /// Start a local development environment with DynamoDB Local and the control plane
+    Dev(dev::DevArgs),
     /// Infrastructure management
     Infra(infra::InfraArgs),
     /// Lambda build and deployment
@@ -32,6 +36,7 @@ enum ControlPlaneCommands {
 pub async fn run(args: &ControlPlaneArgs) -> Result<()> {
     match &args.command {
         ControlPlaneCommands::Cedar(a) => cedar::run(a).await,
+        ControlPlaneCommands::Dev(a) => dev::run(a).await,
         ControlPlaneCommands::Infra(a) => infra::run(a).await,
         ControlPlaneCommands::Lambda(a) => lambda::run(a).await,
         ControlPlaneCommands::Test(a) => test::run(a).await,
