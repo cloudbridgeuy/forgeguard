@@ -42,6 +42,10 @@ pub(crate) struct DevArgs {
     /// Seed organizations from a JSON file.
     #[arg(long, default_value = "examples/control-plane/orgs.test.json")]
     seed: String,
+
+    /// Extra arguments forwarded to the control-plane binary (after `--`).
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    extra: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -185,34 +189,35 @@ async fn seed_organizations(client: &Client, table: &str, seed_path: &str) -> Re
 }
 
 /// Launch `cargo run -p forgeguard_control_plane` as a child process and wait for it to exit.
-fn launch_control_plane(table: &str, listen: &str, port: u16) -> Result<()> {
+fn launch_control_plane(table: &str, listen: &str, port: u16, extra: &[String]) -> Result<()> {
     let endpoint = format!("http://127.0.0.1:{port}");
 
     println!("Launching control plane (listen: {listen}, table: {table}, endpoint: {endpoint})...");
     println!("Press Ctrl-C to stop.");
 
-    let status = duct::cmd(
-        "cargo",
-        [
-            "run",
-            "-p",
-            "forgeguard_control_plane",
-            "--",
-            "--store",
-            "dynamodb",
-            "--dynamodb-table",
-            table,
-            "--listen",
-            listen,
-        ],
-    )
-    .env("AWS_ENDPOINT_URL", &endpoint)
-    .env("AWS_ACCESS_KEY_ID", "test")
-    .env("AWS_SECRET_ACCESS_KEY", "test")
-    .env("AWS_REGION", "us-east-2")
-    .unchecked()
-    .run()
-    .context("failed to launch control plane")?;
+    let mut args = vec![
+        "run",
+        "-p",
+        "forgeguard_control_plane",
+        "--",
+        "--store",
+        "dynamodb",
+        "--dynamodb-table",
+        table,
+        "--listen",
+        listen,
+    ];
+    let extra_refs: Vec<&str> = extra.iter().map(String::as_str).collect();
+    args.extend_from_slice(&extra_refs);
+
+    let status = duct::cmd("cargo", &args)
+        .env("AWS_ENDPOINT_URL", &endpoint)
+        .env("AWS_ACCESS_KEY_ID", "test")
+        .env("AWS_SECRET_ACCESS_KEY", "test")
+        .env("AWS_REGION", "us-east-2")
+        .unchecked()
+        .run()
+        .context("failed to launch control plane")?;
 
     if !status.status.success() {
         eyre::bail!(
@@ -239,7 +244,7 @@ pub(crate) async fn run(args: &DevArgs) -> Result<()> {
     create_table(&client, &args.table).await?;
     seed_organizations(&client, &args.table, &args.seed).await?;
 
-    launch_control_plane(&args.table, &args.listen, port)?;
+    launch_control_plane(&args.table, &args.listen, port, &args.extra)?;
 
     Ok(())
 }
