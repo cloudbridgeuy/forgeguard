@@ -93,6 +93,7 @@ pub async fn dynamodb_router(
 pub fn memory_router(config_path: &Path, auth: Option<&AuthConfig>) -> color_eyre::Result<Router> {
     let inner = store::load_config_file(config_path)?;
     let s = Arc::new(AnyOrgStore::Memory(inner));
+    // Ed25519 resolver requires DynamoDB for key lookup; memory mode has no DynamoDB client.
     let fg = build_forgeguard(auth, None)?;
     Ok(build_router(s, fg))
 }
