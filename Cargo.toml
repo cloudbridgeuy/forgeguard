@@ -114,6 +114,9 @@ jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }
 lambda_http = "1.1"
 lambda_runtime = "1.1"
 
+# libc (Unix process management)
+libc = "0.2"
+
 # Caching
 lru = "0.16"
 

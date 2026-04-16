@@ -144,6 +144,10 @@ async fn seed_organizations(client: &Client, table: &str, seed_path: &str) -> Re
         let config_json =
             serde_json::to_string(&org.config).context("failed to serialize org config")?;
 
+        // The store expects a quoted hex etag; for seeded dev data a stable
+        // placeholder is fine — it gets recomputed on the next update.
+        let etag = format!("\"{:016x}\"", 0u64);
+
         client
             .put_item()
             .table_name(table)
@@ -179,6 +183,7 @@ async fn seed_organizations(client: &Client, table: &str, seed_path: &str) -> Re
                 "config",
                 aws_sdk_dynamodb::types::AttributeValue::S(config_json),
             )
+            .item("etag", aws_sdk_dynamodb::types::AttributeValue::S(etag))
             .send()
             .await
             .with_context(|| format!("failed to seed organization '{org_id}'"))?;
@@ -188,8 +193,16 @@ async fn seed_organizations(client: &Client, table: &str, seed_path: &str) -> Re
     Ok(())
 }
 
-/// Launch `cargo run -p forgeguard_control_plane` as a child process and wait for it to exit.
+/// Launch `cargo run -p forgeguard_control_plane` as a child process and wait
+/// for it to exit.
+///
+/// The parent ignores SIGINT while the child runs so that Ctrl-C kills only the
+/// child.  The parent then resumes, allowing `ContainerGuard` to drop and stop
+/// the DynamoDB container.
 fn launch_control_plane(table: &str, listen: &str, port: u16, extra: &[String]) -> Result<()> {
+    use std::os::unix::process::CommandExt;
+    use std::process::Command;
+
     let endpoint = format!("http://127.0.0.1:{port}");
 
     println!("Launching control plane (listen: {listen}, table: {table}, endpoint: {endpoint})...");
@@ -210,20 +223,35 @@ fn launch_control_plane(table: &str, listen: &str, port: u16, extra: &[String]) 
     let extra_refs: Vec<&str> = extra.iter().map(String::as_str).collect();
     args.extend_from_slice(&extra_refs);
 
-    let status = duct::cmd("cargo", &args)
-        .env("AWS_ENDPOINT_URL", &endpoint)
-        .env("AWS_ACCESS_KEY_ID", "test")
-        .env("AWS_SECRET_ACCESS_KEY", "test")
-        .env("AWS_REGION", "us-east-2")
-        .unchecked()
-        .run()
-        .context("failed to launch control plane")?;
+    // SAFETY: signal() and SIG_IGN/SIG_DFL are well-defined POSIX operations.
+    // We ignore SIGINT in the parent so Ctrl-C doesn't kill it, and restore
+    // default handling in the child via pre_exec so the child exits on Ctrl-C.
+    let status = unsafe {
+        let prev = libc::signal(libc::SIGINT, libc::SIG_IGN);
 
-    if !status.status.success() {
-        eyre::bail!(
-            "control plane exited with non-zero status: {}",
-            status.status
-        );
+        let result = Command::new("cargo")
+            .args(&args)
+            .env("AWS_ENDPOINT_URL", &endpoint)
+            .env("AWS_ACCESS_KEY_ID", "test")
+            .env("AWS_SECRET_ACCESS_KEY", "test")
+            .env("AWS_REGION", "us-east-2")
+            .pre_exec(|| {
+                // Restore default SIGINT in the child so Ctrl-C reaches it.
+                libc::signal(libc::SIGINT, libc::SIG_DFL);
+                Ok(())
+            })
+            .status();
+
+        libc::signal(libc::SIGINT, prev);
+        result.context("failed to launch control plane")?
+    };
+
+    if !status.success() {
+        // The child was likely killed by SIGINT (Ctrl-C) — not a real error.
+        if status.code().is_none() {
+            return Ok(());
+        }
+        eyre::bail!("control plane exited with non-zero status: {status}");
     }
     Ok(())
 }
@@ -241,7 +269,25 @@ pub(crate) async fn run(args: &DevArgs) -> Result<()> {
     wait_for_dynamodb(port)?;
 
     let client = build_client(port).await?;
-    create_table(&client, &args.table).await?;
+
+    // TCP readiness does not guarantee the HTTP service is ready; retry.
+    let mut last_err = None;
+    for attempt in 1..=10 {
+        match create_table(&client, &args.table).await {
+            Ok(()) => {
+                last_err = None;
+                break;
+            }
+            Err(e) => {
+                println!("Table creation attempt {attempt}/10 failed, retrying...");
+                last_err = Some(e);
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
+        }
+    }
+    if let Some(e) = last_err {
+        return Err(e);
+    }
     seed_organizations(&client, &args.table, &args.seed).await?;
 
     launch_control_plane(&args.table, &args.listen, port, &args.extra)?;
