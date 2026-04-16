@@ -82,6 +82,23 @@ jobs:
             echo "- Surfaces: test=$TEST, docs=$DOCS, build=$BUILD"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Emit planner hash
+        run: |
+          cargo rail hash --since "$BASE_REF" --json > "$RUNNER_TEMP/rail-hash.json"
+          HASH=$(jq -r '.hash' "$RUNNER_TEMP/rail-hash.json")
+          {
+            echo ""
+            echo "## Planner hash"
+            echo "\`$HASH\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload planner hash artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rail-hash-${{ github.run_id }}
+          path: ${{ runner.temp }}/rail-hash.json
+          retention-days: 14
+
   test:
     name: Test Suite
     needs: [plan]
