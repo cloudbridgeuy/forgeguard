@@ -117,8 +117,14 @@ pub(crate) fn stop_container(runtime: &str, container_id: &str) {
 
 /// RAII guard that stops a container on drop, guaranteeing cleanup.
 pub(crate) struct ContainerGuard {
-    pub(crate) runtime: &'static str,
-    pub(crate) id: String,
+    runtime: &'static str,
+    id: String,
+}
+
+impl ContainerGuard {
+    pub(crate) fn new(runtime: &'static str, id: String) -> Self {
+        Self { runtime, id }
+    }
 }
 
 impl Drop for ContainerGuard {

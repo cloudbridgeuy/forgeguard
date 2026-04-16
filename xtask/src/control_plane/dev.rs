@@ -230,10 +230,7 @@ pub(crate) async fn run(args: &DevArgs) -> Result<()> {
 
     println!("Container: {container_id}");
 
-    let _guard = ContainerGuard {
-        runtime,
-        id: container_id.clone(),
-    };
+    let _guard = ContainerGuard::new(runtime, container_id.clone());
 
     let port = discover_port(runtime, &container_id)?;
     wait_for_dynamodb(port)?;
