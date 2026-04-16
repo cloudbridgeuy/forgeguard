@@ -1734,6 +1734,7 @@ dependencies = [
 name = "forgeguard_authn"
 version = "0.0.0"
 dependencies = [
+ "base64 0.22.1",
  "chrono",
  "forgeguard_authn_core",
  "forgeguard_core",
