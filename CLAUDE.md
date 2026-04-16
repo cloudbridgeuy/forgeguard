@@ -9,7 +9,8 @@
 - **Pre-commit hooks:** `cargo xtask lint --install-hooks`
 - **Commits:** Conventional Commits — see [commit-and-release.md](./.claude/context/commit-and-release.md)
 - **Releases:** `cargo xtask release` — see [commit-and-release.md](./.claude/context/commit-and-release.md)
-- **Rust toolchain:** pinned in `rust-toolchain.toml` to match MSRV
+- **Rust toolchain:** pinned in `rust-toolchain.toml` (channel + required `components`) — see [ci.md](./.claude/context/ci.md)
+- **CI:** GitHub Actions in `.github/workflows/ci.yml` — see [ci.md](./.claude/context/ci.md) for toolchain/typos/deny/rail rules
 - **Container images:** distroless, multi-stage — see [container-builds.md](./.claude/context/container-builds.md)
 - **Request signing:** optional Ed25519 outbound header signing — `[signing]` config, see [request-signing.md](./.claude/context/request-signing.md)
 - **Cluster mode:** optional Redis-backed shared authz cache — `[cluster]` config, see [cluster.md](./.claude/context/cluster.md)
@@ -172,6 +173,7 @@ Each crate's `README.md` describes what it owns and its pure/I/O classification.
 | [Infra: Control Plane](./.claude/context/infra-control-plane.md)   | CDK project, 1Password integration, DynamoDB Global Table, xtask infra  |
 | [Cluster Mode](./.claude/context/cluster.md)                       | TieredCache, Redis wiring, config, health stats, future slices          |
 | [Dependency Constraints](./.claude/context/dependency-constraints.md) | Pingora version pins (rand, prometheus), jsonwebtoken crypto, reqwest TLS |
+| [CI](./.claude/context/ci.md)                                      | GH Actions jobs, toolchain pinning rules, typos / cargo-deny / cargo-rail allowlists |
 | [Design Documents](./.claude/context/)                             | Full ForgeGuard architecture and technical specifications               |
 
 ### Local-Only Documents (MUST NOT commit)
