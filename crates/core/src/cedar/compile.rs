@@ -200,7 +200,7 @@ pub(super) fn exact_str(seg: &PatternSegment) -> &str {
     }
 }
 
-/// Extract the inner [`Segment`] reference from an `Exact` pattern segment.
+/// Extract the inner [`crate::Segment`] reference from an `Exact` pattern segment.
 /// Panics if called on a `Wildcard` — callers must check `is_all_exact` first.
 pub(super) fn exact_segment(seg: &PatternSegment) -> &crate::Segment {
     match seg {

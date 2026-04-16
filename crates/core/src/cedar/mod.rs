@@ -1,8 +1,8 @@
 //! Cedar policy compilation and schema generation.
 //!
-//! - [`compile`] — compile ForgeGuard policies into Cedar `permit`/`forbid`
+//! - `compile` — compile ForgeGuard policies into Cedar `permit`/`forbid`
 //!   statements.
-//! - [`schema`] — generate Cedar JSON schemas from policies, actions, and
+//! - `schema` — generate Cedar JSON schemas from policies, actions, and
 //!   optional entity configuration.
 
 mod compile;

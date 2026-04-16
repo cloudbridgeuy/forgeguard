@@ -1,6 +1,6 @@
 //! Axum extractors for ForgeGuard auth context.
 //!
-//! These read from request extensions injected by [`forgeguard_layer`].
+//! These read from request extensions injected by [`crate::forgeguard_layer`].
 
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;

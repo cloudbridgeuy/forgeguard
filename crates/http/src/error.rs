@@ -61,7 +61,7 @@ impl ValidationError {
         &self.message
     }
 
-    /// The config path where the error occurred (e.g., "routes[2].action").
+    /// The config path where the error occurred (e.g., `"routes[2].action"`).
     pub fn path(&self) -> &str {
         &self.path
     }

@@ -256,7 +256,7 @@ fn find_header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a st
 /// Strip the port suffix from a host value (e.g. `"acme:8080"` -> `"acme"`).
 ///
 /// Handles IPv6 bracket notation: `[::1]:8080` becomes `[::1]` (the bracket
-/// form will fail [`Segment`] validation, which is correct — IPv6 literals
+/// form will fail [`forgeguard_core::Segment`] validation, which is correct — IPv6 literals
 /// are not valid organization identifiers).
 ///
 /// If no colon is present, returns the input unchanged.

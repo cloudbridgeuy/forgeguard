@@ -14,7 +14,7 @@ use crate::{Error, Namespace, ProjectId, Result};
 /// A validated Cedar IDENT: `[_a-zA-Z][_a-zA-Z0-9]*`.
 ///
 /// Constructed via [`CedarIdent::new`] (fallible, for arbitrary input) or
-/// [`Segment::to_cedar_ident`] (infallible, since every valid `Segment`
+/// [`crate::Segment::to_cedar_ident`] (infallible, since every valid `Segment`
 /// produces a valid IDENT after replacing `-` with `_`).
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct CedarIdent(String);
@@ -93,7 +93,7 @@ impl CedarEntityType {
         Self(format!("{}__{}", ns_ident.as_str(), entity_ident.as_str()))
     }
 
-    /// Construct from raw [`Segment`] values (e.g., from [`CedarEntityRef`]).
+    /// Construct from raw [`crate::Segment`] values (e.g., from [`crate::CedarEntityRef`]).
     ///
     /// Result: `"{namespace_ident}__{entity_ident}"`.
     pub fn new_from_segments(namespace: &crate::Segment, entity: &crate::Segment) -> Self {

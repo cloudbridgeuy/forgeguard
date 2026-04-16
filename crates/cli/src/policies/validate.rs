@@ -93,7 +93,7 @@ fn print_header(title: &str, use_color: bool) {
     }
 }
 
-/// Check whether to use color, respecting NO_COLOR (https://no-color.org/).
+/// Check whether to use color, respecting NO_COLOR (<https://no-color.org/>).
 fn should_colorize() -> bool {
     std::env::var_os("NO_COLOR").is_none()
 }
