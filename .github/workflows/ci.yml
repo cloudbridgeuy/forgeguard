@@ -10,6 +10,78 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  plan:
+    name: CI Plan
+    runs-on: ubuntu-latest
+    if: "!startsWith(github.event.head_commit.message, 'chore: bump version')"
+    outputs:
+      mode: ${{ steps.extract.outputs.mode }}
+      crates: ${{ steps.extract.outputs.crates }}
+      test: ${{ steps.extract.outputs.test }}
+      docs: ${{ steps.extract.outputs.docs }}
+      build: ${{ steps.extract.outputs.build }}
+      base_ref: ${{ steps.resolve-base.outputs.base_ref }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@main
+
+      - name: Install cargo-rail 0.11.0
+        run: cargo binstall cargo-rail --locked --version 0.11.0 --no-confirm
+
+      - name: Resolve BASE_REF
+        id: resolve-base
+        env:
+          SINCE_INPUT: ${{ github.event.inputs.since }}
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          if [ -n "$SINCE_INPUT" ]; then
+            BASE_REF="$SINCE_INPUT"
+          elif [ -n "$GITHUB_BASE_REF" ]; then
+            BASE_REF="origin/$GITHUB_BASE_REF"
+          elif [ -n "$BEFORE_SHA" ] && ! echo "$BEFORE_SHA" | grep -qE '^0+$'; then
+            BASE_REF="$BEFORE_SHA"
+          else
+            BASE_REF="origin/main"
+          fi
+          if ! git rev-parse --verify "$BASE_REF" >/dev/null 2>&1; then
+            BASE_REF="HEAD~1"
+          fi
+          echo "BASE_REF=$BASE_REF" >> "$GITHUB_ENV"
+          echo "base_ref=$BASE_REF" >> "$GITHUB_OUTPUT"
+
+      - name: Run cargo rail plan
+        run: cargo rail plan --quiet --since "$BASE_REF" --json -o "$RUNNER_TEMP/plan.json"
+
+      - name: Extract plan outputs
+        id: extract
+        run: |
+          PLAN="$RUNNER_TEMP/plan.json"
+          MODE=$(jq -r '.scope.mode // "workspace"' "$PLAN")
+          CRATES=$(jq -r '.scope.crates // [] | join(" ")' "$PLAN")
+          TEST=$(jq -r '.surfaces.test.enabled // false' "$PLAN")
+          DOCS=$(jq -r '.surfaces.docs.enabled // false' "$PLAN")
+          BUILD=$(jq -r '.surfaces.build.enabled // false' "$PLAN")
+          { echo "mode=$MODE"; echo "crates=$CRATES"; echo "test=$TEST"; echo "docs=$DOCS"; echo "build=$BUILD"; } >> "$GITHUB_OUTPUT"
+          { echo "MODE=$MODE"; echo "CRATES=$CRATES"; echo "TEST=$TEST"; echo "DOCS=$DOCS"; echo "BUILD=$BUILD"; } >> "$GITHUB_ENV"
+
+      - name: Render step summary
+        run: |
+          {
+            echo "## CI Plan"
+            echo "- Base ref: $BASE_REF"
+            echo "- Mode: $MODE"
+            echo "- Crates: ${CRATES:-—}"
+            echo "- Surfaces: test=$TEST, docs=$DOCS, build=$BUILD"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   test:
     name: Test Suite
     runs-on: ubuntu-latest
@@ -130,7 +202,7 @@ jobs:
         uses: cargo-bins/cargo-binstall@main
 
       - name: Install cargo-rail
-        run: cargo binstall cargo-rail --no-confirm
+        run: cargo binstall cargo-rail --locked --version 0.11.0 --no-confirm
 
       - name: Check for unused dependencies
         run: cargo rail unify --check

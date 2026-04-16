@@ -12,6 +12,9 @@ pin_transitives = false
 infrastructure = [
     ".github/**",
     "Cargo.lock",
+    "Cargo.toml",
+    "deny.toml",
     "rust-toolchain.toml",
     "xtask/**",
+    "_typos.toml",
 ]
