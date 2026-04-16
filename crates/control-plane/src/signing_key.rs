@@ -225,6 +225,17 @@ impl GenerateKeyResult {
     pub(crate) fn created_at(&self) -> DateTime<Utc> {
         self.created_at
     }
+
+    /// Build the corresponding `SigningKeyEntry` (public half, `Active` status).
+    pub(crate) fn to_entry(&self) -> Result<SigningKeyEntry> {
+        SigningKeyEntry::new(
+            self.key_id.clone(),
+            self.public_key_pem.clone(),
+            SigningKeyStatus::Active,
+            self.created_at,
+            None,
+        )
+    }
 }
 
 // ---------------------------------------------------------------------------

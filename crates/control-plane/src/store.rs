@@ -11,7 +11,7 @@ use serde::Deserialize;
 use crate::config::OrgConfig;
 use crate::dynamo_store::DynamoOrgStore;
 use crate::error::{Error, Result};
-use crate::signing_key::{GenerateKeyResult, SigningKeyEntry, SigningKeyStatus};
+use crate::signing_key::{GenerateKeyResult, SigningKeyEntry};
 
 /// Abstraction over organization config storage.
 ///
@@ -173,13 +173,7 @@ impl OrgStore for InMemoryOrgStore {
 
         // Synchronous — `ThreadRng` is not `Send`, must complete before `.await`.
         let result = generate_key_material()?;
-        let entry = SigningKeyEntry::new(
-            result.key_id().to_string(),
-            result.public_key_pem().to_string(),
-            SigningKeyStatus::Active,
-            result.created_at(),
-            None,
-        )?;
+        let entry = result.to_entry()?;
 
         let mut guard = self.signing_keys.write().await;
         guard.entry(org_id.clone()).or_default().push(entry);
@@ -189,10 +183,7 @@ impl OrgStore for InMemoryOrgStore {
 
     async fn list_keys(&self, org_id: &OrganizationId) -> Result<Vec<SigningKeyEntry>> {
         let guard = self.signing_keys.read().await;
-        match guard.get(org_id) {
-            Some(keys) => Ok(keys.clone()),
-            None => Ok(Vec::new()),
-        }
+        Ok(guard.get(org_id).cloned().unwrap_or_default())
     }
 
     async fn revoke_key(&self, org_id: &OrganizationId, key_id: &str) -> Result<()> {
@@ -224,7 +215,7 @@ struct RawOrgEntry {
     config: OrgConfig,
 }
 
-pub(crate) fn generate_key_id() -> String {
+fn generate_key_id() -> String {
     let bytes: [u8; 16] = rand::random();
     let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
     format!("key-{hex}")
@@ -367,6 +358,7 @@ impl OrgStore for AnyOrgStore {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use crate::signing_key::SigningKeyStatus;
 
     fn sample_json() -> &'static str {
         r#"{

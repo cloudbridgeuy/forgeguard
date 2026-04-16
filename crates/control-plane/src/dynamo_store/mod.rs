@@ -15,7 +15,7 @@ use forgeguard_core::{OrgStatus, Organization, OrganizationId};
 
 use crate::config::OrgConfig;
 use crate::error::{Error, Result};
-use crate::signing_key::{GenerateKeyResult, SigningKeyEntry, SigningKeyStatus};
+use crate::signing_key::{GenerateKeyResult, SigningKeyEntry};
 use crate::store::{compute_etag, generate_key_material, OrgRecord, OrgStore};
 
 // ---------------------------------------------------------------------------
@@ -435,13 +435,7 @@ impl OrgStore for DynamoOrgStore {
     async fn generate_key(&self, org_id: &OrganizationId) -> Result<GenerateKeyResult> {
         // Synchronous — `ThreadRng` is not `Send`, must complete before `.await`.
         let result = generate_key_material()?;
-        let entry = SigningKeyEntry::new(
-            result.key_id().to_string(),
-            result.public_key_pem().to_string(),
-            SigningKeyStatus::Active,
-            result.created_at(),
-            None,
-        )?;
+        let entry = result.to_entry()?;
 
         let item = self
             .get_raw_item(org_id)
