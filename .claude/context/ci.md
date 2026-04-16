@@ -165,5 +165,8 @@ cargo rail hash --since HEAD~1 --json
 
 All reusable actions must run on Node.js 24 (GitHub forces this by default
 from 2026-06-02). Use `actions/cache@v5` (not `@v4`), `actions/checkout@v5`,
-`actions/upload-artifact@v5` (not `@v4`), etc. When bumping a major: skim the
-release notes for input schema changes before merging.
+`actions/upload-artifact@v6` (not `@v5` — v5 had only preliminary Node.js 24
+support and still defaulted to Node.js 20; v6 is the first major that runs on
+Node.js 24 by default and requires runner >= 2.327.1). When bumping a major:
+skim the release notes for input schema changes AND the action's `runs.using`
+value — a bumped major number does not guarantee a bumped Node runtime.
