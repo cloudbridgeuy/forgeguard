@@ -7,15 +7,18 @@ every push/PR to `main` and `develop` and gates merges.
 
 | Job                       | Purpose                                                                 |
 | ------------------------- | ----------------------------------------------------------------------- |
-| Test Suite                | `cargo test --workspace`, clippy, rustfmt                               |
-| Build Check               | `cargo check --workspace --exclude xtask` on ubuntu + macos             |
+| CI Plan                   | Runs `cargo rail plan`; produces surface gates, mode, and crates list consumed by all downstream jobs. Also skipped on `chore: bump version` commits. |
+| Test Suite                | `cargo test --workspace`, clippy, rustfmt |
+| Build Check               | `cargo check --workspace --exclude xtask` on ubuntu + macos |
 | WASM Build Check          | `cargo check -p forgeguard_sdk -p forgeguard_ffi_wasm --target wasm32-unknown-unknown` |
-| Check Typos               | `crate-ci/typos` against the repo, config in `_typos.toml`              |
-| Check Unused Dependencies | `cargo rail unify --check` — enforces workspace dep hygiene             |
-| Dependency Audit          | `cargo-deny check` — licenses + advisories, config in `deny.toml`       |
+| Rustdoc Build             | `cargo doc --workspace --no-deps --document-private-items`; `RUSTDOCFLAGS: "-D warnings"` is set, so doc-comment errors fail the job |
+| Check Typos               | `crate-ci/typos` against the repo, config in `_typos.toml`; always runs |
+| Check Unused Dependencies | `cargo rail unify --check` — enforces workspace dep hygiene; always runs |
+| Dependency Audit          | `cargo-deny check` — licenses + advisories, config in `deny.toml`; always runs |
 
-The workflow skips every job when `head_commit.message` starts with
-`chore: bump version` (release commits).
+The workflow skips gated jobs when `head_commit.message` starts with
+`chore: bump version` (release commits). `typos`, `unused-deps`, and `deny` are
+always relevant and cheap, so they remain ungated.
 
 ## Toolchain Pinning and CI Actions
 
@@ -88,20 +91,78 @@ Requires `cargo-rail >= 0.11`.
 
 ## Change Detection
 
-The `Detect Changes` job (which gated tests to only affected crates) was
-removed. `loadingalias/cargo-rail-action@v1` invokes `cargo rail affected`,
-which was removed in cargo-rail 0.11 in favor of the `plan` subcommand and a
-completely new output schema (`scope-json`, surface gates). The `@v4` of the
-action is a rewrite that needs `.config/rail.toml` plus workflow changes to
-consume the new outputs.
+`cargo rail plan` (cargo-rail 0.11, via `cargo-binstall --locked --version 0.11.0`) runs first, resolves a base ref, and exports surface gates consumed by all downstream jobs.
 
-Until the migration lands, CI runs tests + build on the full workspace every
-time. If this becomes a bottleneck, port the workflow to
-`loadingalias/cargo-rail-action@v4` following the v4 README.
+### BASE_REF resolution (priority order)
+
+1. `inputs.since` — workflow_dispatch override
+2. `origin/$GITHUB_BASE_REF` — pull request base branch
+3. `github.event.before` — push event preceding SHA (skipped if null/all-zeros)
+4. `origin/main` — fallback for pushes to main
+5. `HEAD~1` — last-resort fallback if none of the above resolve
+
+### Plan outputs
+
+`cargo rail plan --quiet --since "$BASE_REF" --json -o "$RUNNER_TEMP/plan.json"`
+produces a JSON plan. The `plan` job parses it with jq and exports:
+
+- `mode` — `workspace` | `crates` | `noop`
+- `crates` — space-separated list (only meaningful when `mode == crates`)
+- `test`, `docs`, `build` — boolean surface gates (`true` / `false`)
+- `base_ref` — the resolved base ref used for the plan
+
+The jq fallback for mode is `// "workspace"`: if the schema drifts, CI fails
+closed to a full workspace run rather than silently skipping work.
+
+### `.config/rail.toml` — infrastructure paths
+
+The `[change-detection].infrastructure` list forces `mode: workspace` whenever
+any of these paths are touched: `.github/**`, `Cargo.lock`, `Cargo.toml`,
+`deny.toml`, `rust-toolchain.toml`, `xtask/**`, `_typos.toml`.
+
+### Per-job dispatch
+
+The `test` and `build` jobs dispatch on `$MODE` via a `case` statement:
+
+- `workspace` — runs the job against the full workspace
+- `crates` — loops `$CRATES` and appends `-p $c` flags per crate
+- `noop` — prints a skip message and exits 0
+- `*)` — unknown mode; fails loudly with `exit 1`
+
+The `build` job's `crates` arm filters out `xtask` and guards against an empty
+arg list (skips rather than falling back to a full workspace check).
+
+`build-wasm` has a compound gate: `plan.outputs.build == 'true'` AND
+(`mode == workspace` OR `$CRATES` contains `forgeguard_sdk` or
+`forgeguard_ffi_wasm`). It does not have an internal `case` dispatch — the gate
+itself is the only dispatch mechanism.
+
+The `docs` job has no internal `case` dispatch at all. Once its `if:` gate
+passes (`plan.outputs.docs == 'true'`), it runs
+`cargo doc --workspace --no-deps --document-private-items` unconditionally.
+
+### Reproducibility artifact
+
+After generating the plan, the `plan` job also runs
+`cargo rail hash --since "$BASE_REF" --json > rail-hash.json` and uploads it as
+artifact `rail-hash-${{ github.run_id }}` (14-day retention). This lets you
+audit which inputs drove a given plan.
+
+### Local reproduction
+
+```sh
+cargo rail plan --quiet --since HEAD~1 --json
+```
+
+To inspect the hash:
+
+```sh
+cargo rail hash --since HEAD~1 --json
+```
 
 ## GitHub Actions Runtime
 
 All reusable actions must run on Node.js 24 (GitHub forces this by default
 from 2026-06-02). Use `actions/cache@v5` (not `@v4`), `actions/checkout@v5`,
-etc. When bumping a major: skim the release notes for input schema changes
-before merging.
+`actions/upload-artifact@v5` (not `@v4`), etc. When bumping a major: skim the
+release notes for input schema changes before merging.

@@ -93,7 +93,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload planner hash artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: rail-hash-${{ github.run_id }}
           path: ${{ runner.temp }}/rail-hash.json
