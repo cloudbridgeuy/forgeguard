@@ -26,7 +26,7 @@ pub(crate) trait OrgStore: Send + Sync {
     fn create(
         &self,
         org: Organization,
-        config: OrgConfig,
+        config: Option<OrgConfig>,
     ) -> impl std::future::Future<Output = Result<OrgRecord>> + Send;
 
     fn list(
@@ -39,7 +39,7 @@ pub(crate) trait OrgStore: Send + Sync {
         &self,
         org_id: &OrganizationId,
         org: Organization,
-        config: OrgConfig,
+        config: Option<OrgConfig>,
     ) -> impl std::future::Future<Output = Result<OrgRecord>> + Send;
 
     fn delete(
@@ -64,20 +64,29 @@ pub(crate) trait OrgStore: Send + Sync {
     ) -> impl std::future::Future<Output = Result<()>> + Send;
 }
 
+/// A configured (`OrgConfig` + matching etag) pair.
+///
+/// Couples config with its content-addressed etag so the two cannot drift.
+/// Construct via [`ConfiguredConfig::compute`] (computes the etag) or
+/// [`ConfiguredConfig::from_stored`] (reuses an etag that was persisted
+/// alongside the config — e.g. read from DynamoDB).
 #[derive(Debug, Clone)]
-pub(crate) struct OrgRecord {
-    org: Organization,
+pub(crate) struct ConfiguredConfig {
     config: OrgConfig,
     etag: String,
 }
 
-impl OrgRecord {
-    pub(crate) fn new(org: Organization, config: OrgConfig, etag: String) -> Self {
-        Self { org, config, etag }
+impl ConfiguredConfig {
+    /// Build from a config alone, computing the etag from its contents.
+    pub(crate) fn compute(config: OrgConfig) -> Result<Self> {
+        let etag = compute_etag(&config)?;
+        Ok(Self { config, etag })
     }
 
-    pub(crate) fn org(&self) -> &Organization {
-        &self.org
+    /// Build from an already-paired (config, etag) — e.g. when
+    /// reconstituting an `OrgRecord` from a DynamoDB item.
+    pub(crate) fn from_stored(config: OrgConfig, etag: String) -> Self {
+        Self { config, etag }
     }
 
     pub(crate) fn config(&self) -> &OrgConfig {
@@ -86,6 +95,39 @@ impl OrgRecord {
 
     pub(crate) fn etag(&self) -> &str {
         &self.etag
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct OrgRecord {
+    org: Organization,
+    configured: Option<ConfiguredConfig>,
+}
+
+impl OrgRecord {
+    /// Construct from an org and its (optional) configured pair.
+    ///
+    /// `configured = None` represents a Draft org with no proxy config yet.
+    pub(crate) fn new(org: Organization, configured: Option<ConfiguredConfig>) -> Self {
+        Self { org, configured }
+    }
+
+    pub(crate) fn org(&self) -> &Organization {
+        &self.org
+    }
+
+    /// The proxy config, if the org has been configured.
+    pub(crate) fn config(&self) -> Option<&OrgConfig> {
+        self.configured.as_ref().map(ConfiguredConfig::config)
+    }
+
+    /// The (config, etag) pair, if the org has been configured.
+    ///
+    /// Use this when both the config and its etag are needed together
+    /// (e.g. the proxy-config handler — single null-check, no chance of
+    /// reading one and forgetting the other).
+    pub(crate) fn configured(&self) -> Option<&ConfiguredConfig> {
+        self.configured.as_ref()
     }
 }
 
@@ -110,7 +152,7 @@ impl OrgStore for InMemoryOrgStore {
         Ok(guard.get(org_id).cloned())
     }
 
-    async fn create(&self, org: Organization, config: OrgConfig) -> Result<OrgRecord> {
+    async fn create(&self, org: Organization, config: Option<OrgConfig>) -> Result<OrgRecord> {
         let mut guard = self.orgs.write().await;
         let org_id = org.org_id().clone();
         if guard.contains_key(&org_id) {
@@ -118,8 +160,8 @@ impl OrgStore for InMemoryOrgStore {
                 "organization '{org_id}' already exists"
             )));
         }
-        let etag = compute_etag(&config)?;
-        let record = OrgRecord::new(org, config, etag);
+        let configured = config.map(ConfiguredConfig::compute).transpose()?;
+        let record = OrgRecord::new(org, configured);
         guard.insert(org_id, record.clone());
         Ok(record)
     }
@@ -133,7 +175,7 @@ impl OrgStore for InMemoryOrgStore {
         &self,
         org_id: &OrganizationId,
         org: Organization,
-        config: OrgConfig,
+        config: Option<OrgConfig>,
     ) -> Result<OrgRecord> {
         if org_id != org.org_id() {
             return Err(Error::Store(format!(
@@ -148,8 +190,8 @@ impl OrgStore for InMemoryOrgStore {
                 "organization '{org_id}' not found"
             )));
         }
-        let etag = compute_etag(&config)?;
-        let record = OrgRecord::new(org, config, etag);
+        let configured = config.map(ConfiguredConfig::compute).transpose()?;
+        let record = OrgRecord::new(org, configured);
         guard.insert(org_id.clone(), record.clone());
         Ok(record)
     }
@@ -212,7 +254,8 @@ struct RawOrgFile {
 #[derive(Debug, Deserialize)]
 struct RawOrgEntry {
     name: String,
-    config: OrgConfig,
+    #[serde(default)]
+    config: Option<OrgConfig>,
 }
 
 fn generate_key_id() -> String {
@@ -261,10 +304,20 @@ pub(crate) fn build_org_store(json_str: &str) -> Result<InMemoryOrgStore> {
         let org_id = OrganizationId::new(&raw_id)
             .map_err(|e| Error::Config(format!("invalid organization id {raw_id:?}: {e}")))?;
 
-        let etag = compute_etag(&raw_entry.config)?;
+        // Seeded orgs are Active when configured, Draft when not — matches
+        // the semantic of "this org needs onboarding to receive traffic".
+        let configured = raw_entry
+            .config
+            .map(ConfiguredConfig::compute)
+            .transpose()?;
+        let status = if configured.is_some() {
+            OrgStatus::Active
+        } else {
+            OrgStatus::Draft
+        };
 
-        let org = Organization::new(org_id.clone(), raw_entry.name, OrgStatus::Active, now);
-        let record = OrgRecord::new(org, raw_entry.config, etag);
+        let org = Organization::new(org_id.clone(), raw_entry.name, status, now);
+        let record = OrgRecord::new(org, configured);
 
         orgs.insert(org_id, record);
     }
@@ -299,7 +352,7 @@ impl OrgStore for AnyOrgStore {
         }
     }
 
-    async fn create(&self, org: Organization, config: OrgConfig) -> Result<OrgRecord> {
+    async fn create(&self, org: Organization, config: Option<OrgConfig>) -> Result<OrgRecord> {
         match self {
             Self::Memory(s) => s.create(org, config).await,
             Self::DynamoDb(s) => s.create(org, config).await,
@@ -317,7 +370,7 @@ impl OrgStore for AnyOrgStore {
         &self,
         org_id: &OrganizationId,
         org: Organization,
-        config: OrgConfig,
+        config: Option<OrgConfig>,
     ) -> Result<OrgRecord> {
         match self {
             Self::Memory(s) => s.update(org_id, org, config).await,
@@ -384,9 +437,10 @@ mod tests {
         let store = build_org_store(sample_json()).unwrap();
         let org_id = OrganizationId::new("org-acme").unwrap();
         let record = store.get(&org_id).await.unwrap().unwrap();
-        assert_eq!(record.config().upstream_url(), "https://api.acme.com");
+        let config = record.config().unwrap();
+        assert_eq!(config.upstream_url(), "https://api.acme.com");
         assert_eq!(
-            record.config().default_policy(),
+            config.default_policy(),
             forgeguard_core::DefaultPolicy::Deny
         );
         assert_eq!(record.org().name(), "Acme Corp");
@@ -455,24 +509,14 @@ mod tests {
         let beta = OrganizationId::new("org-beta").unwrap();
         assert!(store.get(&alpha).await.unwrap().is_some());
         assert!(store.get(&beta).await.unwrap().is_some());
+        let alpha_record = store.get(&alpha).await.unwrap().unwrap();
+        let beta_record = store.get(&beta).await.unwrap().unwrap();
         assert_eq!(
-            store
-                .get(&alpha)
-                .await
-                .unwrap()
-                .unwrap()
-                .config()
-                .upstream_url(),
+            alpha_record.config().unwrap().upstream_url(),
             "https://alpha.com"
         );
         assert_eq!(
-            store
-                .get(&beta)
-                .await
-                .unwrap()
-                .unwrap()
-                .config()
-                .default_policy(),
+            beta_record.config().unwrap().default_policy(),
             forgeguard_core::DefaultPolicy::Passthrough
         );
     }
@@ -484,9 +528,10 @@ mod tests {
         let guard = store.orgs.try_read().unwrap();
         let org_id = OrganizationId::new("org-acme").unwrap();
         let record = guard.get(&org_id).unwrap();
+        let config = record.config().unwrap();
 
-        let etag1 = compute_etag(record.config()).unwrap();
-        let etag2 = compute_etag(record.config()).unwrap();
+        let etag1 = compute_etag(config).unwrap();
+        let etag2 = compute_etag(config).unwrap();
         assert_eq!(etag1, etag2);
     }
 
@@ -517,8 +562,9 @@ mod tests {
         let guard = store.orgs.try_read().unwrap();
         let org_id = OrganizationId::new("org-acme").unwrap();
         let record = guard.get(&org_id).unwrap();
+        let config = record.config().unwrap();
 
-        let etag = compute_etag(record.config()).unwrap();
+        let etag = compute_etag(config).unwrap();
         // 16 hex chars + 2 quote chars = 18
         assert_eq!(etag.len(), 18, "ETag should be 18 chars, got: {etag}");
         assert!(
@@ -552,7 +598,7 @@ mod tests {
         }))
         .unwrap();
 
-        let record = store.create(org, config).await.unwrap();
+        let record = store.create(org, Some(config)).await.unwrap();
         assert_eq!(record.org().name(), "New Org");
         assert_eq!(record.org().status(), OrgStatus::Draft);
 
@@ -562,6 +608,76 @@ mod tests {
             .await
             .unwrap();
         assert!(fetched.is_some());
+    }
+
+    #[tokio::test]
+    async fn create_org_without_config_round_trips_as_draft() {
+        let store = InMemoryOrgStore::new(BTreeMap::new());
+        let now = Utc::now();
+        let org = Organization::new(
+            OrganizationId::new("org-draft").unwrap(),
+            "Draft Org".to_string(),
+            OrgStatus::Draft,
+            now,
+        );
+
+        let record = store.create(org, None).await.unwrap();
+        assert!(record.configured().is_none(), "configured should be None");
+
+        // Re-fetch
+        let fetched = store
+            .get(&OrganizationId::new("org-draft").unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(fetched.configured().is_none());
+        assert_eq!(fetched.org().status(), OrgStatus::Draft);
+    }
+
+    #[tokio::test]
+    async fn update_promotes_draft_to_configured() {
+        let store = InMemoryOrgStore::new(BTreeMap::new());
+        let now = Utc::now();
+        let org_id = OrganizationId::new("org-promote").unwrap();
+        let org = Organization::new(org_id.clone(), "Promote".to_string(), OrgStatus::Draft, now);
+        store.create(org, None).await.unwrap();
+
+        let later = now + chrono::Duration::seconds(1);
+        let updated_org = Organization::new(
+            org_id.clone(),
+            "Promote".to_string(),
+            OrgStatus::Draft,
+            later,
+        );
+        let config: OrgConfig = serde_json::from_value(serde_json::json!({
+            "version": "2026-04-07",
+            "project_id": "p",
+            "upstream_url": "https://example.com",
+            "default_policy": "deny"
+        }))
+        .unwrap();
+
+        let record = store
+            .update(&org_id, updated_org, Some(config))
+            .await
+            .unwrap();
+        assert!(record.configured().is_some());
+    }
+
+    #[tokio::test]
+    async fn build_org_store_draft_entry_without_config() {
+        let json = r#"{
+            "organizations": {
+                "org-seeded-draft": {
+                    "name": "Seeded Draft"
+                }
+            }
+        }"#;
+        let store = build_org_store(json).unwrap();
+        let org_id = OrganizationId::new("org-seeded-draft").unwrap();
+        let record = store.get(&org_id).await.unwrap().unwrap();
+        assert!(record.config().is_none());
+        assert_eq!(record.org().status(), OrgStatus::Draft);
     }
 
     #[tokio::test]
@@ -582,7 +698,7 @@ mod tests {
             OrgStatus::Draft,
             now,
         );
-        store.create(org1, config.clone()).await.unwrap();
+        store.create(org1, Some(config.clone())).await.unwrap();
 
         let org2 = Organization::new(
             OrganizationId::new("org-dup").unwrap(),
@@ -590,7 +706,7 @@ mod tests {
             OrgStatus::Draft,
             now,
         );
-        let result = store.create(org2, config).await;
+        let result = store.create(org2, Some(config)).await;
         assert!(result.is_err());
     }
 
@@ -618,7 +734,7 @@ mod tests {
             "default_policy": "deny"
         }))
         .unwrap();
-        store.create(org, config).await.unwrap();
+        store.create(org, Some(config)).await.unwrap();
 
         let org_id = OrganizationId::new("org-upd").unwrap();
         let later = now + chrono::Duration::seconds(1);
@@ -637,11 +753,14 @@ mod tests {
         .unwrap();
 
         let record = store
-            .update(&org_id, updated_org, new_config)
+            .update(&org_id, updated_org, Some(new_config))
             .await
             .unwrap();
         assert_eq!(record.org().name(), "Updated");
-        assert_eq!(record.config().upstream_url(), "https://updated.com");
+        assert_eq!(
+            record.config().unwrap().upstream_url(),
+            "https://updated.com"
+        );
     }
 
     #[tokio::test]
@@ -658,7 +777,7 @@ mod tests {
         }))
         .unwrap();
 
-        let result = store.update(&org_id, org, config).await;
+        let result = store.update(&org_id, org, Some(config)).await;
         assert!(result.is_err());
     }
 
@@ -679,7 +798,7 @@ mod tests {
             "default_policy": "deny"
         }))
         .unwrap();
-        store.create(org, config).await.unwrap();
+        store.create(org, Some(config)).await.unwrap();
 
         let org_id = OrganizationId::new("org-del").unwrap();
         store.delete(&org_id).await.unwrap();
@@ -713,7 +832,7 @@ mod tests {
                 "default_policy": "deny"
             }))
             .unwrap();
-            store.create(org, config).await.unwrap();
+            store.create(org, Some(config)).await.unwrap();
         }
 
         // List all
@@ -747,8 +866,8 @@ mod tests {
             "default_policy": "deny"
         }))
         .unwrap();
-        let etag = compute_etag(&config).unwrap();
-        let record = OrgRecord::new(org, config, etag);
+        let configured = ConfiguredConfig::compute(config).unwrap();
+        let record = OrgRecord::new(org, Some(configured));
         store
             .orgs
             .try_write()

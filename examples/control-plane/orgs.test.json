@@ -1,5 +1,8 @@
 {
   "organizations": {
+    "org-seeded-draft": {
+      "name": "Seeded Draft"
+    },
     "org-acme": {
       "name": "Acme Corp",
       "config": {

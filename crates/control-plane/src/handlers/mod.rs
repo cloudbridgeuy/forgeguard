@@ -19,7 +19,10 @@ pub(crate) use keys::{generate_key_handler, list_keys_handler, revoke_key_handle
 pub(crate) struct CreateOrgRequest {
     org_id: String,
     name: String,
-    config: OrgConfig,
+    /// Proxy config. Omit to create a Draft org without one — the
+    /// admin can set it later via `PUT /api/v1/organizations/{org_id}`.
+    #[serde(default)]
+    config: Option<OrgConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -121,25 +124,38 @@ pub(crate) async fn proxy_config_handler<S: OrgStore>(
         }
     };
 
+    // Org exists but is Draft (no proxy config set yet) — distinct from "not found"
+    // per the issue body. 409 Conflict matches RFC 7231 ¶6.5.8: "current resource
+    // state forbids the action".
+    let Some(configured) = record.configured() else {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": format!("organization '{org_id}' has no proxy config")
+            })),
+        )
+            .into_response();
+    };
+
     // ETag check
     if headers
         .get(axum::http::header::IF_NONE_MATCH)
         .and_then(|v| v.to_str().ok())
-        .is_some_and(|etag| etag == record.etag())
+        .is_some_and(|etag| etag == configured.etag())
     {
         return StatusCode::NOT_MODIFIED.into_response();
     }
 
     // Return config with ETag
     let mut response_headers = HeaderMap::new();
-    if let Ok(val) = record.etag().parse() {
+    if let Ok(val) = configured.etag().parse() {
         response_headers.insert(axum::http::header::ETAG, val);
     }
 
     (
         StatusCode::OK,
         response_headers,
-        Json(record.config().clone()),
+        Json(configured.config().clone()),
     )
         .into_response()
 }
@@ -177,7 +193,9 @@ pub(crate) async fn update_handler<S: OrgStore>(
     }
     org = org.with_updated_at(now);
 
-    let config = body.config.unwrap_or_else(|| record.config().clone());
+    // If the body omits `config`, keep whatever was previously stored
+    // (None for Draft orgs, Some(...) for Configured ones).
+    let config = body.config.or_else(|| record.config().cloned());
 
     match store.update(&org_id, org, config).await {
         Ok(updated) => (StatusCode::OK, Json(updated.org().clone())).into_response(),
@@ -348,554 +366,4 @@ pub(super) mod test_support {
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
-mod tests {
-    use std::sync::Arc;
-
-    use axum::body::Body;
-    use axum::http::{Request, StatusCode};
-    use http_body_util::BodyExt;
-    use tower::ServiceExt;
-
-    use super::test_support::{
-        build_test_store, create_org_json, empty_store, test_app, TEST_API_KEY,
-    };
-
-    #[tokio::test]
-    async fn unauthenticated_request_returns_401() {
-        let store = build_test_store();
-        let app = test_app(store);
-
-        let request = Request::builder()
-            .uri("/api/v1/organizations")
-            .body(Body::empty())
-            .unwrap();
-
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    }
-
-    #[tokio::test]
-    async fn returns_200_for_valid_org() {
-        let store = build_test_store();
-        let app = test_app(store);
-
-        let request = Request::builder()
-            .uri("/api/v1/organizations/org-acme/proxy-config")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::empty())
-            .unwrap();
-
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-
-        // Check ETag header exists
-        assert!(response.headers().get("etag").is_some());
-
-        // Check body is valid JSON containing project_id
-        let body = response.into_body();
-        let bytes = body.collect().await.unwrap().to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(json["project_id"], "todo-app");
-    }
-
-    #[tokio::test]
-    async fn returns_404_for_unknown_org() {
-        let store = build_test_store();
-        let app = test_app(store);
-
-        let request = Request::builder()
-            .uri("/api/v1/organizations/org-unknown/proxy-config")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::empty())
-            .unwrap();
-
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    }
-
-    #[tokio::test]
-    async fn returns_304_on_matching_etag() {
-        let store = build_test_store();
-
-        // First request: get the ETag
-        let app = test_app(Arc::clone(&store));
-        let request = Request::builder()
-            .uri("/api/v1/organizations/org-acme/proxy-config")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::empty())
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        let etag = response
-            .headers()
-            .get("etag")
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .to_string();
-
-        // Second request: send the ETag back via If-None-Match
-        let app = test_app(store);
-        let request = Request::builder()
-            .uri("/api/v1/organizations/org-acme/proxy-config")
-            .header("x-api-key", TEST_API_KEY)
-            .header("if-none-match", &etag)
-            .body(Body::empty())
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
-    }
-
-    #[tokio::test]
-    async fn returns_200_on_non_matching_etag() {
-        let store = build_test_store();
-        let app = test_app(store);
-
-        let request = Request::builder()
-            .uri("/api/v1/organizations/org-acme/proxy-config")
-            .header("x-api-key", TEST_API_KEY)
-            .header("if-none-match", "\"stale\"")
-            .body(Body::empty())
-            .unwrap();
-
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-
-        // Should still return ETag and full body
-        assert!(response.headers().get("etag").is_some());
-        let body = response.into_body();
-        let bytes = body.collect().await.unwrap().to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(json["project_id"], "todo-app");
-    }
-
-    // ── Create + Get tests ─────────────────────────────────────────
-
-    #[tokio::test]
-    async fn create_and_get_org() {
-        let store = empty_store();
-        let app = test_app(Arc::clone(&store));
-
-        let body = serde_json::to_string(&create_org_json("org-new", "New Org")).unwrap();
-        let request = Request::builder()
-            .method("POST")
-            .uri("/api/v1/organizations")
-            .header("content-type", "application/json")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::from(body))
-            .unwrap();
-
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::CREATED);
-
-        let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(json["name"], "New Org");
-        assert_eq!(json["status"], "draft");
-        assert_eq!(json["org_id"], "org-new");
-
-        // GET the created org
-        let app = test_app(store);
-        let request = Request::builder()
-            .uri("/api/v1/organizations/org-new")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::empty())
-            .unwrap();
-
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(json["name"], "New Org");
-        assert_eq!(json["status"], "draft");
-    }
-
-    #[tokio::test]
-    async fn create_duplicate_returns_409() {
-        let store = empty_store();
-
-        // First create
-        let app = test_app(Arc::clone(&store));
-        let body = serde_json::to_string(&create_org_json("org-dup", "First")).unwrap();
-        let request = Request::builder()
-            .method("POST")
-            .uri("/api/v1/organizations")
-            .header("content-type", "application/json")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::from(body))
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::CREATED);
-
-        // Duplicate create
-        let app = test_app(store);
-        let body = serde_json::to_string(&create_org_json("org-dup", "Second")).unwrap();
-        let request = Request::builder()
-            .method("POST")
-            .uri("/api/v1/organizations")
-            .header("content-type", "application/json")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::from(body))
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::CONFLICT);
-    }
-
-    #[tokio::test]
-    async fn create_invalid_org_id_returns_422() {
-        let store = empty_store();
-        let app = test_app(store);
-
-        let body = serde_json::to_string(&create_org_json("UPPERCASE", "Bad")).unwrap();
-        let request = Request::builder()
-            .method("POST")
-            .uri("/api/v1/organizations")
-            .header("content-type", "application/json")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::from(body))
-            .unwrap();
-
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
-    }
-
-    #[tokio::test]
-    async fn get_unknown_org_returns_404() {
-        let store = empty_store();
-        let app = test_app(store);
-
-        let request = Request::builder()
-            .uri("/api/v1/organizations/org-nope")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::empty())
-            .unwrap();
-
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    }
-
-    // ── List tests ─────────────────────────────────────────────────
-
-    #[tokio::test]
-    async fn list_orgs_empty_then_populated() {
-        let store = empty_store();
-
-        // List empty
-        let app = test_app(Arc::clone(&store));
-        let request = Request::builder()
-            .uri("/api/v1/organizations")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::empty())
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        let json: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
-        assert!(json.is_empty());
-
-        // Create an org
-        let app = test_app(Arc::clone(&store));
-        let body = serde_json::to_string(&create_org_json("org-alpha", "Alpha")).unwrap();
-        let request = Request::builder()
-            .method("POST")
-            .uri("/api/v1/organizations")
-            .header("content-type", "application/json")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::from(body))
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::CREATED);
-
-        // List populated
-        let app = test_app(store);
-        let request = Request::builder()
-            .uri("/api/v1/organizations")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::empty())
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        let json: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(json.len(), 1);
-        assert_eq!(json[0]["name"], "Alpha");
-    }
-
-    #[tokio::test]
-    async fn list_orgs_pagination() {
-        let store = empty_store();
-
-        // Create 3 orgs
-        for i in 0..3 {
-            let app = test_app(Arc::clone(&store));
-            let body =
-                serde_json::to_string(&create_org_json(&format!("org-{i}"), &format!("Org {i}")))
-                    .unwrap();
-            let request = Request::builder()
-                .method("POST")
-                .uri("/api/v1/organizations")
-                .header("content-type", "application/json")
-                .header("x-api-key", TEST_API_KEY)
-                .body(Body::from(body))
-                .unwrap();
-            let response = app.oneshot(request).await.unwrap();
-            assert_eq!(response.status(), StatusCode::CREATED);
-        }
-
-        // List with limit=2
-        let app = test_app(store);
-        let request = Request::builder()
-            .uri("/api/v1/organizations?limit=2")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::empty())
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        let json: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(json.len(), 2);
-    }
-
-    // ── Update tests ───────────────────────────────────────────────
-
-    #[tokio::test]
-    async fn update_changes_name() {
-        let store = empty_store();
-
-        // Create org
-        let app = test_app(Arc::clone(&store));
-        let body = serde_json::to_string(&create_org_json("org-upd", "Original")).unwrap();
-        let request = Request::builder()
-            .method("POST")
-            .uri("/api/v1/organizations")
-            .header("content-type", "application/json")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::from(body))
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::CREATED);
-
-        // Update name
-        let app = test_app(Arc::clone(&store));
-        let body = serde_json::to_string(&serde_json::json!({"name": "Renamed"})).unwrap();
-        let request = Request::builder()
-            .method("PUT")
-            .uri("/api/v1/organizations/org-upd")
-            .header("content-type", "application/json")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::from(body))
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(json["name"], "Renamed");
-
-        // GET to verify persistence
-        let app = test_app(store);
-        let request = Request::builder()
-            .uri("/api/v1/organizations/org-upd")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::empty())
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(json["name"], "Renamed");
-    }
-
-    #[tokio::test]
-    async fn update_replaces_config() {
-        let store = empty_store();
-
-        // Create org
-        let app = test_app(Arc::clone(&store));
-        let body = serde_json::to_string(&create_org_json("org-cfg", "Cfg Org")).unwrap();
-        let request = Request::builder()
-            .method("POST")
-            .uri("/api/v1/organizations")
-            .header("content-type", "application/json")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::from(body))
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::CREATED);
-
-        // Update config
-        let app = test_app(Arc::clone(&store));
-        let body = serde_json::to_string(&serde_json::json!({
-            "config": {
-                "version": "2026-04-08",
-                "project_id": "new-proj",
-                "upstream_url": "https://new-upstream.com",
-                "default_policy": "passthrough"
-            }
-        }))
-        .unwrap();
-        let request = Request::builder()
-            .method("PUT")
-            .uri("/api/v1/organizations/org-cfg")
-            .header("content-type", "application/json")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::from(body))
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-
-        // GET proxy-config to verify
-        let app = test_app(store);
-        let request = Request::builder()
-            .uri("/api/v1/organizations/org-cfg/proxy-config")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::empty())
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(json["upstream_url"], "https://new-upstream.com");
-        assert_eq!(json["default_policy"], "passthrough");
-    }
-
-    #[tokio::test]
-    async fn update_unknown_org_returns_404() {
-        let store = empty_store();
-        let app = test_app(store);
-
-        let body = serde_json::to_string(&serde_json::json!({"name": "Ghost"})).unwrap();
-        let request = Request::builder()
-            .method("PUT")
-            .uri("/api/v1/organizations/org-unknown")
-            .header("content-type", "application/json")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::from(body))
-            .unwrap();
-
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    }
-
-    // ── Delete tests ───────────────────────────────────────────────
-
-    #[tokio::test]
-    async fn delete_draft_org() {
-        let store = empty_store();
-
-        // Create a draft org
-        let app = test_app(Arc::clone(&store));
-        let body = serde_json::to_string(&create_org_json("org-del", "To Delete")).unwrap();
-        let request = Request::builder()
-            .method("POST")
-            .uri("/api/v1/organizations")
-            .header("content-type", "application/json")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::from(body))
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::CREATED);
-
-        // Delete it
-        let app = test_app(Arc::clone(&store));
-        let request = Request::builder()
-            .method("DELETE")
-            .uri("/api/v1/organizations/org-del")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::empty())
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::NO_CONTENT);
-
-        // GET should return 404
-        let app = test_app(store);
-        let request = Request::builder()
-            .uri("/api/v1/organizations/org-del")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::empty())
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    }
-
-    #[tokio::test]
-    async fn delete_active_org() {
-        // File-loaded orgs are Active
-        let store = build_test_store();
-
-        let app = test_app(Arc::clone(&store));
-        let request = Request::builder()
-            .method("DELETE")
-            .uri("/api/v1/organizations/org-acme")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::empty())
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::NO_CONTENT);
-
-        // GET should return 404
-        let app = test_app(store);
-        let request = Request::builder()
-            .uri("/api/v1/organizations/org-acme")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::empty())
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    }
-
-    #[tokio::test]
-    async fn delete_already_deleted_returns_204() {
-        let store = empty_store();
-
-        // Create then delete
-        let app = test_app(Arc::clone(&store));
-        let body = serde_json::to_string(&create_org_json("org-gone", "Gone")).unwrap();
-        let request = Request::builder()
-            .method("POST")
-            .uri("/api/v1/organizations")
-            .header("content-type", "application/json")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::from(body))
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::CREATED);
-
-        let app = test_app(Arc::clone(&store));
-        let request = Request::builder()
-            .method("DELETE")
-            .uri("/api/v1/organizations/org-gone")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::empty())
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::NO_CONTENT);
-
-        // Second delete is idempotent — still 204
-        let app = test_app(store);
-        let request = Request::builder()
-            .method("DELETE")
-            .uri("/api/v1/organizations/org-gone")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::empty())
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::NO_CONTENT);
-    }
-
-    #[tokio::test]
-    async fn delete_unknown_org_returns_204() {
-        let store = empty_store();
-        let app = test_app(store);
-
-        let request = Request::builder()
-            .method("DELETE")
-            .uri("/api/v1/organizations/org-nope")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::empty())
-            .unwrap();
-
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::NO_CONTENT);
-    }
-}
+mod tests;

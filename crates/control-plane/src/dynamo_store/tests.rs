@@ -110,7 +110,7 @@ async fn create_then_get_round_trip() {
     let config = sample_config();
 
     // Create
-    let created = store.create(org, config).await.unwrap();
+    let created = store.create(org, Some(config)).await.unwrap();
     assert_eq!(created.org().name(), "Acme Corp");
     assert_eq!(created.org().status(), OrgStatus::Draft);
     assert_eq!(created.org().org_id().as_str(), "org-acme");
@@ -120,13 +120,77 @@ async fn create_then_get_round_trip() {
     assert_eq!(fetched.org().org_id().as_str(), "org-acme");
     assert_eq!(fetched.org().name(), "Acme Corp");
     assert_eq!(fetched.org().status(), OrgStatus::Draft);
-    assert_eq!(fetched.etag(), created.etag());
+    assert_eq!(
+        fetched.configured().map(ConfiguredConfig::etag),
+        created.configured().map(ConfiguredConfig::etag)
+    );
 
     // Verify timestamps survive round-trip (RFC 3339 may lose sub-nanosecond)
     let diff = (fetched.org().created_at() - created.org().created_at())
         .num_milliseconds()
         .abs();
     assert!(diff < 1, "created_at should round-trip within 1ms");
+}
+
+#[tokio::test]
+async fn create_without_config_round_trips_as_draft() {
+    let client = test_client().await;
+    let table = unique_table_name();
+    create_test_table(&client, &table).await;
+
+    let store = DynamoOrgStore::new(client, table);
+
+    let now = chrono::Utc::now();
+    let org_id = OrganizationId::new("org-dyn-draft").unwrap();
+    let org = Organization::new(
+        org_id.clone(),
+        "Dyn Draft".to_string(),
+        OrgStatus::Draft,
+        now,
+    );
+
+    let created = store.create(org, None).await.unwrap();
+    assert!(created.configured().is_none());
+
+    let fetched = store.get(&org_id).await.unwrap().unwrap();
+    assert!(fetched.configured().is_none());
+    assert_eq!(fetched.org().name(), "Dyn Draft");
+    assert_eq!(fetched.org().status(), OrgStatus::Draft);
+}
+
+#[tokio::test]
+async fn update_promotes_draft_to_configured_dynamo() {
+    let client = test_client().await;
+    let table = unique_table_name();
+    create_test_table(&client, &table).await;
+
+    let store = DynamoOrgStore::new(client, table);
+
+    let now = chrono::Utc::now();
+    let org_id = OrganizationId::new("org-dyn-promote").unwrap();
+    let org = Organization::new(org_id.clone(), "Promote".to_string(), OrgStatus::Draft, now);
+    store.create(org, None).await.unwrap();
+
+    let later = now + chrono::Duration::seconds(1);
+    let updated = Organization::new(
+        org_id.clone(),
+        "Promote".to_string(),
+        OrgStatus::Draft,
+        later,
+    );
+    let record = store
+        .update(&org_id, updated, Some(sample_config()))
+        .await
+        .unwrap();
+    assert!(record.configured().is_some());
+
+    // Re-fetch and verify
+    let fetched = store.get(&org_id).await.unwrap().unwrap();
+    assert!(fetched.configured().is_some());
+    assert_eq!(
+        fetched.configured().map(ConfiguredConfig::etag),
+        record.configured().map(ConfiguredConfig::etag)
+    );
 }
 
 #[tokio::test]
@@ -142,10 +206,10 @@ async fn create_duplicate_returns_conflict() {
     let org1 = Organization::new(org_id.clone(), "First".to_string(), OrgStatus::Draft, now);
     let config = sample_config();
 
-    store.create(org1, config.clone()).await.unwrap();
+    store.create(org1, Some(config.clone())).await.unwrap();
 
     let org2 = Organization::new(org_id, "Second".to_string(), OrgStatus::Draft, now);
-    let result = store.create(org2, config).await;
+    let result = store.create(org2, Some(config)).await;
 
     assert!(result.is_err());
     let err = result.unwrap_err();
@@ -200,7 +264,7 @@ async fn list_returns_created_orgs() {
             OrgStatus::Draft,
             now,
         );
-        store.create(org, sample_config()).await.unwrap();
+        store.create(org, Some(sample_config())).await.unwrap();
     }
 
     let all = store.list(0, 10).await.unwrap();
@@ -223,7 +287,7 @@ async fn list_offset_and_limit() {
             OrgStatus::Draft,
             now,
         );
-        store.create(org, sample_config()).await.unwrap();
+        store.create(org, Some(sample_config())).await.unwrap();
     }
 
     let page = store.list(1, 1).await.unwrap();
@@ -250,7 +314,7 @@ async fn update_existing_org() {
         OrgStatus::Draft,
         now,
     );
-    store.create(org, sample_config()).await.unwrap();
+    store.create(org, Some(sample_config())).await.unwrap();
 
     // Update name and config
     let later = now + chrono::Duration::seconds(1);
@@ -272,17 +336,23 @@ async fn update_existing_org() {
     .unwrap();
 
     let record = store
-        .update(&org_id, updated_org, new_config)
+        .update(&org_id, updated_org, Some(new_config))
         .await
         .unwrap();
     assert_eq!(record.org().name(), "Updated");
-    assert_eq!(record.config().upstream_url(), "https://updated.com");
+    assert_eq!(
+        record.config().unwrap().upstream_url(),
+        "https://updated.com"
+    );
 
     // Verify via get
     let fetched = store.get(&org_id).await.unwrap().unwrap();
     assert_eq!(fetched.org().name(), "Updated");
     assert_eq!(fetched.org().status(), OrgStatus::Active);
-    assert_eq!(fetched.config().upstream_url(), "https://updated.com");
+    assert_eq!(
+        fetched.config().unwrap().upstream_url(),
+        "https://updated.com"
+    );
 }
 
 #[tokio::test]
@@ -302,7 +372,7 @@ async fn update_org_id_mismatch_returns_store_error() {
         now,
     );
 
-    let result = store.update(&org_id, org, sample_config()).await;
+    let result = store.update(&org_id, org, Some(sample_config())).await;
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
@@ -323,7 +393,7 @@ async fn update_nonexistent_returns_not_found() {
     let org_id = OrganizationId::new("org-ghost").unwrap();
     let org = Organization::new(org_id.clone(), "Ghost".to_string(), OrgStatus::Draft, now);
 
-    let result = store.update(&org_id, org, sample_config()).await;
+    let result = store.update(&org_id, org, Some(sample_config())).await;
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
@@ -352,7 +422,7 @@ async fn delete_existing_org() {
         OrgStatus::Draft,
         now,
     );
-    store.create(org, sample_config()).await.unwrap();
+    store.create(org, Some(sample_config())).await.unwrap();
 
     store.delete(&org_id).await.unwrap();
     assert!(store.get(&org_id).await.unwrap().is_none());
@@ -390,7 +460,7 @@ async fn store_with_org(org_id_str: &str) -> (DynamoOrgStore, OrganizationId) {
         OrgStatus::Draft,
         now,
     );
-    store.create(org, sample_config()).await.unwrap();
+    store.create(org, Some(sample_config())).await.unwrap();
     (store, org_id)
 }
 
@@ -497,7 +567,7 @@ async fn update_org_preserves_signing_keys() {
     .unwrap();
 
     store
-        .update(&org_id, updated_org, new_config)
+        .update(&org_id, updated_org, Some(new_config))
         .await
         .unwrap();
 

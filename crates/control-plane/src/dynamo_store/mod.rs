@@ -16,7 +16,7 @@ use forgeguard_core::{OrgStatus, Organization, OrganizationId};
 use crate::config::OrgConfig;
 use crate::error::{Error, Result};
 use crate::signing_key::{GenerateKeyResult, SigningKeyEntry};
-use crate::store::{compute_etag, generate_key_material, OrgRecord, OrgStore};
+use crate::store::{generate_key_material, ConfiguredConfig, OrgRecord, OrgStore};
 
 // ---------------------------------------------------------------------------
 // Key schema — single source of truth from shared JSON
@@ -142,11 +142,13 @@ fn put_s(item: &mut HashMap<String, AttributeValue>, key: &str, value: impl Into
     item.insert(key.to_string(), AttributeValue::S(value.into()));
 }
 
-/// Serialize an `Organization` + `OrgConfig` + etag + signing keys into a DynamoDB item.
+/// Serialize an `Organization` + optional `ConfiguredConfig` + signing keys into a DynamoDB item.
+///
+/// When `configured` is `None` (Draft org), the `config` and `etag` attributes
+/// are omitted entirely — no sentinel values.
 fn to_item(
     org: &Organization,
-    config: &OrgConfig,
-    etag: &str,
+    configured: Option<&ConfiguredConfig>,
     signing_keys: &[SigningKeyEntry],
 ) -> Result<HashMap<String, AttributeValue>> {
     let mut item = HashMap::new();
@@ -168,10 +170,12 @@ fn to_item(
         put_s(&mut item, "policy_store_id", v);
     }
 
-    let config_json = serde_json::to_string(config)
-        .map_err(|e| Error::Store(format!("serialize config: {e}")))?;
-    put_s(&mut item, "config", config_json);
-    put_s(&mut item, "etag", etag);
+    if let Some(c) = configured {
+        let config_json = serde_json::to_string(c.config())
+            .map_err(|e| Error::Store(format!("serialize config: {e}")))?;
+        put_s(&mut item, "config", config_json);
+        put_s(&mut item, "etag", c.etag());
+    }
 
     if !signing_keys.is_empty() {
         let keys_json = serde_json::to_string(signing_keys)
@@ -186,6 +190,9 @@ fn to_item(
 ///
 /// Validation failures produce `Error::Store`. Raw `AttributeValue` maps
 /// never leak past this function (Parse Don't Validate).
+///
+/// `config` and `etag` are read as a pair: both present (Configured) or both
+/// absent (Draft). Asymmetric presence is an integrity error.
 fn from_item(item: &HashMap<String, AttributeValue>) -> Result<OrgRecord> {
     let pk = get_s(item, pk())?;
     let org_id_str = pk
@@ -206,16 +213,30 @@ fn from_item(item: &HashMap<String, AttributeValue>) -> Result<OrgRecord> {
     let cognito_jwks_url = get_s_opt(item, "cognito_jwks_url");
     let policy_store_id = get_s_opt(item, "policy_store_id");
 
-    let config: OrgConfig = serde_json::from_str(&get_s(item, "config")?)
-        .map_err(|e| Error::Store(format!("deserialize config: {e}")))?;
-
-    let etag = get_s(item, "etag")?;
+    let configured = match (get_s_opt(item, "config"), get_s_opt(item, "etag")) {
+        (Some(config_json), Some(etag)) => {
+            let config: OrgConfig = serde_json::from_str(&config_json)
+                .map_err(|e| Error::Store(format!("deserialize config: {e}")))?;
+            Some(ConfiguredConfig::from_stored(config, etag))
+        }
+        (None, None) => None,
+        (Some(_), None) => {
+            return Err(Error::Store(format!(
+                "org '{org_id}' has 'config' attribute but no matching 'etag'"
+            )))
+        }
+        (None, Some(_)) => {
+            return Err(Error::Store(format!(
+                "org '{org_id}' has 'etag' attribute but no matching 'config'"
+            )))
+        }
+    };
 
     let org = Organization::new(org_id, name, status, created_at)
         .with_updated_at(updated_at)
         .with_aws_resources(cognito_pool_id, cognito_jwks_url, policy_store_id);
 
-    Ok(OrgRecord::new(org, config, etag))
+    Ok(OrgRecord::new(org, configured))
 }
 
 // ---------------------------------------------------------------------------
@@ -298,9 +319,9 @@ fn signing_keys_from_item(item: &HashMap<String, AttributeValue>) -> Result<Vec<
 // ---------------------------------------------------------------------------
 
 impl OrgStore for DynamoOrgStore {
-    async fn create(&self, org: Organization, config: OrgConfig) -> Result<OrgRecord> {
-        let etag = compute_etag(&config)?;
-        let item = to_item(&org, &config, &etag, &[])?;
+    async fn create(&self, org: Organization, config: Option<OrgConfig>) -> Result<OrgRecord> {
+        let configured = config.map(ConfiguredConfig::compute).transpose()?;
+        let item = to_item(&org, configured.as_ref(), &[])?;
 
         let result = self
             .client
@@ -313,7 +334,7 @@ impl OrgStore for DynamoOrgStore {
             .await;
 
         match result {
-            Ok(_) => Ok(OrgRecord::new(org, config, etag)),
+            Ok(_) => Ok(OrgRecord::new(org, configured)),
             Err(sdk_err) => Err(map_put_item_error(
                 sdk_err,
                 Error::Conflict(format!("organization '{}' already exists", org.org_id())),
@@ -377,7 +398,7 @@ impl OrgStore for DynamoOrgStore {
         &self,
         org_id: &OrganizationId,
         org: Organization,
-        config: OrgConfig,
+        config: Option<OrgConfig>,
     ) -> Result<OrgRecord> {
         if org_id != org.org_id() {
             return Err(Error::Store(format!(
@@ -394,8 +415,8 @@ impl OrgStore for DynamoOrgStore {
             .ok_or_else(|| Error::NotFound(format!("organization '{org_id}' not found")))?;
         let existing_keys = signing_keys_from_item(&existing)?;
 
-        let etag = compute_etag(&config)?;
-        let item = to_item(&org, &config, &etag, &existing_keys)?;
+        let configured = config.map(ConfiguredConfig::compute).transpose()?;
+        let item = to_item(&org, configured.as_ref(), &existing_keys)?;
 
         let result = self
             .client
@@ -408,7 +429,7 @@ impl OrgStore for DynamoOrgStore {
             .await;
 
         match result {
-            Ok(_) => Ok(OrgRecord::new(org, config, etag)),
+            Ok(_) => Ok(OrgRecord::new(org, configured)),
             Err(sdk_err) => Err(map_put_item_error(
                 sdk_err,
                 Error::NotFound(format!("organization '{}' not found", org.org_id())),
