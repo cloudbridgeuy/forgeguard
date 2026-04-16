@@ -193,6 +193,20 @@ mod tests {
     }
 
     #[test]
+    fn can_resolve_signed_request_returns_false() {
+        let config = test_config();
+        let resolver = CognitoJwtResolver::new(config);
+        let cred = Credential::SignedRequest {
+            key_id: "key-001".into(),
+            timestamp: 1_700_000_000_000,
+            signature: "v1:AAAA".into(),
+            trace_id: "trace-abc".into(),
+            identity_headers: vec![("X-ForgeGuard-Org-Id".into(), "org-123".into())],
+        };
+        assert!(!resolver.can_resolve(&cred));
+    }
+
+    #[test]
     fn name_returns_cognito_jwt() {
         let config = test_config();
         let resolver = CognitoJwtResolver::new(config);
