@@ -84,8 +84,12 @@ jobs:
 
   test:
     name: Test Suite
+    needs: [plan]
     runs-on: ubuntu-latest
-    if: "!startsWith(github.event.head_commit.message, 'chore: bump version')"
+    if: "needs.plan.outputs.test == 'true' && !startsWith(github.event.head_commit.message, 'chore: bump version')"
+    env:
+      MODE: ${{ needs.plan.outputs.mode }}
+      CRATES: ${{ needs.plan.outputs.crates }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -115,18 +119,58 @@ jobs:
             ${{ runner.os }}-target-
 
       - name: Run tests
-        run: cargo test --workspace --verbose
+        run: |
+          case "$MODE" in
+            workspace)
+              cargo test --workspace --verbose
+              ;;
+            crates)
+              ARGS=()
+              for c in $CRATES; do ARGS+=(-p "$c"); done
+              cargo test "${ARGS[@]}" --verbose
+              ;;
+            noop)
+              echo "No surfaces affected; skipping tests."
+              exit 0
+              ;;
+            *)
+              echo "Unknown mode: $MODE" >&2
+              exit 1
+              ;;
+          esac
 
       - name: Run clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: |
+          case "$MODE" in
+            workspace)
+              cargo clippy --workspace --all-targets -- -D warnings
+              ;;
+            crates)
+              ARGS=()
+              for c in $CRATES; do ARGS+=(-p "$c"); done
+              cargo clippy "${ARGS[@]}" --all-targets -- -D warnings
+              ;;
+            noop)
+              echo "No surfaces affected; skipping clippy."
+              exit 0
+              ;;
+            *)
+              echo "Unknown mode: $MODE" >&2
+              exit 1
+              ;;
+          esac
 
       - name: Check formatting
         run: cargo fmt -- --check
 
   build:
     name: Build Check
+    needs: [plan]
     runs-on: ${{ matrix.os }}
-    if: "!startsWith(github.event.head_commit.message, 'chore: bump version')"
+    if: "needs.plan.outputs.build == 'true' && !startsWith(github.event.head_commit.message, 'chore: bump version')"
+    env:
+      MODE: ${{ needs.plan.outputs.mode }}
+      CRATES: ${{ needs.plan.outputs.crates }}
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
@@ -157,12 +201,43 @@ jobs:
             ${{ runner.os }}-target-
 
       - name: Check compilation
-        run: cargo check --workspace --exclude xtask --verbose
+        run: |
+          case "$MODE" in
+            workspace)
+              cargo check --workspace --exclude xtask --verbose
+              ;;
+            crates)
+              ARGS=()
+              for c in $CRATES; do
+                [ "$c" = "xtask" ] && continue
+                ARGS+=(-p "$c")
+              done
+              if [ ${#ARGS[@]} -eq 0 ]; then
+                echo "All affected crates are excluded (xtask-only); skipping build check."
+                exit 0
+              fi
+              cargo check "${ARGS[@]}" --verbose
+              ;;
+            noop)
+              echo "No surfaces affected; skipping build check."
+              exit 0
+              ;;
+            *)
+              echo "Unknown mode: $MODE" >&2
+              exit 1
+              ;;
+          esac
 
   build-wasm:
     name: WASM Build Check
+    needs: [plan]
     runs-on: ubuntu-latest
-    if: "!startsWith(github.event.head_commit.message, 'chore: bump version')"
+    if: |
+      !startsWith(github.event.head_commit.message, 'chore: bump version') &&
+      needs.plan.outputs.build == 'true' &&
+      (needs.plan.outputs.mode == 'workspace' ||
+       contains(needs.plan.outputs.crates, 'forgeguard_sdk') ||
+       contains(needs.plan.outputs.crates, 'forgeguard_ffi_wasm'))
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
