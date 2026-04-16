@@ -10,6 +10,22 @@ fn find_header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a st
         .map(|(_, v)| v.as_str())
 }
 
+/// The four protocol headers required for Ed25519 signed requests.
+/// Any other `x-forgeguard-*` headers are collected as identity headers.
+const SIGNED_REQUEST_HEADERS: [&str; 4] = [
+    "x-forgeguard-signature",
+    "x-forgeguard-timestamp",
+    "x-forgeguard-key-id",
+    "x-forgeguard-trace-id",
+];
+
+/// Returns `true` if `name` is one of the four signed-request protocol headers.
+fn is_protocol_header(name: &str) -> bool {
+    SIGNED_REQUEST_HEADERS
+        .iter()
+        .any(|h| h.eq_ignore_ascii_case(name))
+}
+
 /// Extract a credential from HTTP headers.
 ///
 /// Priority order:
@@ -24,69 +40,47 @@ fn find_header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a st
 /// Returns the first credential found, or `None` if no credential is present.
 pub fn extract_credential(headers: &[(String, String)]) -> Option<Credential> {
     // Priority 1: Authorization: Bearer
-    for (name, value) in headers {
-        if name.eq_ignore_ascii_case("authorization") {
-            let trimmed = value.trim();
-            if let Some(token) = trimmed.strip_prefix("Bearer ") {
-                let token = token.trim();
-                if !token.is_empty() {
-                    return Some(Credential::Bearer(token.to_string()));
-                }
-            }
-            // Also handle lowercase "bearer"
-            if let Some(token) = trimmed.strip_prefix("bearer ") {
-                let token = token.trim();
-                if !token.is_empty() {
-                    return Some(Credential::Bearer(token.to_string()));
-                }
+    if let Some(auth) = find_header(headers, "authorization") {
+        let trimmed = auth.trim();
+        if trimmed.len() > 7 && trimmed[..7].eq_ignore_ascii_case("bearer ") {
+            let token = trimmed[7..].trim();
+            if !token.is_empty() {
+                return Some(Credential::Bearer(token.to_string()));
             }
         }
     }
 
     // Priority 2: X-API-Key
-    for (name, value) in headers {
-        if name.eq_ignore_ascii_case("x-api-key") {
-            let trimmed = value.trim();
-            if !trimmed.is_empty() {
-                return Some(Credential::ApiKey(trimmed.to_string()));
-            }
+    if let Some(key) = find_header(headers, "x-api-key") {
+        let trimmed = key.trim();
+        if !trimmed.is_empty() {
+            return Some(Credential::ApiKey(trimmed.to_string()));
         }
     }
 
     // Priority 3: X-ForgeGuard-Signature (Ed25519 signed request)
-    let sig_header = find_header(headers, "x-forgeguard-signature");
-    let ts_header = find_header(headers, "x-forgeguard-timestamp");
-    let key_id_header = find_header(headers, "x-forgeguard-key-id");
-    let trace_id_header = find_header(headers, "x-forgeguard-trace-id");
+    let sig = find_header(headers, "x-forgeguard-signature")?;
+    let ts = find_header(headers, "x-forgeguard-timestamp")?;
+    let key_id = find_header(headers, "x-forgeguard-key-id")?;
+    let trace_id = find_header(headers, "x-forgeguard-trace-id")?;
 
-    if let (Some(sig), Some(ts), Some(key_id), Some(trace_id)) =
-        (sig_header, ts_header, key_id_header, trace_id_header)
-    {
-        if let Ok(timestamp) = ts.parse::<u64>() {
-            let identity_headers: Vec<(String, String)> = headers
-                .iter()
-                .filter(|(k, _)| {
-                    let lower = k.to_ascii_lowercase();
-                    lower.starts_with("x-forgeguard-")
-                        && lower != "x-forgeguard-signature"
-                        && lower != "x-forgeguard-timestamp"
-                        && lower != "x-forgeguard-key-id"
-                        && lower != "x-forgeguard-trace-id"
-                })
-                .cloned()
-                .collect();
+    let timestamp = ts.parse::<u64>().ok()?;
 
-            return Some(Credential::SignedRequest {
-                key_id: key_id.to_string(),
-                timestamp,
-                signature: sig.to_string(),
-                trace_id: trace_id.to_string(),
-                identity_headers,
-            });
-        }
-    }
+    let identity_headers: Vec<(String, String)> = headers
+        .iter()
+        .filter(|(k, _)| {
+            k.to_ascii_lowercase().starts_with("x-forgeguard-") && !is_protocol_header(k)
+        })
+        .cloned()
+        .collect();
 
-    None
+    Some(Credential::SignedRequest {
+        key_id: key_id.to_string(),
+        timestamp,
+        signature: sig.to_string(),
+        trace_id: trace_id.to_string(),
+        identity_headers,
+    })
 }
 
 #[cfg(test)]
