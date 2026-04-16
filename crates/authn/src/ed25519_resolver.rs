@@ -29,6 +29,17 @@ struct SignedRequestFields {
     identity_headers: Vec<(String, String)>,
 }
 
+impl SignedRequestFields {
+    /// Find the organization ID from identity headers (case-insensitive).
+    fn org_id(&self) -> forgeguard_authn_core::Result<&str> {
+        self.identity_headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(ORG_ID_HEADER))
+            .map(|(_, value)| value.as_str())
+            .ok_or(forgeguard_authn_core::Error::MissingOrgId)
+    }
+}
+
 /// Ed25519 signed-request identity resolver.
 ///
 /// Validates BYOC proxy requests by:
@@ -64,30 +75,20 @@ impl<S: SigningKeyStore> Ed25519SignatureResolver<S> {
         &self,
         fields: &SignedRequestFields,
     ) -> forgeguard_authn_core::Result<Identity> {
-        // 1. Extract org_id from identity_headers (case-insensitive).
-        let org_id = fields
-            .identity_headers
-            .iter()
-            .find(|(name, _)| name.eq_ignore_ascii_case(ORG_ID_HEADER))
-            .map(|(_, value)| value.as_str())
-            .ok_or(forgeguard_authn_core::Error::MissingOrgId)?;
-
-        // 2. Look up the public key.
+        let org_id = fields.org_id()?;
         let public_key = self.key_store.get_key(org_id, &fields.key_id).await?;
 
-        // 3. Rebuild canonical payload.
+        // Rebuild canonical payload and verify signature.
         let ts = Timestamp::from_millis(fields.timestamp);
         let payload = CanonicalPayload::new(&fields.trace_id, ts, &fields.identity_headers);
-
-        // 4. Parse and verify signature.
         let parsed_sig = parse_signature_header(&fields.signature)?;
         verify(&public_key, &payload, &parsed_sig)?;
 
-        // 5. Check timestamp drift.
+        // Check timestamp drift against server time.
         let now = Timestamp::from_system_time(SystemTime::now());
         self.timestamp_validator.check(ts, now)?;
 
-        // 6. Build identity.
+        // Build identity: key_id becomes user_id, org_id becomes tenant_id.
         let user_id = UserId::new(&fields.key_id).map_err(|e| {
             forgeguard_authn_core::Error::InvalidCredential(format!("invalid key_id: {e}"))
         })?;
