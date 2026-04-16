@@ -1,7 +1,7 @@
 //! Async key store for Ed25519 public key lookup.
 
 use std::collections::HashMap;
-use std::future::Future;
+use std::future::{self, Future};
 use std::pin::Pin;
 
 use crate::signing::VerifyingKey;
@@ -40,14 +40,11 @@ impl SigningKeyStore for InMemorySigningKeyStore {
         org_id: &str,
         key_id: &str,
     ) -> Pin<Box<dyn Future<Output = Result<VerifyingKey>> + Send + '_>> {
-        let result = self
-            .keys
-            .get(&(org_id.to_string(), key_id.to_string()))
-            .cloned()
-            .ok_or_else(|| {
-                Error::InvalidCredential(format!("no active key '{key_id}' for org '{org_id}'"))
-            });
-        Box::pin(std::future::ready(result))
+        let lookup = (org_id.to_string(), key_id.to_string());
+        let result = self.keys.get(&lookup).cloned().ok_or_else(|| {
+            Error::InvalidCredential(format!("no active key '{key_id}' for org '{org_id}'"))
+        });
+        Box::pin(future::ready(result))
     }
 }
 
@@ -62,10 +59,10 @@ mod tests {
         let sk = SigningKey::from_bytes(&[42u8; 32]);
         let vk = VerifyingKey::from(&sk);
 
-        let mut keys = HashMap::new();
-        keys.insert(("org-1".to_string(), "key-1".to_string()), vk);
-
-        let store = InMemorySigningKeyStore::new(keys);
+        let store = InMemorySigningKeyStore::new(HashMap::from([(
+            ("org-1".to_string(), "key-1".to_string()),
+            vk,
+        )]));
         let returned_vk = store.get_key("org-1", "key-1").await.unwrap();
 
         // Verify the returned key is the one we inserted by signing with the
