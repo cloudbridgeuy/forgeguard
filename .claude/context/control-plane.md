@@ -45,8 +45,30 @@ Handlers are generic over `S: OrgStore` and take `State<Arc<S>>`. This avoids `d
 
 Each stored entry is an `OrgRecord` containing:
 - `Organization` -- domain entity from `forgeguard_core` (org_id, name, status, timestamps)
-- `OrgConfig` -- versioned proxy configuration (routes, upstream, default policy)
-- `etag` -- precomputed xxHash64 of the serialized config
+- `Option<ConfiguredConfig>` -- the proxy config + its etag, paired so they cannot drift. `None` represents a Draft org (created but not yet configured)
+
+#### ConfiguredConfig invariant
+
+Config and etag travel as a pair. Two constructors enforce this:
+- `ConfiguredConfig::compute(config)` -- computes the etag from the config bytes (used on create / update)
+- `ConfiguredConfig::from_stored(config, etag)` -- reuses an etag that was persisted alongside the config (used when reading from DynamoDB)
+
+This makes "config without etag" and "etag without config" unrepresentable — see [the Make Impossible States Impossible pattern](../../~/.claude/patterns/). Handlers that need both fields call `record.configured()` once instead of two separate getters.
+
+### Lifecycle
+
+An org is created `Draft` (no config) and stays `Draft` until the onboarding saga (#55) provisions Cognito / VP / signing keys and flips it to `Active`. Status is **independent** of whether config is attached:
+
+| Created via | Status on creation | Config |
+|-------------|-------------------|--------|
+| `POST /api/v1/organizations` (no body `config`) | `Draft` | absent |
+| `POST /api/v1/organizations` (with body `config`) | `Draft` | present |
+| File loader entry without `"config"` | `Draft` | absent |
+| File loader entry with `"config"` | `Active` | present (legacy: file-seeded orgs are pre-onboarded) |
+
+`PUT /api/v1/organizations/{org_id}` with a `config` body attaches config to a Draft org but does **not** auto-promote to Active — that transition is the saga's responsibility.
+
+`GET /api/v1/organizations/{org_id}/proxy-config` returns **409 Conflict** when `record.configured()` is `None`, with body `{"error":"organization '<id>' has no proxy config"}`. This is the proxy's signal that the org exists but is not yet ready to serve traffic.
 
 ## Handler Pipeline
 
@@ -61,11 +83,14 @@ The handler uses `ForgeGuardIdentity` to receive the resolved identity from the 
 
 ## Config File Format
 
-JSON file mapping `org_id` to its org entry. Each entry has a `name` (display name) and a nested `config` object (`OrgConfig`) with a date-based `version` field:
+JSON file mapping `org_id` to its org entry. Each entry has a `name` (display name); the nested `config` object (`OrgConfig`) is **optional** — entries without `config` seed as Draft orgs:
 
 ```json
 {
   "organizations": {
+    "org-seeded-draft": {
+      "name": "Seeded Draft"
+    },
     "org-acme": {
       "name": "Acme Corp",
       "config": {
@@ -88,7 +113,7 @@ JSON file mapping `org_id` to its org entry. Each entry has a `name` (display na
 
 **Validation at load time (Parse Don't Validate):**
 - `OrganizationId` validated via `forgeguard_core::OrganizationId::new()`
-- Each org entry is parsed into an `Organization` domain entity with `OrgStatus::Active`
+- Entries with `config` parse into `Organization` with `OrgStatus::Active`; entries without `config` parse with `OrgStatus::Draft`
 - ETag precomputed as xxHash64 of canonical JSON (deterministic, uses `BTreeMap` for `features`)
 - Unknown fields are ignored by serde for forward compatibility
 
@@ -111,10 +136,10 @@ The `AuthConfig` struct (`app.rs`) validates the JWKS URL at construction time (
 
 ## Testing
 
-- 23 store tests (`store.rs`) -- parsing, validation, ETag determinism, multiple orgs, unknown fields, key lifecycle
-- 18 handler integration tests (`handlers/mod.rs`) -- full HTTP pipeline via `tower::ServiceExt::oneshot` with `forgeguard-axum` middleware layer, auth via `StaticApiKeyResolver` (`x-api-key: test-key`)
-- 7 key handler integration tests (`handlers/keys.rs`) -- generate, revoke (incl. idempotent), list keys
-- 17 DynamoDB integration tests (`dynamo_store/tests.rs`) -- feature-gated behind `dynamodb-tests`, run via `cargo xtask control-plane test`
+- Store tests (`store.rs`) -- parsing, validation, ETag determinism, multiple orgs, unknown fields, key lifecycle, Draft round-trip, Draft → configured promotion
+- Handler integration tests (`handlers/tests.rs`) -- full HTTP pipeline via `tower::ServiceExt::oneshot` with `forgeguard-axum` middleware layer, auth via `StaticApiKeyResolver` (`x-api-key: test-key`). Includes Draft creation, 409 on Draft proxy-config, PUT-promotes-Draft. Lives in a sibling file because `handlers/mod.rs` would exceed the 1000-line cap with its tests inline.
+- Key handler integration tests (`handlers/keys.rs`) -- generate, revoke (incl. idempotent), list keys
+- DynamoDB integration tests (`dynamo_store/tests.rs`) -- feature-gated behind `dynamodb-tests`, run via `cargo xtask control-plane test`. Includes Draft round-trip and Draft → configured promotion against a real DynamoDB backend.
 
 Store tests use `build_org_store()` with inline JSON to build `InMemoryOrgStore` instances. Tests that call `store.get()` use `#[tokio::test]` since the store is async.
 
@@ -169,10 +194,11 @@ crates/control-plane/src/
   main.rs             -- binary entry point: CLI parsing, delegates to app:: (shell)
   cli.rs              -- clap CLI: --store, --config, --dynamodb-table, --listen, --log-level, --jwks-url, --issuer, --audience
   config.rs           -- OrgConfig (versioned), RouteEntry, PublicRouteEntry (serde DTOs)
-  store.rs            -- OrgStore trait (async), InMemoryOrgStore, AnyOrgStore, OrgRecord, build/load/etag
+  store.rs            -- OrgStore trait (async), InMemoryOrgStore, AnyOrgStore, OrgRecord, ConfiguredConfig, build/load/etag
   dynamo_store/       -- DynamoOrgStore (DynamoDB-backed OrgStore implementation)
   handlers/
-    mod.rs            -- health, CRUD, proxy_config handlers + integration tests
+    mod.rs            -- health, CRUD, proxy_config handlers
+    tests.rs          -- handler integration tests (split from mod.rs to satisfy 1000-line cap)
     keys.rs           -- generate_key, list_keys, revoke_key handlers + tests
   signing_key.rs      -- SigningKeyEntry, KeyStatus, Ed25519 key generation
   error.rs            -- Error enum, Result alias
