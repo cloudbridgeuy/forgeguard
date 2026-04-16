@@ -13,7 +13,7 @@ use forgeguard_authn_core::SigningKeyStore;
 
 use aws_sdk_dynamodb::types::AttributeValue;
 
-use crate::dynamo_store::{map_sdk_error, pk, signing_keys_from_item, sk, ORG_PREFIX, SK_META};
+use crate::dynamo_store::{pk, signing_keys_from_item, sk, ORG_PREFIX, SK_META};
 
 /// Shorthand: wrap a message in `forgeguard_authn_core::Error::InvalidCredential`.
 fn invalid_credential(msg: impl Into<String>) -> forgeguard_authn_core::Error {
@@ -56,7 +56,7 @@ impl SigningKeyStore for DynamoSigningKeyStore {
                 .key(sk(), AttributeValue::S(SK_META.to_string()))
                 .send()
                 .await
-                .map_err(|e| invalid_credential(map_sdk_error(e).to_string()))?;
+                .map_err(|e| invalid_credential(e.to_string()))?;
 
             let item = result
                 .item
