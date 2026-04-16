@@ -39,6 +39,9 @@ pub enum Error {
     /// The key ID is empty.
     #[error("invalid key ID: must be non-empty")]
     InvalidKeyId,
+    /// The required X-ForgeGuard-Org-Id header is missing from the signed request.
+    #[error("missing X-ForgeGuard-Org-Id header in signed request")]
+    MissingOrgId,
 }
 
 /// Convenience alias used throughout this crate.

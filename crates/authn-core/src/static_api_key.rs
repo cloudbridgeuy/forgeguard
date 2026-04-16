@@ -67,7 +67,7 @@ impl IdentityResolver for StaticApiKeyResolver {
                 })),
                 None => Err(Error::InvalidCredential("unknown API key".into())),
             },
-            Credential::Bearer(_) => Err(Error::InvalidCredential(
+            _ => Err(Error::InvalidCredential(
                 "expected ApiKey credential".into(),
             )),
         };
