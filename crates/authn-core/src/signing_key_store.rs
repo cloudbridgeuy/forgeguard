@@ -21,7 +21,7 @@ pub trait SigningKeyStore: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = Result<VerifyingKey>> + Send + '_>>;
 }
 
-/// In-memory key store for tests.
+/// In-memory key store for tests and dev mode.
 pub struct InMemorySigningKeyStore {
     /// Map of `(org_id, key_id)` to [`VerifyingKey`].
     keys: HashMap<(String, String), VerifyingKey>,
@@ -55,7 +55,7 @@ impl SigningKeyStore for InMemorySigningKeyStore {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use crate::signing::SigningKey;
+    use crate::signing::{sign, verify, CanonicalPayload, KeyId, SigningKey, Timestamp};
 
     #[tokio::test]
     async fn get_key_returns_known_key() {
@@ -63,12 +63,18 @@ mod tests {
         let vk = VerifyingKey::from(&sk);
 
         let mut keys = HashMap::new();
-        keys.insert(("org-1".to_string(), "key-1".to_string()), vk.clone());
+        keys.insert(("org-1".to_string(), "key-1".to_string()), vk);
 
         let store = InMemorySigningKeyStore::new(keys);
-        let result = store.get_key("org-1", "key-1").await;
+        let returned_vk = store.get_key("org-1", "key-1").await.unwrap();
 
-        assert!(result.is_ok());
+        // Verify the returned key is the one we inserted by signing with the
+        // original signing key and verifying with the returned verifying key.
+        let key_id = KeyId::try_from("key-1".to_string()).unwrap();
+        let ts = Timestamp::from_millis(1);
+        let payload = CanonicalPayload::new("t", ts, &[]);
+        let signed = sign(&sk, &key_id, &payload, ts, "t".into());
+        assert!(verify(&returned_vk, &payload, signed.signature()).is_ok());
     }
 
     #[tokio::test]
