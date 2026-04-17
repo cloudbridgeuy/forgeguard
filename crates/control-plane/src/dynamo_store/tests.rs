@@ -179,7 +179,7 @@ async fn update_promotes_draft_to_configured_dynamo() {
         later,
     );
     let record = store
-        .update(&org_id, updated, Some(sample_config()))
+        .update(&org_id, updated, Some(sample_config()), None)
         .await
         .unwrap();
     assert!(record.configured().is_some());
@@ -336,7 +336,7 @@ async fn update_existing_org() {
     .unwrap();
 
     let record = store
-        .update(&org_id, updated_org, Some(new_config))
+        .update(&org_id, updated_org, Some(new_config), None)
         .await
         .unwrap();
     assert_eq!(record.org().name(), "Updated");
@@ -372,7 +372,9 @@ async fn update_org_id_mismatch_returns_store_error() {
         now,
     );
 
-    let result = store.update(&org_id, org, Some(sample_config())).await;
+    let result = store
+        .update(&org_id, org, Some(sample_config()), None)
+        .await;
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
@@ -393,7 +395,9 @@ async fn update_nonexistent_returns_not_found() {
     let org_id = OrganizationId::new("org-ghost").unwrap();
     let org = Organization::new(org_id.clone(), "Ghost".to_string(), OrgStatus::Draft, now);
 
-    let result = store.update(&org_id, org, Some(sample_config())).await;
+    let result = store
+        .update(&org_id, org, Some(sample_config()), None)
+        .await;
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
@@ -567,7 +571,7 @@ async fn update_org_preserves_signing_keys() {
     .unwrap();
 
     store
-        .update(&org_id, updated_org, Some(new_config))
+        .update(&org_id, updated_org, Some(new_config), None)
         .await
         .unwrap();
 

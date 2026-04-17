@@ -399,7 +399,14 @@ impl OrgStore for DynamoOrgStore {
         org_id: &OrganizationId,
         org: Organization,
         config: Option<OrgConfig>,
+        expected_etag: Option<&str>,
     ) -> Result<OrgRecord> {
+        // V1: pass-through. V3 (slice V3 of issue #56) implements the
+        // conditional PutItem and recovers the current etag on
+        // ConditionalCheckFailedException. Until then, the DynamoDB backend
+        // retains today's last-write-wins behaviour regardless of expected_etag.
+        let _ = expected_etag;
+
         if org_id != org.org_id() {
             return Err(Error::Store(format!(
                 "org_id mismatch: path '{}' vs body '{}'",

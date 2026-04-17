@@ -744,3 +744,215 @@ async fn proxy_config_on_unknown_org_returns_404_not_409() {
     let response = app.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
+
+// -----------------------------------------------------------------
+// Optimistic-locking tests (issue #56, V1)
+// -----------------------------------------------------------------
+
+#[tokio::test]
+async fn update_with_matching_if_match_returns_200_and_new_etag() {
+    let store = build_test_store();
+    let app = test_app(store.clone());
+
+    let get_res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/v1/organizations/org-acme/proxy-config")
+                .header("x-api-key", TEST_API_KEY)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get_res.status(), StatusCode::OK);
+    let current_etag = get_res
+        .headers()
+        .get(axum::http::header::ETAG)
+        .expect("etag header")
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    let new_config = serde_json::json!({
+        "version": "2026-04-07",
+        "project_id": "todo-app",
+        "upstream_url": "https://api.v2.acme.com",
+        "default_policy": "deny",
+        "routes": [],
+        "public_routes": [],
+        "features": {}
+    });
+    let body = serde_json::to_vec(&serde_json::json!({ "config": new_config })).unwrap();
+    let put_res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/api/v1/organizations/org-acme")
+                .header("x-api-key", TEST_API_KEY)
+                .header("if-match", &current_etag)
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(put_res.status(), StatusCode::OK);
+    let new_etag = put_res
+        .headers()
+        .get(axum::http::header::ETAG)
+        .expect("etag on 200")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert_ne!(
+        new_etag, current_etag,
+        "etag should change on content change"
+    );
+
+    // Round-trip: GET the updated proxy-config and confirm the new etag
+    // and upstream_url are durably stored.
+    let get_after = app
+        .oneshot(
+            axum::http::Request::builder()
+                .method("GET")
+                .uri("/api/v1/organizations/org-acme/proxy-config")
+                .header("x-api-key", TEST_API_KEY)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get_after.status(), axum::http::StatusCode::OK);
+    let etag_after = get_after
+        .headers()
+        .get(axum::http::header::ETAG)
+        .expect("etag header after put")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(etag_after, new_etag);
+
+    let bytes = http_body_util::BodyExt::collect(get_after.into_body())
+        .await
+        .unwrap()
+        .to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["upstream_url"], "https://api.v2.acme.com");
+}
+
+#[tokio::test]
+async fn update_with_stale_if_match_returns_412_and_current_etag() {
+    let store = build_test_store();
+    let app = test_app(store.clone());
+
+    let stale_etag = "\"definitely-not-the-etag\"";
+    let new_config = serde_json::json!({
+        "version": "2026-04-07",
+        "project_id": "todo-app",
+        "upstream_url": "https://stale.example",
+        "default_policy": "deny",
+        "routes": [],
+        "public_routes": [],
+        "features": {}
+    });
+    let body = serde_json::to_vec(&serde_json::json!({ "config": new_config })).unwrap();
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/api/v1/organizations/org-acme")
+                .header("x-api-key", TEST_API_KEY)
+                .header("if-match", stale_etag)
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::PRECONDITION_FAILED);
+
+    let current_header = res
+        .headers()
+        .get(axum::http::header::ETAG)
+        .expect("ETag header on 412")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert_ne!(current_header, stale_etag);
+
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["error"], "etag mismatch");
+    assert_eq!(json["current_etag"], current_header);
+}
+
+#[tokio::test]
+async fn update_without_if_match_still_succeeds() {
+    let store = build_test_store();
+    let app = test_app(store.clone());
+
+    let body = serde_json::to_vec(&serde_json::json!({
+        "config": {
+            "version": "2026-04-07",
+            "project_id": "todo-app",
+            "upstream_url": "https://legacy.example",
+            "default_policy": "deny",
+            "routes": [],
+            "public_routes": [],
+            "features": {}
+        }
+    }))
+    .unwrap();
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/api/v1/organizations/org-acme")
+                .header("x-api-key", TEST_API_KEY)
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(
+        res.headers().get(axum::http::header::ETAG).is_some(),
+        "200 response should carry ETag when org has a config"
+    );
+}
+
+#[tokio::test]
+async fn update_name_only_with_stale_if_match_is_ignored() {
+    let store = build_test_store();
+    let app = test_app(store.clone());
+
+    let body = serde_json::to_vec(&serde_json::json!({
+        "name": "Acme Corporation (rebranded)"
+    }))
+    .unwrap();
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/api/v1/organizations/org-acme")
+                .header("x-api-key", TEST_API_KEY)
+                .header("if-match", "\"definitely-not-the-etag\"")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::OK);
+}

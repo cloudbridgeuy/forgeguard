@@ -168,9 +168,19 @@ pub(crate) struct UpdateOrgRequest {
     config: Option<OrgConfig>,
 }
 
+/// `PUT /api/v1/organizations/{org_id}` — update an org's name and/or proxy config.
+///
+/// Supports optimistic locking via `If-Match`: when the request body includes
+/// `config`, the `If-Match` header is checked against the stored etag. A
+/// missing header writes unconditionally. Name-only PUTs skip the check.
+///
+/// Returns `200 OK` with an `ETag` header on success, `412 Precondition Failed`
+/// (also with the current `ETag`) on a stale match, and `404 Not Found` when
+/// the org does not exist.
 pub(crate) async fn update_handler<S: OrgStore>(
     Path(raw_org_id): Path<String>,
     State(store): State<Arc<S>>,
+    headers: HeaderMap,
     Json(body): Json<UpdateOrgRequest>,
 ) -> Response {
     let Ok(org_id) = OrganizationId::new(&raw_org_id) else {
@@ -195,15 +205,54 @@ pub(crate) async fn update_handler<S: OrgStore>(
 
     // If the body omits `config`, keep whatever was previously stored
     // (None for Draft orgs, Some(...) for Configured ones).
+    let body_has_config = body.config.is_some();
     let config = body.config.or_else(|| record.config().cloned());
 
-    match store.update(&org_id, org, config).await {
-        Ok(updated) => (StatusCode::OK, Json(updated.org().clone())).into_response(),
+    // Derive the optimistic-locking expectation from the request, using the
+    // pure core. When the body has no `config`, `derive_expected_etag`
+    // returns `None` — name-only PUTs skip the check.
+    let if_match = headers
+        .get(axum::http::header::IF_MATCH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(crate::etag::parse_if_match);
+    let expected_etag = crate::etag::derive_expected_etag(body_has_config, if_match.as_deref());
+
+    match store
+        .update(&org_id, org, config, expected_etag.as_deref())
+        .await
+    {
+        Ok(updated) => {
+            let mut response_headers = HeaderMap::new();
+            if let Some(val) = updated.configured().and_then(|c| c.etag().parse().ok()) {
+                response_headers.insert(axum::http::header::ETAG, val);
+            }
+            (
+                StatusCode::OK,
+                response_headers,
+                Json(updated.org().clone()),
+            )
+                .into_response()
+        }
         Err(crate::error::Error::NotFound(msg)) => (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": msg})),
         )
             .into_response(),
+        Err(crate::error::Error::PreconditionFailed { current_etag }) => {
+            let mut response_headers = HeaderMap::new();
+            if let Ok(val) = current_etag.parse() {
+                response_headers.insert(axum::http::header::ETAG, val);
+            }
+            (
+                StatusCode::PRECONDITION_FAILED,
+                response_headers,
+                Json(serde_json::json!({
+                    "error": "etag mismatch",
+                    "current_etag": current_etag,
+                })),
+            )
+                .into_response()
+        }
         Err(e) => {
             tracing::error!(org_id = %raw_org_id, error = %e, "update org failed");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
