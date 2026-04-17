@@ -14,6 +14,7 @@ but keeps last-write-wins semantics until the V3 slice lands the conditional
 | `PUT` with `If-Match: "X"` — body has `config` — current etag is `"X"` | match | `200 OK`, `ETag: "<new>"`, writes |
 | `PUT` with `If-Match: "Y"` — body has `config` — current etag is `"X"` | mismatch | `412 Precondition Failed`, `ETag: "X"`, body `{"error":"etag mismatch","current_etag":"\"X\""}` |
 | `PUT` with `If-Match: "Y"` — body has `config` — org is Draft (no config) | mismatch (empty) | `412`, body `{"error":"etag mismatch","current_etag":""}` |
+| `PUT` with stale `If-Match` — body has **both** `name` and `config` | mismatch | `412 Precondition Failed`, neither name nor config applied |
 | `PUT` without `If-Match` — body has `config` | skipped | `200 OK`, unconditional write (backwards-compat) |
 | `PUT` with or without `If-Match` — body has **no** `config` (name-only) | skipped | `200 OK`, name updated, etag unchanged |
 | `PUT` first-config on Draft without `If-Match` | n/a | `200 OK`, new etag |
@@ -114,7 +115,9 @@ the change, and retry.
 |---|---|---|
 | Pure core — `etag.rs` | 15 unit tests | `crates/control-plane/src/etag.rs#[cfg(test)]` |
 | Store — `InMemoryOrgStore` | 4 direct tests | `crates/control-plane/src/store/tests.rs` |
-| Handler — integration | 4 wire-level tests | `crates/control-plane/src/handlers/tests.rs` |
+| Handler — integration | 7 wire-level tests | `crates/control-plane/src/handlers/tests/` |
+
+V1 ships 4 of the handler tests (matching / stale / absent / name-only ignored). V2 adds 3 more pinning Draft first-PUT and mixed name+config semantics (`draft_first_put_without_if_match_succeeds_and_returns_etag`, `draft_put_with_any_if_match_returns_412`, `name_plus_config_put_honors_if_match`).
 
 Run via `cargo xtask lint` (includes `cargo test -p forgeguard_control_plane`).
 
