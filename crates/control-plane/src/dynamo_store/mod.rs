@@ -269,16 +269,34 @@ fn map_sdk_error<E: std::fmt::Display>(err: E) -> Error {
     Error::Store(err.to_string())
 }
 
+/// Returns `true` when a `PutItem` SDK error is a
+/// `ConditionalCheckFailedException` (CCFE).
+///
+/// Shared by `map_put_item_error` (used by `create`) and the inline CCFE
+/// branch in `update`, which needs async recovery before building its error.
+fn is_conditional_check_failed(
+    sdk_err: &aws_sdk_dynamodb::error::SdkError<
+        aws_sdk_dynamodb::operation::put_item::PutItemError,
+    >,
+) -> bool {
+    matches!(
+        sdk_err,
+        aws_sdk_dynamodb::error::SdkError::ServiceError(e)
+            if e.err().is_conditional_check_failed_exception()
+    )
+}
+
 /// Map a `PutItem` SDK error, converting `ConditionalCheckFailedException`
 /// into the provided domain error.
+///
+/// Used by `create`. The `update` path handles CCFE inline (it needs an async
+/// `GetItem` to recover the current etag) and does not call this function.
 fn map_put_item_error(
     sdk_err: aws_sdk_dynamodb::error::SdkError<aws_sdk_dynamodb::operation::put_item::PutItemError>,
     on_condition_failed: Error,
 ) -> Error {
-    if let aws_sdk_dynamodb::error::SdkError::ServiceError(ref service_err) = sdk_err {
-        if service_err.err().is_conditional_check_failed_exception() {
-            return on_condition_failed;
-        }
+    if is_conditional_check_failed(&sdk_err) {
+        return on_condition_failed;
     }
     map_sdk_error(sdk_err)
 }
@@ -401,12 +419,6 @@ impl OrgStore for DynamoOrgStore {
         config: Option<OrgConfig>,
         expected_etag: Option<&str>,
     ) -> Result<OrgRecord> {
-        // V1: pass-through. V3 (slice V3 of issue #56) implements the
-        // conditional PutItem and recovers the current etag on
-        // ConditionalCheckFailedException. Until then, the DynamoDB backend
-        // retains today's last-write-wins behaviour regardless of expected_etag.
-        let _ = expected_etag;
-
         if org_id != org.org_id() {
             return Err(Error::Store(format!(
                 "org_id mismatch: path '{}' vs body '{}'",
@@ -425,22 +437,45 @@ impl OrgStore for DynamoOrgStore {
         let configured = config.map(ConfiguredConfig::compute).transpose()?;
         let item = to_item(&org, configured.as_ref(), &existing_keys)?;
 
-        let result = self
+        let parts = build_update_condition(expected_etag);
+        let mut req = self
             .client
             .put_item()
             .table_name(&self.table_name)
             .set_item(Some(item))
-            .condition_expression("attribute_exists(#pk)")
-            .expression_attribute_names("#pk", pk())
-            .send()
-            .await;
+            .condition_expression(parts.expression);
+        for (k, v) in parts.names {
+            req = req.expression_attribute_names(k, v);
+        }
+        for (k, v) in parts.values {
+            req = req.expression_attribute_values(k, v);
+        }
 
-        match result {
+        match req.send().await {
             Ok(_) => Ok(OrgRecord::new(org, configured)),
-            Err(sdk_err) => Err(map_put_item_error(
-                sdk_err,
-                Error::NotFound(format!("organization '{}' not found", org.org_id())),
-            )),
+            Err(sdk_err) => {
+                // Distinguish CCFE (etag mismatch or item deleted) from other errors.
+                if is_conditional_check_failed(&sdk_err) {
+                    match expected_etag {
+                        Some(_) => {
+                            // Etag mismatch: recover the current stored etag and
+                            // surface it so the caller can send a useful 412 body.
+                            let current_etag = recover_current_etag(self, org_id).await?;
+                            Err(Error::PreconditionFailed { current_etag })
+                        }
+                        None => {
+                            // Race: item was deleted between the pre-flight GetItem and this PutItem.
+                            // attribute_exists(#pk) fired with no etag clause — treat as NotFound.
+                            Err(Error::NotFound(format!(
+                                "organization '{}' not found",
+                                org.org_id()
+                            )))
+                        }
+                    }
+                } else {
+                    Err(map_sdk_error(sdk_err))
+                }
+            }
         }
     }
 
@@ -502,6 +537,88 @@ impl OrgStore for DynamoOrgStore {
         entry.revoke();
 
         self.write_signing_keys(org_id, &keys).await
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Conditional write helpers (pure)
+// ---------------------------------------------------------------------------
+
+/// Bundled parts of a DynamoDB condition expression.
+///
+/// All three fields are derived together from `expected_etag` so a
+/// half-formed condition (name without placeholder, placeholder without value)
+/// is structurally impossible — Make Impossible States Impossible.
+struct ConditionParts {
+    expression: String,
+    names: Vec<(&'static str, &'static str)>,
+    values: Vec<(&'static str, AttributeValue)>,
+}
+
+/// Build the `PutItem` condition for `DynamoOrgStore::update`.
+///
+/// Pure: deterministic, no I/O, trivially unit-testable.
+/// Functional Core — consumed by the `update` shell method.
+fn build_update_condition(expected_etag: Option<&str>) -> ConditionParts {
+    match expected_etag {
+        None => ConditionParts {
+            expression: "attribute_exists(#pk)".to_string(),
+            names: vec![("#pk", pk())],
+            values: Vec::new(),
+        },
+        Some(etag) => ConditionParts {
+            expression: "attribute_exists(#pk) AND #etag = :expected_etag".to_string(),
+            names: vec![("#pk", pk()), ("#etag", "etag")],
+            values: vec![(":expected_etag", AttributeValue::S(etag.to_string()))],
+        },
+    }
+}
+
+/// Recover the current stored etag for an org after a
+/// `ConditionalCheckFailedException`.
+///
+/// Returns `Ok("")` when the item is absent or has no `etag` attribute — this
+/// matches the Draft fail-closed contract: a Draft org has never had a config
+/// written, so any `If-Match` value is wrong and the empty string tells the
+/// handler to emit a `current_etag: ""` body (same as the memory store's
+/// Draft 412 behaviour pinned in V2).
+async fn recover_current_etag(store: &DynamoOrgStore, org_id: &OrganizationId) -> Result<String> {
+    match store.get_raw_item(org_id).await? {
+        None => Ok(String::new()),
+        Some(ref item) => Ok(get_s_opt(item, "etag").unwrap_or_default()),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pure unit tests for `build_update_condition`
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod condition_builder_tests {
+    use super::*;
+
+    #[test]
+    fn without_expected_etag_just_requires_existence() {
+        let parts = build_update_condition(None);
+        assert_eq!(parts.expression, "attribute_exists(#pk)");
+        assert!(parts.values.is_empty());
+    }
+
+    #[test]
+    fn with_expected_etag_adds_etag_clause() {
+        let parts = build_update_condition(Some("\"abc123\""));
+        assert_eq!(
+            parts.expression,
+            "attribute_exists(#pk) AND #etag = :expected_etag"
+        );
+        assert_eq!(parts.names, vec![("#pk", pk()), ("#etag", "etag")]);
+        assert_eq!(
+            parts.values,
+            vec![(
+                ":expected_etag",
+                AttributeValue::S("\"abc123\"".to_string())
+            )]
+        );
     }
 }
 
