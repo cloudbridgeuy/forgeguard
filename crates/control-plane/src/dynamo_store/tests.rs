@@ -526,12 +526,13 @@ async fn generate_key_on_nonexistent_org_fails() {
     let org_id = OrganizationId::new("org-ghost").unwrap();
 
     let result = store.generate_key(&org_id).await;
-    assert!(result.is_err());
-    let err = result.unwrap_err();
-    assert!(
-        matches!(err, Error::NotFound(_)),
-        "expected NotFound, got: {err:?}"
-    );
+    match result {
+        Err(Error::NotFound(_)) => {}
+        Err(other) => panic!("expected NotFound, got: {other:?}"),
+        // `GenerateKeyResult` intentionally has no `Debug` impl to keep the
+        // private key out of test output, so handle `Ok` without printing it.
+        Ok(_) => panic!("expected NotFound, got Ok(_)"),
+    }
 }
 
 #[tokio::test]
@@ -586,4 +587,273 @@ async fn update_org_preserves_signing_keys() {
     let fetched = store.get(&org_id).await.unwrap().unwrap();
     assert_eq!(fetched.org().name(), "Renamed Org");
     assert_eq!(fetched.org().status(), OrgStatus::Active);
+}
+
+// -----------------------------------------------------------------------
+// Optimistic-locking tests (issue #56, V3) — mirror the memory-store
+// scenarios from `crates/control-plane/src/store/tests.rs` against
+// `DynamoOrgStore` so the backend choice becomes observationally identical.
+// -----------------------------------------------------------------------
+
+/// Helper: create a store with a Configured org (has config + etag).
+///
+/// Mirrors `store_with_org` but makes the intent explicit for the
+/// optimistic-locking tests that need a seeded etag to reason about.
+async fn seed_configured_org(org_id_str: &str) -> (DynamoOrgStore, OrganizationId) {
+    store_with_org(org_id_str).await
+}
+
+/// Helper: create a store with a Draft org (no config, no etag).
+async fn seed_draft_org(org_id_str: &str) -> (DynamoOrgStore, OrganizationId) {
+    let client = test_client().await;
+    let table = unique_table_name();
+    create_test_table(&client, &table).await;
+
+    let store = DynamoOrgStore::new(client, table);
+    let now = chrono::Utc::now();
+    let org_id = OrganizationId::new(org_id_str).unwrap();
+    let org = Organization::new(
+        org_id.clone(),
+        "Draft Org".to_string(),
+        OrgStatus::Draft,
+        now,
+    );
+    // Create with no config — stays in Draft state, etag attribute absent.
+    store.create(org, None).await.unwrap();
+    (store, org_id)
+}
+
+/// Matching `If-Match` allows the update and returns a (possibly equal) etag.
+///
+/// Mirrors `update_with_matching_expected_etag_succeeds` from
+/// `store/tests.rs`.  Here we write a *different* config so the content
+/// changes and the returned etag differs from the seeded one.
+#[tokio::test]
+async fn dynamo_update_with_matching_if_match_returns_200_and_new_etag() {
+    let (store, org_id) = seed_configured_org("v3-match").await;
+
+    // Read the current etag.
+    let record = store.get(&org_id).await.unwrap().unwrap();
+    let current_etag = record.configured().unwrap().etag().to_string();
+
+    // Build an org + new config to update with.
+    let now = chrono::Utc::now();
+    let updated_org = Organization::new(
+        org_id.clone(),
+        "Matched Org".to_string(),
+        OrgStatus::Active,
+        now,
+    );
+    let new_config: OrgConfig = serde_json::from_value(serde_json::json!({
+        "version": "2026-04-07",
+        "project_id": "proj-changed",
+        "upstream_url": "https://changed.example.com",
+        "default_policy": "passthrough",
+        "routes": [],
+        "public_routes": [],
+        "features": {}
+    }))
+    .unwrap();
+
+    let updated = store
+        .update(&org_id, updated_org, Some(new_config), Some(&current_etag))
+        .await
+        .unwrap();
+
+    // Different config content → new etag differs from the seeded one.
+    let new_etag = updated.configured().unwrap().etag();
+    assert_ne!(
+        new_etag, current_etag,
+        "changing config must produce a new etag"
+    );
+    assert!(
+        new_etag.starts_with('"') && new_etag.ends_with('"'),
+        "etag must be a quoted string, got: {new_etag}"
+    );
+}
+
+/// Stale `If-Match` is rejected with `PreconditionFailed` carrying the current
+/// stored etag.
+///
+/// Mirrors `update_with_stale_expected_etag_returns_precondition_failed` from
+/// `store/tests.rs`.
+#[tokio::test]
+async fn dynamo_update_with_stale_if_match_returns_412_and_current_etag() {
+    let (store, org_id) = seed_configured_org("v3-stale").await;
+
+    // Capture the etag that is actually stored.
+    let stored_etag = store
+        .get(&org_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .configured()
+        .unwrap()
+        .etag()
+        .to_string();
+
+    let now = chrono::Utc::now();
+    let org = Organization::new(
+        org_id.clone(),
+        "Stale Attempt".to_string(),
+        OrgStatus::Draft,
+        now,
+    );
+
+    let result = store
+        .update(
+            &org_id,
+            org,
+            Some(sample_config()),
+            Some("\"definitely-not-the-etag\""),
+        )
+        .await;
+
+    match result {
+        Err(Error::PreconditionFailed { current_etag }) => {
+            assert_eq!(
+                current_etag, stored_etag,
+                "recovered etag must match the stored one"
+            );
+        }
+        other => panic!("expected PreconditionFailed, got {other:?}"),
+    }
+}
+
+/// No `If-Match` header → unconditional update succeeds regardless of the
+/// current etag.
+///
+/// Mirrors `update_without_expected_etag_writes_unconditionally` from
+/// `store/tests.rs`.
+#[tokio::test]
+async fn dynamo_update_without_if_match_still_succeeds() {
+    let (store, org_id) = seed_configured_org("v3-uncond").await;
+
+    let now = chrono::Utc::now();
+    let org = Organization::new(
+        org_id.clone(),
+        "Unconditional".to_string(),
+        OrgStatus::Active,
+        now,
+    );
+
+    let record = store
+        .update(&org_id, org, Some(sample_config()), None)
+        .await
+        .unwrap();
+
+    assert!(record.configured().is_some(), "result must be Configured");
+}
+
+/// Name-only PUT: `config = None`, `expected_etag = None`.
+///
+/// The plan names this test "ignores If-Match", but that framing belongs at the
+/// handler level.  `derive_expected_etag(body_has_config=false, ...)` always
+/// returns `None`, so the store is called with `(config=None, expected_etag=None)`.
+/// At the store boundary, the test asserts that passing `None` for both
+/// succeeds — there is no etag clause to fire.
+///
+/// Mirrors the handler-level name-only scenario from `handlers/tests/`.
+#[tokio::test]
+async fn dynamo_update_name_only_ignores_if_match() {
+    let (store, org_id) = seed_configured_org("v3-nameonly").await;
+
+    let now = chrono::Utc::now();
+    let renamed_org = Organization::new(
+        org_id.clone(),
+        "Renamed Only".to_string(),
+        OrgStatus::Active,
+        now,
+    );
+
+    // config=None, expected_etag=None: the condition is attribute_exists(#pk) only.
+    // Note: the store will write the item without config/etag (demoting to Draft);
+    // real name-only PUTs are guarded at the handler level, which merges the
+    // existing config before calling update. This test targets the store's
+    // None-etag-clause path in isolation.
+    let result = store
+        .update(
+            &org_id,
+            renamed_org,
+            None, // name-only: no new config
+            None, // handler never sends expected_etag for name-only PUTs
+        )
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "name-only update (config=None, etag=None) must succeed, got: {result:?}"
+    );
+}
+
+/// First config write on a Draft org succeeds without `If-Match` and produces
+/// a non-empty quoted-hex etag.
+///
+/// Mirrors `update_promotes_draft_to_configured` from `store/tests.rs` and
+/// the Draft-first-write scenario from `handlers/tests/draft.rs`.
+#[tokio::test]
+async fn dynamo_draft_first_put_without_if_match_succeeds_and_returns_etag() {
+    let (store, org_id) = seed_draft_org("v3-draft-first").await;
+
+    let now = chrono::Utc::now();
+    let org = Organization::new(
+        org_id.clone(),
+        "Draft To Configured".to_string(),
+        OrgStatus::Draft,
+        now,
+    );
+
+    let record = store
+        .update(&org_id, org, Some(sample_config()), None)
+        .await
+        .unwrap();
+
+    // Must have transitioned to Configured.
+    let configured = record
+        .configured()
+        .expect("Draft-first update must produce Configured");
+
+    // Etag must be a non-empty quoted hex string (18 chars: 16 hex + 2 quotes).
+    let etag = configured.etag();
+    assert!(
+        etag.starts_with('"') && etag.ends_with('"'),
+        "etag must be a quoted string, got: {etag}"
+    );
+    let inner = &etag[1..etag.len() - 1];
+    assert!(
+        !inner.is_empty() && inner.chars().all(|c| c.is_ascii_hexdigit()),
+        "etag inner must be hex, got: {inner}"
+    );
+}
+
+/// Any `If-Match` on a Draft org (which has no stored etag) is rejected with
+/// `PreconditionFailed { current_etag: "" }`.
+///
+/// Mirrors `update_draft_with_expected_etag_fails_with_empty_current` from
+/// `store/tests.rs`.
+#[tokio::test]
+async fn dynamo_draft_put_with_any_if_match_returns_412() {
+    let (store, org_id) = seed_draft_org("v3-draft-412").await;
+
+    let now = chrono::Utc::now();
+    let org = Organization::new(
+        org_id.clone(),
+        "Draft 412".to_string(),
+        OrgStatus::Draft,
+        now,
+    );
+
+    let result = store
+        .update(&org_id, org, Some(sample_config()), Some("\"anything\""))
+        .await;
+
+    match result {
+        Err(Error::PreconditionFailed { current_etag }) => {
+            assert!(
+                current_etag.is_empty(),
+                "Draft has no etag — current_etag must be empty, got: {current_etag:?}"
+            );
+        }
+        other => panic!("expected PreconditionFailed with empty current_etag, got {other:?}"),
+    }
 }
