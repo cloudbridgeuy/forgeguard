@@ -3,9 +3,9 @@
 Implements RFC 7232 `If-Match` / `412 Precondition Failed` on proxy-config updates
 so that two concurrent writers cannot silently overwrite each other.
 
-Scope: **V1** — `InMemoryOrgStore` enforces. `DynamoOrgStore` accepts the parameter
-but keeps last-write-wins semantics until the V3 slice lands the conditional
-`PutItem`.
+Scope: **V3 shipped** — both `InMemoryOrgStore` and `DynamoOrgStore` enforce
+`If-Match` identically. The backend choice (`--store=memory` vs
+`--store=dynamodb`) is observationally indistinguishable for PUT semantics.
 
 ## Semantics
 
@@ -63,9 +63,13 @@ if let EtagCheck::Mismatch { current: current_etag } =
 ```
 
 `AnyOrgStore::update` forwards `expected_etag` to both backends.
-`DynamoOrgStore::update` currently discards it with `let _ = expected_etag;` — V3
-will switch to `PutItem` with `ConditionExpression` and recover the current etag
-on `ConditionalCheckFailedException`.
+`DynamoOrgStore::update` issues a conditional `PutItem` with
+`ConditionExpression = attribute_exists(#pk) AND #etag = :expected_etag`
+when `expected_etag.is_some()`; on `ConditionalCheckFailedException` it
+recovers the current etag via a follow-up `GetItem` and returns the same
+`Error::PreconditionFailed { current_etag }` the memory store uses. When
+the stored item has no etag attribute (Draft race), the recovered current
+is `""`, matching the memory store's fail-closed contract.
 
 ### Handler — `handlers::update_handler`
 
@@ -114,23 +118,39 @@ the change, and retry.
 | Layer | Count | Where |
 |---|---|---|
 | Pure core — `etag.rs` | 15 unit tests | `crates/control-plane/src/etag.rs#[cfg(test)]` |
+| Pure core — `build_update_condition` | 2 unit tests | `crates/control-plane/src/dynamo_store/mod.rs#[cfg(test)]` |
 | Store — `InMemoryOrgStore` | 4 direct tests | `crates/control-plane/src/store/tests.rs` |
+| Store — `DynamoOrgStore` | 6 direct tests (feature `dynamodb-tests`) | `crates/control-plane/src/dynamo_store/tests.rs` |
 | Handler — integration | 7 wire-level tests | `crates/control-plane/src/handlers/tests/` |
 
-V1 ships 4 of the handler tests (matching / stale / absent / name-only ignored). V2 adds 3 more pinning Draft first-PUT and mixed name+config semantics (`draft_first_put_without_if_match_succeeds_and_returns_etag`, `draft_put_with_any_if_match_returns_412`, `name_plus_config_put_honors_if_match`).
+V1 ships 4 of the handler tests (matching / stale / absent / name-only ignored). V2 adds 3 more pinning Draft first-PUT and mixed name+config semantics (`draft_first_put_without_if_match_succeeds_and_returns_etag`, `draft_put_with_any_if_match_returns_412`, `name_plus_config_put_honors_if_match`). V3 adds 6 direct `DynamoOrgStore` tests mirroring the V1 + V2 scenarios against a live `dynamodb-local` — run via `cargo xtask control-plane test`.
 
 Run via `cargo xtask lint` (includes `cargo test -p forgeguard_control_plane`).
 
-## Future work — V3 DynamoDB enforcement
+## DynamoDB enforcement (V3)
 
-`DynamoOrgStore::update` will switch to conditional writes:
+`DynamoOrgStore::update` issues a conditional `PutItem` with
+`ConditionExpression = attribute_exists(#pk) AND #etag = :expected_etag`
+when `If-Match` is present. On `ConditionalCheckFailedException` the store
+does a follow-up `GetItem` to recover the current etag and returns
+`Error::PreconditionFailed { current_etag }`. On the Draft case (no stored
+etag yet), the recovered current is `""` — matching the memory store's
+fail-closed behaviour.
 
-- `PutItem` with `ConditionExpression = attribute_not_exists(#etag) OR #etag = :expected`.
-- On `ConditionalCheckFailedException`, call `GetItem` to recover the current
-  etag and surface it via the same `Error::PreconditionFailed { current_etag }`.
+The pure condition builder (`build_update_condition`) and the shell
+(`DynamoOrgStore::update`) sit on opposite sides of the FCIS boundary:
+the builder is a total function with no I/O, while the shell binds its
+output to an AWS SDK call. A `ConditionParts` struct bundles the condition
+expression, its placeholder names, and its values so half-formed
+conditions are structurally impossible.
 
-Handler code does not need to change. The handler already uses the enum variant
-opaquely — only the store backend swaps.
+When `expected_etag` is `None` and the `PutItem` still fails CCFE, the
+code treats it as a TOCTOU race (item deleted between the pre-flight
+`GetItem` for signing-key preservation and the `PutItem`) and returns
+`Error::NotFound` rather than `PreconditionFailed`.
+
+Verify end-to-end with `cargo xtask control-plane test` (boots
+`dynamodb-local`).
 
 ## References
 

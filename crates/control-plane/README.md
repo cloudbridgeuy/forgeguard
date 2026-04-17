@@ -125,8 +125,9 @@ curl -is -H 'x-api-key: test-key' -H "If-Match: $ETAG" \
 # 200 OK on match, 412 Precondition Failed on mismatch.
 ```
 
-V1 scope: memory-backed store only. The DynamoDB backend accepts `If-Match` but
-does not enforce it yet — that lands in a later slice.
+Both backends (`--store=memory` and `--store=dynamodb`) enforce `If-Match`
+identically as of V3. Exercise the Dynamo path locally via
+`cargo xtask control-plane test`.
 
 ### CLI Options
 
