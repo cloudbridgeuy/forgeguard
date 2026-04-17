@@ -81,6 +81,24 @@ Request -> forgeguard_layer (auth) -> ForgeGuardIdentity extractor -> lookup_org
 
 The handler uses `ForgeGuardIdentity` to receive the resolved identity from the middleware. Org-scoping is a Cedar policy concern evaluated by the pipeline.
 
+### Optimistic locking on `PUT`
+
+`update_handler` honours `If-Match` using the pure core in
+`crates/control-plane/src/etag.rs`:
+
+1. Extract `If-Match` from headers.
+2. `etag::derive_expected_etag(body.config.is_some(), if_match)` returns the
+   `expected_etag` to pass to the store. Name-only PUTs (no `config`) always
+   receive `None` — the check is skipped.
+3. The store (`InMemoryOrgStore::update`) compares the stored config etag to
+   `expected_etag` via `etag::check_etag`. Mismatch → `Error::PreconditionFailed`.
+4. The handler maps `Error::PreconditionFailed` → 412 with the current etag
+   in both the `ETag` response header and a `{error, current_etag}` JSON body.
+5. On 200, the handler sets `ETag: <new_etag>` so clients can chain edits.
+
+V1 scope: `InMemoryOrgStore` only. `DynamoOrgStore::update` accepts `expected_etag`
+but does not enforce it until a later slice.
+
 ## Config File Format
 
 JSON file mapping `org_id` to its org entry. Each entry has a `name` (display name); the nested `config` object (`OrgConfig`) is **optional** — entries without `config` seed as Draft orgs:

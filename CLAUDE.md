@@ -16,6 +16,7 @@
 - **Cluster mode:** optional Redis-backed shared authz cache — `[cluster]` config, see [cluster.md](./.claude/context/cluster.md)
 - **Metrics:** Prometheus via Pingora's `PrometheusServer` — `[metrics] enabled = true` in config
 - **Control plane:** Axum service, `--store=memory` (dev) or `--store=dynamodb` (prod) — see [control-plane.md](./.claude/context/control-plane.md)
+- **Optimistic locking:** `PUT /api/v1/organizations/{org_id}` honours RFC 7232 `If-Match` / `412` on proxy-config updates — see [optimistic-locking.md](./.claude/context/optimistic-locking.md)
 - **CP auth:** optional Cognito JWT via `--jwks-url` + `--issuer`; omit for dev mode (no auth) — see [control-plane.md](./.claude/context/control-plane.md)
 - **Infrastructure:** `cargo xtask control-plane infra {deploy,diff,destroy,status}` — CDK + 1Password, see [infra-control-plane.md](./.claude/context/infra-control-plane.md)
 - **Cedar sync:** `cargo xtask control-plane cedar {status,diff,sync}` — VP policy management, see [verified-permissions.md](./.claude/context/verified-permissions.md)
@@ -170,6 +171,7 @@ Each crate's `README.md` describes what it owns and its pure/I/O classification.
 | [Request Signing](./.claude/context/request-signing.md)            | Ed25519 signing: canonical payload, config, key rotation, crate layout  |
 | [Demo App](./.claude/context/demo-app.md)                          | E2E demo: Python TODO app, native proxy, demo config, running instructions |
 | [Control Plane](./.claude/context/control-plane.md)                | CP scaffold, proxy-config endpoint, OrgStore trait, auth, ETag, Draft / `ConfiguredConfig` lifecycle, testing |
+| [Optimistic Locking](./.claude/context/optimistic-locking.md)      | `If-Match` / 412 on `PUT /organizations/{id}`: semantics, pure `etag.rs` core, error variant, V3 Dynamo roadmap |
 | [Infra: Control Plane](./.claude/context/infra-control-plane.md)   | CDK project, 1Password integration, DynamoDB Global Table, xtask infra  |
 | [Cluster Mode](./.claude/context/cluster.md)                       | TieredCache, Redis wiring, config, health stats, future slices          |
 | [Dependency Constraints](./.claude/context/dependency-constraints.md) | Pingora version pins (rand, prometheus), jsonwebtoken crypto, reqwest TLS |

@@ -96,6 +96,38 @@ cargo run -p forgeguard_control_plane -- --config orgs.json
 
 The `orgs.json` file is gitignored (contains AWS resource IDs).
 
+### 4. Optimistic locking (issue #56)
+
+`PUT /api/v1/organizations/{org_id}` supports RFC 7232 `If-Match` optimistic locking
+on the organization's proxy config:
+
+- `GET /api/v1/organizations/{org_id}/proxy-config` returns the current `ETag`.
+- `PUT /api/v1/organizations/{org_id}` with `If-Match: <etag>` writes only if
+  the stored etag still matches; otherwise it returns **412 Precondition Failed**
+  with the current etag in the response body and `ETag` header.
+- `PUT` without `If-Match` preserves today's last-write-wins behaviour so that
+  CLI and script callers are not broken.
+- Name-only `PUT` bodies (no `config` field) skip the etag check — names are
+  cosmetic and not covered by optimistic locking.
+
+ForgeGuard-owned callers (`forgeguard_cli`, dashboard, xtask) should send
+`If-Match` on every PUT. Absence is tolerated only for ad-hoc external callers.
+
+```sh
+ETAG=$(curl -s -I -H 'x-api-key: test-key' \
+  http://localhost:3001/api/v1/organizations/org-acme/proxy-config \
+  | awk 'tolower($1) == "etag:" {print $2}' | tr -d '\r')
+
+curl -is -H 'x-api-key: test-key' -H "If-Match: $ETAG" \
+  -H 'content-type: application/json' \
+  -X PUT http://localhost:3001/api/v1/organizations/org-acme \
+  -d '{"config": { ... }}'
+# 200 OK on match, 412 Precondition Failed on mismatch.
+```
+
+V1 scope: memory-backed store only. The DynamoDB backend accepts `If-Match` but
+does not enforce it yet — that lands in a later slice.
+
 ### CLI Options
 
 | Flag | Env | Description |
