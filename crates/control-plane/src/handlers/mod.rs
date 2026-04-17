@@ -240,8 +240,13 @@ pub(crate) async fn update_handler<S: OrgStore>(
             .into_response(),
         Err(crate::error::Error::PreconditionFailed { current_etag }) => {
             let mut response_headers = HeaderMap::new();
-            if let Ok(val) = current_etag.parse() {
-                response_headers.insert(axum::http::header::ETAG, val);
+            // Only emit ETag when `current_etag` is non-empty. An empty
+            // string signals a Draft org (no config yet); empty strings
+            // are valid `HeaderValue`s, so we must guard explicitly.
+            if !current_etag.is_empty() {
+                if let Ok(val) = current_etag.parse() {
+                    response_headers.insert(axum::http::header::ETAG, val);
+                }
             }
             (
                 StatusCode::PRECONDITION_FAILED,
