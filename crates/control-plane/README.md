@@ -4,7 +4,11 @@ ForgeGuard control plane API server. This is an **I/O binary crate**.
 
 Serves per-organization proxy configuration to BYOC connected proxies. File-backed config store for development; DynamoDB in production.
 
-Authentication and authorization are handled by the `forgeguard-axum` middleware layer. In dev mode, the default configuration uses `DefaultPolicy::Passthrough` with `StaticPolicyEngine::Allow`, so all requests pass through without auth enforcement.
+Authentication and authorization are handled by the `forgeguard-axum` middleware layer.
+
+**Auth-enabled mode** (`--jwks-url` + `--policy-store-id`): all API routes are protected. The middleware uses `VpPolicyEngine` backed by AWS Verified Permissions with `DefaultPolicy::Deny`. The Cedar project namespace is `forgeguard` (from `ProjectId::new("forgeguard")`). Route-to-action mapping uses the `cp` namespace — see the Authorization section below.
+
+**Dev mode** (no `--jwks-url`): `StaticPolicyEngine(Allow)` with `DefaultPolicy::Passthrough`. All requests pass through without auth enforcement.
 
 ## Classification
 
@@ -189,6 +193,10 @@ logs without adding an `org_id` label to the counter (cardinality risk).
 | `--dynamodb-table` | `FORGEGUARD_CP_DYNAMODB_TABLE` | DynamoDB table name (required when `--store=dynamodb`) |
 | `--listen` | `FORGEGUARD_CP_LISTEN` | Listen address (default: `127.0.0.1:3001`) |
 | `--log-level` | `FORGEGUARD_CP_LOG_LEVEL` | Log level filter (default: `info`) |
+| `--jwks-url` | `FORGEGUARD_CP_JWKS_URL` | JWKS URL for Cognito JWT auth. Omit for dev mode (no auth) |
+| `--issuer` | `FORGEGUARD_CP_ISSUER` | JWT issuer URL. Required when `--jwks-url` is set |
+| `--audience` | `FORGEGUARD_CP_AUDIENCE` | JWT audience (Cognito app client ID). Optional |
+| `--policy-store-id` | `FORGEGUARD_CP_POLICY_STORE_ID` | Verified Permissions policy store ID. Required when `--jwks-url` is set |
 
 ## Config File Format
 
@@ -220,6 +228,39 @@ JSON file mapping `org_id` to its organization entry. Each entry has a `name` (d
 At load time, each org entry is parsed into an `Organization` domain entity (from `forgeguard_core`) with `OrgStatus::Active` status, paired with the `OrgConfig`. The `Organization` entity tracks lifecycle state (8-variant `OrgStatus` enum) and timestamps.
 
 Unknown fields in the config are ignored by serde, so older config files with extra fields will still parse.
+
+## Authorization
+
+When auth is enabled, every API request is authorized against AWS Verified Permissions using the `forgeguard` Cedar namespace (`ProjectId::new("forgeguard")`).
+
+### Route-to-Action Mapping
+
+Each route maps to a `namespace:entity:action` QualifiedAction in the `cp` namespace:
+
+| Method | Path | Cedar Action |
+|--------|------|-------------|
+| `POST` | `/api/v1/organizations` | `cp:organization:create` |
+| `GET` | `/api/v1/organizations` | `cp:organization:read` |
+| `GET` | `/api/v1/organizations/{org_id}` | `cp:organization:read` |
+| `PUT` | `/api/v1/organizations/{org_id}` | `cp:organization:update` |
+| `DELETE` | `/api/v1/organizations/{org_id}` | `cp:organization:delete` |
+| `GET` | `/api/v1/organizations/{org_id}/proxy-config` | `cp:proxy-config:read` |
+| `POST` | `/api/v1/organizations/{org_id}/keys` | `cp:key:generate` |
+| `GET` | `/api/v1/organizations/{org_id}/keys` | `cp:key:read` |
+| `DELETE` | `/api/v1/organizations/{org_id}/keys/{key_id}` | `cp:key:revoke` |
+
+### PrincipalKind Routing
+
+The Cedar principal entity type is determined by the `PrincipalKind` on the resolved `Identity`:
+
+- Cognito JWT (`Authorization: Bearer`) → `PrincipalKind::User` → Cedar entity `forgeguard::user`
+- Ed25519 signed request (BYOC proxy) → `PrincipalKind::Machine` → Cedar entity `forgeguard::Machine`
+
+Machine principals carry an `org_id` attribute and have no group parents. User principals may carry group memberships.
+
+### Memory Mode Limitation
+
+`--store=memory` cannot use `VpPolicyEngine` — no DynamoDB client is available for key lookup, so `StaticPolicyEngine(Allow)` is used instead, even when `--jwks-url` is provided.
 
 ## Domain Model
 

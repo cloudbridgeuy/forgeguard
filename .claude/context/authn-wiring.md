@@ -44,18 +44,34 @@ Pure (no I/O)                           I/O
 ─────────────                           ────
 authn-core:                             authn:
   IdentityResolver trait                  CognitoJwtResolver (JWKS fetch)
-  Credential enum                         Ed25519SignatureResolver (key lookup + verify)
-    (Bearer | ApiKey | SignedRequest)
-  Identity struct                       proxy/main.rs:
-  IdentityChain (resolver chain)          build_identity_chain() — constructs
-  StaticApiKeyResolver (HashMap)            resolvers from ProxyConfig
+  Credential enum                           → principal_kind: User
+    (Bearer | ApiKey | SignedRequest)     Ed25519SignatureResolver (key lookup + verify)
+  Identity struct                           → principal_kind: Machine
+    (includes principal_kind field)
+  IdentityChain (resolver chain)        proxy/main.rs:
+  StaticApiKeyResolver (HashMap)          build_identity_chain() — constructs
+    → principal_kind: User                  resolvers from ProxyConfig
   SigningKeyStore trait
   InMemorySigningKeyStore               control-plane/app.rs:
                                           dynamodb_router() — wires
-http:                                       [CognitoJwtResolver, Ed25519SignatureResolver]
-  RawJwtConfig → JwtConfig (Parse Don't Validate)
-  RawApiKeyEntry → ApiKeyConfig (validates UserId/TenantId/GroupName)
-  extract_credential() — header → Credential (priority: Bearer, ApiKey, SignedRequest)
+core:                                       [CognitoJwtResolver, Ed25519SignatureResolver]
+  PrincipalKind (User | Machine)
+  PrincipalRef (user_id + kind)         http:
+                                          build_query() — Identity + MatchedRoute
+http:                                       → PrincipalRef (kind from principal_kind)
+  RawJwtConfig → JwtConfig                → PolicyQuery for authz layer
+  RawApiKeyEntry → ApiKeyConfig
+  extract_credential() — header → Credential
+```
+
+`PrincipalKind` is set at resolver time and propagates through the pipeline:
+
+```
+Resolver sets principal_kind
+  → Identity.principal_kind()
+    → build_query() → PrincipalRef::new() or PrincipalRef::machine()
+      → PrincipalRef.vp_entity_type(project)
+        → VP IsAuthorized call
 ```
 
 ## Config Parsing Flow

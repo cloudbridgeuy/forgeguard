@@ -188,7 +188,44 @@ BYOC Proxy                              Control Plane
 
 **Wiring in `app.rs`:** `dynamodb_router()` creates a `DynamoSigningKeyStore` (backed by the same DynamoDB table), wraps it in `Ed25519SignatureResolver`, and appends it to the `IdentityChain` after `CognitoJwtResolver`. Memory mode never gets the Ed25519 resolver.
 
-**Not yet implemented:** VP authorization (#41 V4).
+**VP Authorization (V4):** When auth is enabled and a VP client is available (`--store=dynamodb` + `--jwks-url` + `--policy-store-id`), the policy engine is `VpPolicyEngine`. The Cedar project namespace is `forgeguard` (from `ProjectId::new("forgeguard")`), with a fixed `tenant_id = "forgeguard"`. `DefaultPolicy::Deny` is used — unmatched routes are denied. See the Authorization section below for the route-to-action mapping and PrincipalKind routing.
+
+## Authorization
+
+### Mode Selection
+
+| Condition | Policy Engine | Default Policy |
+|-----------|--------------|----------------|
+| No `--jwks-url` (dev mode) | `StaticPolicyEngine(Allow)` | `Passthrough` |
+| `--jwks-url` + `--store=memory` | `StaticPolicyEngine(Allow)` | `Deny` |
+| `--jwks-url` + `--store=dynamodb` + `--policy-store-id` | `VpPolicyEngine` | `Deny` |
+
+The Cedar namespace is `forgeguard` (from `ProjectId::new("forgeguard")`). The fixed tenant is `TenantId::new("forgeguard")`.
+
+### Route-to-Action Mapping
+
+All 9 API routes map to QualifiedActions in the `cp` namespace:
+
+| Method | Path | Cedar Action |
+|--------|------|-------------|
+| `POST` | `/api/v1/organizations` | `cp:organization:create` |
+| `GET` | `/api/v1/organizations` | `cp:organization:read` |
+| `GET` | `/api/v1/organizations/{org_id}` | `cp:organization:read` |
+| `PUT` | `/api/v1/organizations/{org_id}` | `cp:organization:update` |
+| `DELETE` | `/api/v1/organizations/{org_id}` | `cp:organization:delete` |
+| `GET` | `/api/v1/organizations/{org_id}/proxy-config` | `cp:proxy-config:read` |
+| `POST` | `/api/v1/organizations/{org_id}/keys` | `cp:key:generate` |
+| `GET` | `/api/v1/organizations/{org_id}/keys` | `cp:key:read` |
+| `DELETE` | `/api/v1/organizations/{org_id}/keys/{key_id}` | `cp:key:revoke` |
+
+### PrincipalKind Routing
+
+The Cedar principal entity type is set by `build_query()` based on `Identity::principal_kind()`:
+
+- Cognito JWT → `PrincipalKind::User` → Cedar `forgeguard::user`
+- Ed25519 signed request (BYOC proxy) → `PrincipalKind::Machine` → Cedar `forgeguard::Machine`
+
+Machine principals carry an `org_id` attribute and have no group parents.
 
 ## Testing
 
@@ -210,7 +247,7 @@ Handler tests use `StaticApiKeyResolver` with a known test key. All test request
 4. Runs `cargo test -p forgeguard_control_plane --features dynamodb-tests`
 5. Stops the container (guaranteed via RAII guard, even on failure)
 
-DynamoDB key attribute names (`PK`, `SK`) are read from the shared schema file `infra/control-plane/schema/dynamodb.json` — the single source of truth consumed by both CDK and Rust via `include_str!`.
+DynamoDB key attribute names (`PK`, `SK`) are read from the shared schema file `infra/control-plane/schema/forgeguard-orgs.json` — the single source of truth consumed by both CDK and Rust via `include_str!`.
 
 ## Running
 
@@ -238,6 +275,7 @@ cargo run -p forgeguard_control_plane -- --store dynamodb --dynamodb-table forge
 | `--jwks-url` | `FORGEGUARD_CP_JWKS_URL` | JWKS URL for Cognito JWT auth. Omit for dev mode (no auth) |
 | `--issuer` | `FORGEGUARD_CP_ISSUER` | JWT issuer URL. Required when `--jwks-url` is set |
 | `--audience` | `FORGEGUARD_CP_AUDIENCE` | JWT audience (Cognito app client ID). Optional |
+| `--policy-store-id` | `FORGEGUARD_CP_POLICY_STORE_ID` | Verified Permissions policy store ID. Required when `--jwks-url` is set |
 
 See `crates/control-plane/README.md` for full usage instructions and curl examples.
 
@@ -340,5 +378,4 @@ curl -s -X DELETE \
 ## What's NOT Here Yet
 
 - CORS middleware (no browser clients -- deferred to #40 dashboard)
-- VP authorization with PrincipalKind routing (#41 V4)
 - Hot-reload of config file

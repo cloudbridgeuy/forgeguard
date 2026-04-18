@@ -18,8 +18,11 @@
 - **Control plane:** Axum service, `--store=memory` (dev) or `--store=dynamodb` (prod) — see [control-plane.md](./.claude/context/control-plane.md)
 - **Optimistic locking:** `PUT /api/v1/organizations/{org_id}` honours RFC 7232 `If-Match` / `412` on proxy-config updates — see [optimistic-locking.md](./.claude/context/optimistic-locking.md)
 - **CP auth:** optional Cognito JWT via `--jwks-url` + `--issuer`; omit for dev mode (no auth) — see [control-plane.md](./.claude/context/control-plane.md)
+- **CP authz (V4):** `VpPolicyEngine` with `DefaultPolicy::Deny` when `--jwks-url` + `--policy-store-id` are set; `cp:*` action mapping — see [control-plane.md](./.claude/context/control-plane.md)
+- **Principal kinds:** Cognito JWT → `PrincipalKind::User` → Cedar `User`; Ed25519 signed → `PrincipalKind::Machine` → Cedar `Machine` — see [authn-wiring.md](./.claude/context/authn-wiring.md)
 - **Infrastructure:** `cargo xtask control-plane infra {deploy,diff,destroy,status}` — CDK + 1Password, see [infra-control-plane.md](./.claude/context/infra-control-plane.md)
 - **Cedar sync:** `cargo xtask control-plane cedar {status,diff,sync}` — VP policy management, see [verified-permissions.md](./.claude/context/verified-permissions.md)
+- **Manual QA tools:** `cargo xtask control-plane {seed,token,curl}` — seed Cognito/DynamoDB, mint JWTs, send signed requests — see [xtask-control-plane-tools.md](./.claude/context/xtask-control-plane-tools.md)
 - **Dogfooding config:** `forgeguard.toml` is the control plane's own authorization model; `forgeguard.example.toml` is the proxy reference config
 - **DynamoDB tests:** `cargo xtask control-plane test` — auto-starts dynamodb-local via docker/podman
 - **Integration tests:** `cargo test -p forgeguard_proxy` — see [demo-app.md](./.claude/context/demo-app.md)
@@ -166,11 +169,12 @@ Each crate's `README.md` describes what it owns and its pure/I/O classification.
 | [CORS](./.claude/context/cors.md)                                  | CORS config, origin matching, request flow, crate placement             |
 | [Proxy Shaping](./.claude/designs/proxy-shaping.md)                | Proxy design: requirements, shape, breadboard, slices                   |
 | [SaaS Architecture](./.claude/context/saas-architecture.md)        | Control/data plane split, infra stack, worker saga, org domain model    |
-| [Authn Wiring](./.claude/context/authn-wiring.md)                  | JWT + API key config, resolver construction, FCIS split                 |
+| [Authn Wiring](./.claude/context/authn-wiring.md)                  | JWT + API key config, resolver construction, PrincipalKind routing, FCIS split |
 | [CLI](./.claude/context/cli.md)                                    | `check`, `routes`, `policies`, `keygen` subcommands, FCIS architecture  |
+| [xtask CP Tools](./.claude/context/xtask-control-plane-tools.md)   | `seed`, `token`, `curl` subcommands for end-to-end manual QA            |
 | [Request Signing](./.claude/context/request-signing.md)            | Ed25519 signing: canonical payload, config, key rotation, crate layout  |
 | [Demo App](./.claude/context/demo-app.md)                          | E2E demo: Python TODO app, native proxy, demo config, running instructions |
-| [Control Plane](./.claude/context/control-plane.md)                | CP scaffold, proxy-config endpoint, OrgStore trait, auth, ETag, Draft / `ConfiguredConfig` lifecycle, testing |
+| [Control Plane](./.claude/context/control-plane.md)                | CP scaffold, proxy-config endpoint, OrgStore trait, auth, VP authorization (V4), ETag, Draft / `ConfiguredConfig` lifecycle, testing |
 | [Optimistic Locking](./.claude/context/optimistic-locking.md)      | `If-Match` / 412 on `PUT /organizations/{id}`: semantics, pure `etag.rs` core, error variant, V3 memory + Dynamo parity, V4 wildcard + POST ETag + 412 metrics, V5 conditional GET + typed 412 |
 | [Infra: Control Plane](./.claude/context/infra-control-plane.md)   | CDK project, 1Password integration, DynamoDB Global Table, xtask infra  |
 | [Cluster Mode](./.claude/context/cluster.md)                       | TieredCache, Redis wiring, config, health stats, future slices          |
