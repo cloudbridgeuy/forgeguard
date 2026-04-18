@@ -301,6 +301,11 @@ pub(crate) async fn update_handler<S: OrgStore>(
         )
             .into_response(),
         Err(crate::error::Error::PreconditionFailed { current_etag }) => {
+            // `record` is the pre-update snapshot; the store returned 412
+            // without mutating it, so its `configured()` etag still reflects
+            // the state the decision was made against. This is what
+            // `precondition_reason` needs to distinguish `DraftFailClosed`
+            // (stored == None) from `StaleEtag` (stored == Some).
             let reason = crate::metrics::precondition_reason(
                 &resolved,
                 record

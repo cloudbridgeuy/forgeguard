@@ -383,7 +383,7 @@ async fn draft_put_with_any_if_match_returns_412() {
 // Optimistic-locking tests (issue #56, V4) — Wildcard If-Match
 // -----------------------------------------------------------------
 
-/// V3 — `If-Match: *` succeeds when the org already has a config.
+/// V4 — `If-Match: *` succeeds when the org already has a config.
 /// Pins that a wildcard write is unconditional on a Configured org.
 #[tokio::test]
 async fn put_wildcard_matches_any_configured_etag() {
@@ -461,7 +461,7 @@ async fn put_wildcard_matches_any_configured_etag() {
     assert_eq!(json["upstream_url"], "https://api.wildcard.acme.com");
 }
 
-/// V3 — `If-Match: *` on a Draft org (no stored config) returns 412 with
+/// V4 — `If-Match: *` on a Draft org (no stored config) returns 412 with
 /// `current_etag == ""` and no ETag response header.
 #[tokio::test]
 async fn put_wildcard_on_draft_returns_412() {
