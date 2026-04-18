@@ -95,10 +95,6 @@ pub(crate) struct RawJwtConfig {
     #[serde(default)]
     pub(crate) user_id_claim: Option<String>,
     #[serde(default)]
-    pub(crate) tenant_claim: Option<String>,
-    #[serde(default)]
-    pub(crate) groups_claim: Option<String>,
-    #[serde(default)]
     pub(crate) cache_ttl_secs: Option<u64>,
 }
 

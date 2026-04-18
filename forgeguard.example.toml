@@ -65,8 +65,6 @@ jwks_url = "https://cognito-idp.<region>.amazonaws.com/<user-pool-id>/.well-know
 issuer   = "https://cognito-idp.<region>.amazonaws.com/<user-pool-id>"
 # audience = "optional-client-id"
 # user_id_claim = "sub"
-# tenant_claim = "custom:org_id"
-# groups_claim = "cognito:groups"
 # cache_ttl_secs = 3600
 
 # ---------------------------------------------------------------------------

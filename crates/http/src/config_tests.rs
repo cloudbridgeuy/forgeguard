@@ -389,16 +389,12 @@ jwks_url = "https://cognito-idp.us-east-2.amazonaws.com/pool/.well-known/jwks.js
 issuer = "https://cognito-idp.us-east-2.amazonaws.com/pool"
 audience = "my-client-id"
 user_id_claim = "email"
-tenant_claim = "custom:tenant"
-groups_claim = "custom:roles"
 cache_ttl_secs = 600
 "#;
     let config = parse_config(toml).unwrap();
     let jwt = config.jwt_config().unwrap();
     assert_eq!(jwt.audience(), Some("my-client-id"));
     assert_eq!(jwt.user_id_claim(), Some("email"));
-    assert_eq!(jwt.tenant_claim(), Some("custom:tenant"));
-    assert_eq!(jwt.groups_claim(), Some("custom:roles"));
     assert_eq!(jwt.cache_ttl_secs(), Some(600));
 }
 

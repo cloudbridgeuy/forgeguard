@@ -14,8 +14,6 @@ pub struct JwtResolverConfig {
     issuer: String,
     audience: Option<String>,
     user_id_claim: String,
-    tenant_claim: String,
-    groups_claim: String,
     cache_ttl: Duration,
 }
 
@@ -24,8 +22,6 @@ impl JwtResolverConfig {
     ///
     /// Defaults:
     /// - `user_id_claim`: `"sub"`
-    /// - `tenant_claim`: `"custom:org_id"`
-    /// - `groups_claim`: `"cognito:groups"`
     /// - `cache_ttl`: 1 hour
     /// - `audience`: None
     pub fn new(jwks_url: Url, issuer: impl Into<String>) -> Self {
@@ -34,8 +30,6 @@ impl JwtResolverConfig {
             issuer: issuer.into(),
             audience: None,
             user_id_claim: "sub".to_string(),
-            tenant_claim: "custom:org_id".to_string(),
-            groups_claim: "cognito:groups".to_string(),
             cache_ttl: Duration::from_secs(3600),
         }
     }
@@ -49,18 +43,6 @@ impl JwtResolverConfig {
     /// Override the claim name used to extract the user ID.
     pub fn with_user_id_claim(mut self, claim: impl Into<String>) -> Self {
         self.user_id_claim = claim.into();
-        self
-    }
-
-    /// Override the claim name used to extract the tenant ID.
-    pub fn with_tenant_claim(mut self, claim: impl Into<String>) -> Self {
-        self.tenant_claim = claim.into();
-        self
-    }
-
-    /// Override the claim name used to extract group membership.
-    pub fn with_groups_claim(mut self, claim: impl Into<String>) -> Self {
-        self.groups_claim = claim.into();
         self
     }
 
@@ -90,16 +72,6 @@ impl JwtResolverConfig {
         &self.user_id_claim
     }
 
-    /// The claim name used to extract the tenant ID.
-    pub fn tenant_claim(&self) -> &str {
-        &self.tenant_claim
-    }
-
-    /// The claim name used to extract group membership.
-    pub fn groups_claim(&self) -> &str {
-        &self.groups_claim
-    }
-
     /// The JWKS cache time-to-live.
     pub fn cache_ttl(&self) -> Duration {
         self.cache_ttl
@@ -126,8 +98,6 @@ mod tests {
         );
 
         assert_eq!(config.user_id_claim(), "sub");
-        assert_eq!(config.tenant_claim(), "custom:org_id");
-        assert_eq!(config.groups_claim(), "cognito:groups");
         assert_eq!(config.cache_ttl(), Duration::from_secs(3600));
         assert!(config.audience().is_none());
     }
@@ -158,20 +128,6 @@ mod tests {
     }
 
     #[test]
-    fn with_tenant_claim_overrides_default() {
-        let config =
-            JwtResolverConfig::new(test_url(), "issuer").with_tenant_claim("custom:tenant");
-        assert_eq!(config.tenant_claim(), "custom:tenant");
-    }
-
-    #[test]
-    fn with_groups_claim_overrides_default() {
-        let config =
-            JwtResolverConfig::new(test_url(), "issuer").with_groups_claim("custom:groups");
-        assert_eq!(config.groups_claim(), "custom:groups");
-    }
-
-    #[test]
     fn with_cache_ttl_overrides_default() {
         let config =
             JwtResolverConfig::new(test_url(), "issuer").with_cache_ttl(Duration::from_secs(300));
@@ -183,14 +139,10 @@ mod tests {
         let config = JwtResolverConfig::new(test_url(), "issuer")
             .with_audience("aud")
             .with_user_id_claim("email")
-            .with_tenant_claim("org")
-            .with_groups_claim("roles")
             .with_cache_ttl(Duration::from_secs(60));
 
         assert_eq!(config.audience(), Some("aud"));
         assert_eq!(config.user_id_claim(), "email");
-        assert_eq!(config.tenant_claim(), "org");
-        assert_eq!(config.groups_claim(), "roles");
         assert_eq!(config.cache_ttl(), Duration::from_secs(60));
     }
 }

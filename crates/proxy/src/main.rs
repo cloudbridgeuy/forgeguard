@@ -184,12 +184,6 @@ fn build_identity_chain(
                 if let Some(claim) = jwt.user_id_claim() {
                     resolver_config = resolver_config.with_user_id_claim(claim);
                 }
-                if let Some(claim) = jwt.tenant_claim() {
-                    resolver_config = resolver_config.with_tenant_claim(claim);
-                }
-                if let Some(claim) = jwt.groups_claim() {
-                    resolver_config = resolver_config.with_groups_claim(claim);
-                }
                 if let Some(ttl) = jwt.cache_ttl_secs() {
                     resolver_config = resolver_config.with_cache_ttl(Duration::from_secs(ttl));
                 }

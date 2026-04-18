@@ -125,8 +125,6 @@ pub struct JwtConfig {
     issuer: String,
     audience: Option<String>,
     user_id_claim: Option<String>,
-    tenant_claim: Option<String>,
-    groups_claim: Option<String>,
     cache_ttl_secs: Option<u64>,
 }
 
@@ -146,14 +144,6 @@ impl JwtConfig {
     /// Claim to extract the user ID from.
     pub fn user_id_claim(&self) -> Option<&str> {
         self.user_id_claim.as_deref()
-    }
-    /// Claim to extract the tenant ID from.
-    pub fn tenant_claim(&self) -> Option<&str> {
-        self.tenant_claim.as_deref()
-    }
-    /// Claim to extract group memberships from.
-    pub fn groups_claim(&self) -> Option<&str> {
-        self.groups_claim.as_deref()
     }
     /// JWKS cache TTL in seconds.
     pub fn cache_ttl_secs(&self) -> Option<u64> {
@@ -722,8 +712,6 @@ fn parse_jwt_config(raw: crate::config_raw::RawJwtConfig) -> Result<JwtConfig> {
         issuer: raw.issuer,
         audience: raw.audience,
         user_id_claim: raw.user_id_claim,
-        tenant_claim: raw.tenant_claim,
-        groups_claim: raw.groups_claim,
         cache_ttl_secs: raw.cache_ttl_secs,
     })
 }
