@@ -27,6 +27,13 @@ export class DynamoDbStack extends cdk.Stack {
       billing: dynamodb.Billing.onDemand(),
       removalPolicy: cdk.RemovalPolicy.RETAIN,
       dynamoStream: dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
+      globalSecondaryIndexes: [
+        {
+          indexName: "GSI1",
+          partitionKey: { name: schema.sortKey, type: dynamodb.AttributeType.STRING },
+          sortKey: { name: schema.partitionKey, type: dynamodb.AttributeType.STRING },
+        },
+      ],
       replicas,
     });
 
@@ -39,6 +46,10 @@ export class DynamoDbStack extends cdk.Stack {
 
     new cdk.CfnOutput(this, "TableArn", {
       value: this.table.tableArn,
+    });
+
+    new cdk.CfnOutput(this, "GSI1Name", {
+      value: "GSI1",
     });
   }
 }
