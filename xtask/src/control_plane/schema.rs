@@ -56,5 +56,13 @@ mod tests {
             .expect("missing 'org' item type");
         assert_eq!(org.pk, "ORG#{org_id}");
         assert_eq!(org.sk, "META");
+
+        #[allow(clippy::expect_used)]
+        let membership = schema
+            .item_types
+            .get("membership")
+            .expect("missing 'membership' item type");
+        assert_eq!(membership.pk, "USER#{user_id}");
+        assert_eq!(membership.sk, "ORG#{org_id}");
     }
 }

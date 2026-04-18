@@ -18,6 +18,16 @@
         "etag": { "type": "S", "required": true },
         "signing_keys": { "type": "S", "required": false, "format": "json" }
       }
+    },
+    "membership": {
+      "pk": "USER#{user_id}",
+      "sk": "ORG#{org_id}",
+      "attributes": {
+        "user_id": { "type": "S", "required": true },
+        "org_id": { "type": "S", "required": true },
+        "groups": { "type": "L", "required": true },
+        "joined_at": { "type": "S", "required": true }
+      }
     }
   }
 }
