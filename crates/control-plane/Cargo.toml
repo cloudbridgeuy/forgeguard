@@ -24,6 +24,7 @@ dynamodb-tests = []
 [dependencies]
 aws-config = { workspace = true }
 aws-sdk-dynamodb = { workspace = true }
+aws-sdk-verifiedpermissions = { workspace = true }
 axum = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
@@ -32,6 +33,7 @@ ed25519-dalek = { workspace = true, features = ["rand_core"] }
 forgeguard-axum = { workspace = true }
 forgeguard_authn = { workspace = true }
 forgeguard_authn_core = { workspace = true }
+forgeguard_authz = { workspace = true }
 forgeguard_authz_core = { workspace = true }
 forgeguard_core = { workspace = true }
 forgeguard_http = { workspace = true }

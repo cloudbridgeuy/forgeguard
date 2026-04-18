@@ -112,6 +112,18 @@ groups = ["viewer"]
 # cache_max_entries = 10000
 
 # ---------------------------------------------------------------------------
+# Schema — entity type definitions for Cedar schema generation
+# ---------------------------------------------------------------------------
+
+[schema.entities.todo.list]
+member_of = ["todo::project"]
+attributes = { title = "String" }
+
+[schema.entities.todo.item]
+member_of = ["todo::list"]
+attributes = { title = "String", completed = "Boolean" }
+
+# ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
 

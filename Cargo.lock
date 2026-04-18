@@ -1842,6 +1842,7 @@ version = "0.0.0"
 dependencies = [
  "aws-config",
  "aws-sdk-dynamodb",
+ "aws-sdk-verifiedpermissions",
  "axum",
  "chrono",
  "clap",
@@ -1850,6 +1851,7 @@ dependencies = [
  "forgeguard-axum",
  "forgeguard_authn",
  "forgeguard_authn_core",
+ "forgeguard_authz",
  "forgeguard_authz_core",
  "forgeguard_core",
  "forgeguard_http",

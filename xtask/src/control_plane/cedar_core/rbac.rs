@@ -29,6 +29,7 @@ pub(crate) fn compile_rbac_to_cedar(
     allow: &[String],
     tenant_scoped: bool,
     tenant: &TenantConfig,
+    namespace: &str,
 ) -> Result<String, String> {
     validate_cedar_ident(name, "role name")?;
 
@@ -49,10 +50,13 @@ pub(crate) fn compile_rbac_to_cedar(
 
     let mut out = String::new();
     let _ = writeln!(out, "permit(");
-    let _ = writeln!(out, "  principal in group::\"{name}\",");
+    let _ = writeln!(out, "  principal in {namespace}::Group::\"{name}\",");
 
     // Action clause: always use `action in [...]` for consistency.
-    let actions: Vec<String> = allow.iter().map(|a| format!("Action::\"{a}\"")).collect();
+    let actions: Vec<String> = allow
+        .iter()
+        .map(|a| format!("{namespace}::Action::\"{a}\""))
+        .collect();
     let _ = writeln!(out, "  action in [{}],", actions.join(", "));
 
     // Tenant scoping: append `when` clause if both per-policy and global are enabled.
@@ -182,13 +186,14 @@ mod tests {
             ],
             true,
             &tenant,
+            "TestNs",
         )
         .unwrap();
 
         let expected = "\
 permit(
-  principal in group::\"editor\",
-  action in [Action::\"todo:list:create\", Action::\"todo:list:update\"],
+  principal in TestNs::Group::\"editor\",
+  action in [TestNs::Action::\"todo:list:create\", TestNs::Action::\"todo:list:update\"],
   resource
 ) when { principal.tenant_id == resource.tenant_id };";
         assert_eq!(result, expected);
@@ -206,6 +211,7 @@ permit(
             &["shopping:list:create".to_string()],
             true,
             &tenant,
+            "TestNs",
         )
         .unwrap();
 
@@ -220,13 +226,14 @@ permit(
             &["todo:list:list".to_string()],
             false,
             &tenant,
+            "TestNs",
         )
         .unwrap();
 
         let expected = "\
 permit(
-  principal in group::\"global-reader\",
-  action in [Action::\"todo:list:list\"],
+  principal in TestNs::Group::\"global-reader\",
+  action in [TestNs::Action::\"todo:list:list\"],
   resource
 );";
         assert_eq!(result, expected);
@@ -245,6 +252,7 @@ permit(
             &["todo:list:read".to_string()],
             true, // per-policy wants scoping, but global is off
             &tenant,
+            "TestNs",
         )
         .unwrap();
 
@@ -255,17 +263,22 @@ permit(
     #[test]
     fn compile_rbac_single_action_uses_in_syntax() {
         let tenant = TenantConfig::default();
-        let result =
-            compile_rbac_to_cedar("viewer", &["todo:list:read".to_string()], true, &tenant)
-                .unwrap();
+        let result = compile_rbac_to_cedar(
+            "viewer",
+            &["todo:list:read".to_string()],
+            true,
+            &tenant,
+            "TestNs",
+        )
+        .unwrap();
 
-        assert!(result.contains("action in [Action::\"todo:list:read\"]"));
+        assert!(result.contains("action in [TestNs::Action::\"todo:list:read\"]"));
     }
 
     #[test]
     fn compile_rbac_empty_allow_list_returns_error() {
         let tenant = TenantConfig::default();
-        let result = compile_rbac_to_cedar("empty-role", &[], true, &tenant);
+        let result = compile_rbac_to_cedar("empty-role", &[], true, &tenant, "TestNs");
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.contains("empty allow list"), "unexpected error: {err}");
@@ -284,12 +297,12 @@ permit(
         .map(String::from)
         .collect();
 
-        let result = compile_rbac_to_cedar("admin", &actions, true, &tenant).unwrap();
+        let result = compile_rbac_to_cedar("admin", &actions, true, &tenant, "TestNs").unwrap();
 
-        assert!(result.contains("Action::\"todo:list:create\""));
-        assert!(result.contains("Action::\"todo:list:update\""));
-        assert!(result.contains("Action::\"todo:list:delete\""));
-        assert!(result.contains("Action::\"todo:list:share\""));
+        assert!(result.contains("TestNs::Action::\"todo:list:create\""));
+        assert!(result.contains("TestNs::Action::\"todo:list:update\""));
+        assert!(result.contains("TestNs::Action::\"todo:list:delete\""));
+        assert!(result.contains("TestNs::Action::\"todo:list:share\""));
     }
 
     // -----------------------------------------------------------------------
@@ -447,6 +460,7 @@ permit(
             &["todo:list:read".to_string()],
             true,
             &tenant,
+            "TestNs",
         );
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -459,8 +473,13 @@ permit(
     #[test]
     fn compile_rbac_action_with_newline_returns_error() {
         let tenant = TenantConfig::default();
-        let result =
-            compile_rbac_to_cedar("viewer", &["todo:list\n:read".to_string()], true, &tenant);
+        let result = compile_rbac_to_cedar(
+            "viewer",
+            &["todo:list\n:read".to_string()],
+            true,
+            &tenant,
+            "TestNs",
+        );
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(
@@ -472,7 +491,8 @@ permit(
     #[test]
     fn compile_rbac_empty_name_returns_error() {
         let tenant = TenantConfig::default();
-        let result = compile_rbac_to_cedar("", &["todo:list:read".to_string()], true, &tenant);
+        let result =
+            compile_rbac_to_cedar("", &["todo:list:read".to_string()], true, &tenant, "TestNs");
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.contains("must not be empty"), "unexpected error: {err}");

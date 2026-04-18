@@ -43,6 +43,11 @@ pub(crate) struct DesiredPolicy {
 /// share the same name.
 pub(crate) fn build_desired_state(config: &CedarSyncConfig) -> Result<DesiredState> {
     let tenant = config.tenant.clone().unwrap_or_default();
+    let namespace = config
+        .schema
+        .as_ref()
+        .map(|s| s.namespace.as_str())
+        .unwrap_or("default");
 
     let mut policies: Vec<DesiredPolicy> = Vec::new();
     for entry in &config.policies {
@@ -66,9 +71,14 @@ pub(crate) fn build_desired_state(config: &CedarSyncConfig) -> Result<DesiredSta
             } => {
                 let resolved_actions =
                     resolve_inherits(&config.policies, name).map_err(|e| eyre::eyre!("{e}"))?;
-                let statement =
-                    compile_rbac_to_cedar(name, &resolved_actions, *tenant_scoped, &tenant)
-                        .map_err(|e| eyre::eyre!("{e}"))?;
+                let statement = compile_rbac_to_cedar(
+                    name,
+                    &resolved_actions,
+                    *tenant_scoped,
+                    &tenant,
+                    namespace,
+                )
+                .map_err(|e| eyre::eyre!("{e}"))?;
                 policies.push(DesiredPolicy {
                     name: name.clone(),
                     description: description.clone(),
@@ -261,7 +271,7 @@ mod tests {
 
         // RBAC policy is compiled to Cedar.
         assert_eq!(state.policies[0].name, "admin");
-        assert!(state.policies[0].statement.contains("group::\"admin\""));
+        assert!(state.policies[0].statement.contains("Group::\"admin\""));
         assert!(state.policies[0]
             .statement
             .contains("Action::\"todo:list:create\""));
@@ -367,9 +377,7 @@ mod tests {
         assert!(state.policies[0]
             .statement
             .contains("Action::\"todo:list:read\""));
-        assert!(!state.policies[0]
-            .statement
-            .contains("Action::\"todo:list:write\""));
+        assert!(!state.policies[0].statement.contains("todo:list:write"));
 
         // editor: own + inherited
         assert!(state.policies[1]

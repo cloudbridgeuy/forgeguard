@@ -13,11 +13,14 @@ use axum::routing::{get, post};
 use axum::Router;
 use forgeguard_authn::{CognitoJwtResolver, Ed25519SignatureResolver, JwtResolverConfig};
 use forgeguard_authn_core::{IdentityChain, IdentityResolver};
+use forgeguard_authz::cache::AuthzCache;
+use forgeguard_authz::{TieredCache, VpEngineConfig, VpPolicyEngine};
 use forgeguard_authz_core::{PolicyDecision, StaticPolicyEngine};
 use forgeguard_axum::{forgeguard_layer, ForgeGuard};
-use forgeguard_core::{FlagConfig, ProjectId};
+use forgeguard_core::{FlagConfig, ProjectId, QualifiedAction, TenantId};
 use forgeguard_http::{
-    DefaultPolicy, PublicAuthMode, PublicRoute, PublicRouteMatcher, RouteMatcher,
+    DefaultPolicy, HttpMethod, PublicAuthMode, PublicRoute, PublicRouteMatcher, RouteMapping,
+    RouteMatcher,
 };
 use forgeguard_proxy_core::{PipelineConfig, PipelineConfigParams};
 use tower_http::timeout::TimeoutLayer;
@@ -36,6 +39,7 @@ pub struct AuthConfig {
     jwks_url: url::Url,
     issuer: String,
     audience: Option<String>,
+    policy_store_id: String,
 }
 
 impl AuthConfig {
@@ -48,6 +52,7 @@ impl AuthConfig {
         jwks_url: &str,
         issuer: impl Into<String>,
         audience: Option<String>,
+        policy_store_id: impl Into<String>,
     ) -> color_eyre::Result<Self> {
         let jwks_url: url::Url = jwks_url
             .parse()
@@ -56,6 +61,7 @@ impl AuthConfig {
             jwks_url,
             issuer: issuer.into(),
             audience,
+            policy_store_id: policy_store_id.into(),
         })
     }
 }
@@ -71,18 +77,19 @@ pub async fn dynamodb_router(
     let sdk_config = aws_config::defaults(aws_config::BehaviorVersion::latest())
         .load()
         .await;
-    let client = aws_sdk_dynamodb::Client::new(&sdk_config);
+    let dynamo_client = aws_sdk_dynamodb::Client::new(&sdk_config);
+    let vp_client = aws_sdk_verifiedpermissions::Client::new(&sdk_config);
     let s = Arc::new(AnyOrgStore::DynamoDb(DynamoOrgStore::new(
-        client.clone(),
+        dynamo_client.clone(),
         table_name.to_string(),
     )));
     let ed25519_resolver: Option<Arc<dyn IdentityResolver>> = if auth.is_some() {
-        let key_store = DynamoSigningKeyStore::new(client, table_name.to_string());
+        let key_store = DynamoSigningKeyStore::new(dynamo_client, table_name.to_string());
         Some(Arc::new(Ed25519SignatureResolver::new(key_store)))
     } else {
         None
     };
-    let fg = build_forgeguard(auth, ed25519_resolver)?;
+    let fg = build_forgeguard(auth, ed25519_resolver, Some(vp_client))?;
     Ok(build_router(s, fg))
 }
 
@@ -94,7 +101,8 @@ pub fn memory_router(config_path: &Path, auth: Option<&AuthConfig>) -> color_eyr
     let inner = store::load_config_file(config_path)?;
     let s = Arc::new(AnyOrgStore::Memory(inner));
     // Ed25519 resolver requires DynamoDB for key lookup; memory mode has no DynamoDB client.
-    let fg = build_forgeguard(auth, None)?;
+    // VP engine is also unavailable in memory mode — StaticPolicyEngine(Allow) is used instead.
+    let fg = build_forgeguard(auth, None, None)?;
     Ok(build_router(s, fg))
 }
 
@@ -120,17 +128,102 @@ const API_ROUTES: &[(&str, &str)] = &[
     ("DELETE", "/api/v1/organizations/{org_id}/keys/{key_id}"),
 ];
 
+/// Route-to-action mappings for all control-plane API routes.
+///
+/// Actions follow the `namespace:entity:action` convention with the `cp`
+/// (control-plane) namespace. These mirror the Cedar actions declared in
+/// `forgeguard.toml`.
+fn cp_route_actions() -> forgeguard_http::Result<Vec<RouteMapping>> {
+    // (method, path, action, resource_param)
+    let entries: &[(&str, &str, &str, Option<&str>)] = &[
+        (
+            "POST",
+            "/api/v1/organizations",
+            "cp:organization:create",
+            None,
+        ),
+        ("GET", "/api/v1/organizations", "cp:organization:read", None),
+        (
+            "GET",
+            "/api/v1/organizations/{org_id}",
+            "cp:organization:read",
+            Some("org_id"),
+        ),
+        (
+            "PUT",
+            "/api/v1/organizations/{org_id}",
+            "cp:organization:update",
+            Some("org_id"),
+        ),
+        (
+            "DELETE",
+            "/api/v1/organizations/{org_id}",
+            "cp:organization:delete",
+            Some("org_id"),
+        ),
+        (
+            "GET",
+            "/api/v1/organizations/{org_id}/proxy-config",
+            "cp:proxy-config:read",
+            Some("org_id"),
+        ),
+        (
+            "POST",
+            "/api/v1/organizations/{org_id}/keys",
+            "cp:key:generate",
+            Some("org_id"),
+        ),
+        (
+            "GET",
+            "/api/v1/organizations/{org_id}/keys",
+            "cp:key:read",
+            Some("org_id"),
+        ),
+        (
+            "DELETE",
+            "/api/v1/organizations/{org_id}/keys/{key_id}",
+            "cp:key:revoke",
+            Some("org_id"),
+        ),
+    ];
+
+    entries
+        .iter()
+        .map(|&(method, path, action, resource_param)| {
+            let method: HttpMethod = method
+                .parse()
+                .map_err(|e| forgeguard_http::Error::Config(format!("invalid method: {e}")))?;
+            let action = QualifiedAction::parse(action)
+                .map_err(|e| forgeguard_http::Error::Config(format!("invalid action: {e}")))?;
+            let mapping = RouteMapping::new(
+                method,
+                path.to_string(),
+                action,
+                resource_param.map(String::from),
+                None,
+            )
+            .with_resource_entity_type("Organization");
+            if resource_param.is_none() {
+                mapping.with_default_resource_id("collection")
+            } else {
+                Ok(mapping)
+            }
+        })
+        .collect()
+}
+
 fn build_forgeguard(
     auth: Option<&AuthConfig>,
     ed25519_resolver: Option<Arc<dyn IdentityResolver>>,
+    vp_client: Option<aws_sdk_verifiedpermissions::Client>,
 ) -> color_eyre::Result<Arc<ForgeGuard>> {
-    let route_matcher = RouteMatcher::new(&[])?;
-
     let health_route = anon_route("GET", "/health")?;
     let metrics_route = anon_route("GET", "/metrics")?;
+    let project_id = ProjectId::new("forgeguard")?;
 
-    let (public_routes, chain, auth_providers) = match auth {
+    let (route_matcher, public_routes, chain, auth_providers, default_policy, engine) = match auth {
         Some(auth) => {
+            // Auth-enabled branch — JWT + optional Ed25519, populated route matcher, Deny default
             let mut config = JwtResolverConfig::new(auth.jwks_url.clone(), &auth.issuer);
             if let Some(ref aud) = auth.audience {
                 config = config.with_audience(aud);
@@ -146,17 +239,55 @@ fn build_forgeguard(
             }
 
             let chain = IdentityChain::new(resolvers);
+            let mappings = cp_route_actions()?;
+            let route_matcher = RouteMatcher::new(&mappings)?;
 
-            (vec![health_route, metrics_route], chain, providers)
+            // Build the policy engine: VP when a client is available, static allow otherwise.
+            let engine: Arc<dyn forgeguard_authz_core::PolicyEngine> = match vp_client {
+                Some(client) => {
+                    let vp_config = VpEngineConfig::new(&auth.policy_store_id);
+                    let tenant_id = TenantId::new("forgeguard")?;
+                    let l1 = AuthzCache::new(vp_config.cache_ttl(), vp_config.cache_max_entries());
+                    let cache = TieredCache::new(l1, None, vp_config.cache_ttl());
+                    Arc::new(VpPolicyEngine::new(
+                        client,
+                        &vp_config,
+                        project_id.clone(),
+                        tenant_id,
+                        cache,
+                    ))
+                }
+                None => Arc::new(StaticPolicyEngine::new(PolicyDecision::Allow)),
+            };
+
+            (
+                route_matcher,
+                vec![health_route, metrics_route],
+                chain,
+                providers,
+                DefaultPolicy::Deny,
+                engine,
+            )
         }
         None => {
+            // No-auth (dev) branch — all routes public, empty route matcher, Passthrough default
             let mut routes = vec![health_route, metrics_route];
             for &(method, path) in API_ROUTES {
                 routes.push(anon_route(method, path)?);
             }
             let chain = IdentityChain::new(vec![]);
+            let route_matcher = RouteMatcher::new(&[])?;
+            let engine: Arc<dyn forgeguard_authz_core::PolicyEngine> =
+                Arc::new(StaticPolicyEngine::new(PolicyDecision::Allow));
 
-            (routes, chain, vec![])
+            (
+                route_matcher,
+                routes,
+                chain,
+                vec![],
+                DefaultPolicy::Passthrough,
+                engine,
+            )
         }
     };
 
@@ -165,13 +296,11 @@ fn build_forgeguard(
         route_matcher,
         public_route_matcher,
         flag_config: FlagConfig::default(),
-        project_id: ProjectId::new("forgeguard-cp")?,
-        default_policy: DefaultPolicy::Passthrough,
+        project_id,
+        default_policy,
         debug_mode: false,
         auth_providers,
     });
-    let engine: Arc<dyn forgeguard_authz_core::PolicyEngine> =
-        Arc::new(StaticPolicyEngine::new(PolicyDecision::Allow));
     Ok(Arc::new(ForgeGuard::new(pipeline_config, chain, engine)))
 }
 
@@ -210,4 +339,96 @@ fn build_router<S: OrgStore + 'static>(store: Arc<S>, fg: Arc<ForgeGuard>) -> Ro
             StatusCode::REQUEST_TIMEOUT,
             Duration::from_secs(30),
         ))
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cp_route_actions_all_parse() {
+        let mappings = cp_route_actions().expect("cp_route_actions must not fail");
+        assert_eq!(
+            mappings.len(),
+            9,
+            "expected 9 route mappings, got {}",
+            mappings.len()
+        );
+        // Confirm each action string round-trips correctly through QualifiedAction
+        let expected_actions = [
+            "cp:organization:create",
+            "cp:organization:read",
+            "cp:organization:read",
+            "cp:organization:update",
+            "cp:organization:delete",
+            "cp:proxy-config:read",
+            "cp:key:generate",
+            "cp:key:read",
+            "cp:key:revoke",
+        ];
+        for (mapping, expected) in mappings.iter().zip(expected_actions.iter()) {
+            assert_eq!(
+                mapping.action().to_string(),
+                *expected,
+                "action mismatch for route {}",
+                mapping.path_pattern()
+            );
+        }
+    }
+
+    #[test]
+    fn cp_route_matcher_matches_all_api_routes() {
+        let mappings = cp_route_actions().unwrap();
+        let matcher = RouteMatcher::new(&mappings).unwrap();
+
+        // (method, path, expected_action)
+        let cases: &[(&str, &str, &str)] = &[
+            ("POST", "/api/v1/organizations", "cp:organization:create"),
+            ("GET", "/api/v1/organizations", "cp:organization:read"),
+            (
+                "GET",
+                "/api/v1/organizations/org-123",
+                "cp:organization:read",
+            ),
+            (
+                "PUT",
+                "/api/v1/organizations/org-123",
+                "cp:organization:update",
+            ),
+            (
+                "DELETE",
+                "/api/v1/organizations/org-123",
+                "cp:organization:delete",
+            ),
+            (
+                "GET",
+                "/api/v1/organizations/org-123/proxy-config",
+                "cp:proxy-config:read",
+            ),
+            (
+                "POST",
+                "/api/v1/organizations/org-123/keys",
+                "cp:key:generate",
+            ),
+            ("GET", "/api/v1/organizations/org-123/keys", "cp:key:read"),
+            (
+                "DELETE",
+                "/api/v1/organizations/org-123/keys/key-456",
+                "cp:key:revoke",
+            ),
+        ];
+
+        for &(method, path, expected_action) in cases {
+            let matched = matcher
+                .match_request(method, path)
+                .unwrap_or_else(|| panic!("{method} {path} should match a route"));
+            assert_eq!(
+                matched.action().to_string(),
+                expected_action,
+                "{method} {path}: expected action {expected_action}, got {}",
+                matched.action()
+            );
+        }
+    }
 }

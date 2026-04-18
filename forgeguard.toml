@@ -28,10 +28,14 @@ policy_store_id = "op://forgeguard-prod/verified-permissions/policy-store-id"
 # User (memberOfTypes: ["Group"]) and Group are always implicit.
 
 [schema]
-namespace = "ForgeGuard"
-actions = ["proxy-config:read", "organization:delete", "member:promote-owner"]
+namespace = "forgeguard"
+actions = ["cp-proxy-config-read", "cp-organization-delete", "cp-member-promote-owner"]
 
-[schema.entities.Organization]
+[schema.entities.User.attributes]
+org_id = "String"
+
+[schema.entities.Organization.attributes]
+org_id = "String"
 
 [schema.entities.Machine.attributes]
 org_id = "String"
@@ -55,17 +59,17 @@ resource_attribute = "org_id"
 [[policies]]
 name = "member"
 description = "Read-only org access"
-allow = ["organization:read", "config:read"]
+allow = ["cp-organization-read", "cp-key-read", "cp-config-read"]
 
 [[policies]]
 name = "admin"
 description = "Org management without deletion or owner promotion"
 inherits = ["member"]
 allow = [
-  "organization:update",
-  "member:invite", "member:remove", "member:change-role",
-  "config:write",
-  "key:generate", "key:revoke",
+  "cp-organization-create", "cp-organization-update",
+  "cp-member-invite", "cp-member-remove", "cp-member-change-role",
+  "cp-config-write",
+  "cp-key-generate", "cp-key-revoke",
 ]
 
 # ---------------------------------------------------------------------------
@@ -78,8 +82,8 @@ name = "machine-proxy-config-read"
 description = "Machine principals can read their own org proxy config"
 body = """
 permit(
-  principal is ForgeGuard::Machine,
-  action == ForgeGuard::Action::"proxy-config:read",
+  principal is forgeguard::Machine,
+  action == forgeguard::Action::"cp-proxy-config-read",
   resource
 ) when { resource.org_id == principal.org_id };
 """
@@ -96,17 +100,19 @@ body = """
 permit(
   principal == ?principal,
   action in [
-    ForgeGuard::Action::"organization:read",
-    ForgeGuard::Action::"organization:update",
-    ForgeGuard::Action::"organization:delete",
-    ForgeGuard::Action::"member:invite",
-    ForgeGuard::Action::"member:remove",
-    ForgeGuard::Action::"member:change-role",
-    ForgeGuard::Action::"member:promote-owner",
-    ForgeGuard::Action::"config:read",
-    ForgeGuard::Action::"config:write",
-    ForgeGuard::Action::"key:generate",
-    ForgeGuard::Action::"key:revoke"
+    forgeguard::Action::"cp-organization-create",
+    forgeguard::Action::"cp-organization-read",
+    forgeguard::Action::"cp-organization-update",
+    forgeguard::Action::"cp-organization-delete",
+    forgeguard::Action::"cp-member-invite",
+    forgeguard::Action::"cp-member-remove",
+    forgeguard::Action::"cp-member-change-role",
+    forgeguard::Action::"cp-member-promote-owner",
+    forgeguard::Action::"cp-config-read",
+    forgeguard::Action::"cp-config-write",
+    forgeguard::Action::"cp-key-read",
+    forgeguard::Action::"cp-key-generate",
+    forgeguard::Action::"cp-key-revoke"
   ],
   resource == ?resource
 );

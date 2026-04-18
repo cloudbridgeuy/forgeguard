@@ -46,4 +46,8 @@ pub(crate) struct Cli {
     /// Cognito app client ID for audience validation (optional).
     #[arg(long, env = "FORGEGUARD_CP_AUDIENCE")]
     pub audience: Option<String>,
+
+    /// Verified Permissions policy store ID (required when --jwks-url is set).
+    #[arg(long, env = "FORGEGUARD_CP_POLICY_STORE_ID")]
+    pub policy_store_id: Option<String>,
 }

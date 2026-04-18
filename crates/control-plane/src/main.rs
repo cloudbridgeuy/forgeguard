@@ -35,8 +35,16 @@ async fn main() {
 async fn run(cli: Cli) -> color_eyre::Result<()> {
     let auth = match (cli.jwks_url, cli.issuer) {
         (Some(jwks_url), Some(issuer)) => {
+            let policy_store_id = cli.policy_store_id.ok_or_else(|| {
+                color_eyre::eyre::eyre!("--policy-store-id is required when --jwks-url is set")
+            })?;
             tracing::info!("JWT authentication enabled");
-            Some(AuthConfig::new(&jwks_url, issuer, cli.audience)?)
+            Some(AuthConfig::new(
+                &jwks_url,
+                issuer,
+                cli.audience,
+                policy_store_id,
+            )?)
         }
         (Some(_), None) => {
             return Err(color_eyre::eyre::eyre!(
