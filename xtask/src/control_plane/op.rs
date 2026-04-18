@@ -36,6 +36,25 @@ pub(crate) fn store_in_op(
     op_item_edit(vault, item, &field_assignment, op_account)
 }
 
+/// Read a single field from 1Password via `op read`.
+pub(crate) fn read_op(
+    vault: &str,
+    item: &str,
+    field: &str,
+    op_account: Option<&str>,
+) -> Result<String> {
+    let reference = format!("op://{vault}/{item}/{field}");
+    let mut args = vec!["read".to_string(), reference.clone()];
+    if let Some(account) = op_account {
+        args.push("--account".to_string());
+        args.push(account.to_string());
+    }
+    let value = duct::cmd("op", &args)
+        .read()
+        .with_context(|| format!("failed to read {reference} from 1Password"))?;
+    Ok(value.trim().to_string())
+}
+
 fn op_item_edit(
     vault: &str,
     item: &str,

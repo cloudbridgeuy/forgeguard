@@ -35,7 +35,7 @@ export class CognitoStack extends cdk.Stack {
     this.appClient = this.userPool.addClient("DashboardClient", {
       userPoolClientName: `forgeguard-${props.environment}-dashboard`,
       generateSecret: false,
-      authFlows: { userSrp: true },
+      authFlows: { userSrp: true, adminUserPassword: true },
       oAuth: {
         flows: { authorizationCodeGrant: true },
         scopes: [

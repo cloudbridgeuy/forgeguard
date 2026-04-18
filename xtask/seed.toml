@@ -1,0 +1,37 @@
+[[organization]]
+org_id = "org-acme"
+name = "Acme Corp"
+
+[[organization]]
+org_id = "org-globex"
+name = "Globex Corporation"
+
+[[user]]
+username = "acme-admin"
+email = "admin@acme.forgeguard.dev"
+group = "admin"
+org_id = "org-acme"
+
+[[user]]
+username = "acme-member"
+email = "member@acme.forgeguard.dev"
+group = "member"
+org_id = "org-acme"
+
+[[user]]
+username = "acme-owner"
+email = "owner@acme.forgeguard.dev"
+group = "owner"
+org_id = "org-acme"
+
+[[user]]
+username = "globex-admin"
+email = "admin@globex.forgeguard.dev"
+group = "admin"
+org_id = "org-globex"
+
+[[user]]
+username = "globex-member"
+email = "member@globex.forgeguard.dev"
+group = "member"
+org_id = "org-globex"
