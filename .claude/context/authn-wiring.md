@@ -13,10 +13,12 @@ issuer   = "https://cognito-idp.<region>.amazonaws.com/<pool>"
 # Optional overrides (sensible defaults provided):
 # audience = "client-id"
 # user_id_claim = "sub"
-# tenant_claim = "custom:org_id"
-# groups_claim = "cognito:groups"
 # cache_ttl_secs = 3600
 ```
+
+JWT resolution is identity-only: the token proves `sub`. Org context
+(`tenant_id`) and group membership are resolved per-request from the
+`X-ForgeGuard-Org-Id` header + DynamoDB membership lookup, not from JWT claims.
 
 ### `[[api_keys]]` — Static API Keys (demo/dev only)
 
