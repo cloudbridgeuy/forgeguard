@@ -1,0 +1,23 @@
+{
+  "tableName": "forgeguard-{env}-orgs",
+  "partitionKey": "PK",
+  "sortKey": "SK",
+  "itemTypes": {
+    "org": {
+      "pk": "ORG#{org_id}",
+      "sk": "META",
+      "attributes": {
+        "name": { "type": "S", "required": true },
+        "status": { "type": "S", "required": true },
+        "created_at": { "type": "S", "required": true },
+        "updated_at": { "type": "S", "required": true },
+        "cognito_pool_id": { "type": "S", "required": false },
+        "cognito_jwks_url": { "type": "S", "required": false },
+        "policy_store_id": { "type": "S", "required": false },
+        "config": { "type": "S", "required": true, "format": "json" },
+        "etag": { "type": "S", "required": true },
+        "signing_keys": { "type": "S", "required": false, "format": "json" }
+      }
+    }
+  }
+}

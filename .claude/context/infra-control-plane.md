@@ -73,13 +73,13 @@ All flags use clap's `env` attribute — precedence is: CLI flag > env var > def
 ### DynamoDB Global Table (`forgeguard-{env}-dynamodb`)
 
 - **Table name:** `forgeguard-{env}-orgs`
-- **Keys:** `PK` (String), `SK` (String) — single-table design, defined in `infra/control-plane/schema/dynamodb.json`
+- **Keys:** `PK` (String), `SK` (String) — single-table design, defined in `infra/control-plane/schema/forgeguard-orgs.json`
 - **Billing:** on-demand (PAY_PER_REQUEST)
 - **Removal policy:** RETAIN (always — this is prod data)
 - **Replicas:** us-east-1, us-east-2, us-west-2 (primary region auto-excluded from replica list)
 - **Tags:** `project=forgeguard`, `environment={env}`
 - **Outputs:** TableName, TableArn
-- **Schema source of truth:** `infra/control-plane/schema/dynamodb.json` — consumed by CDK (TypeScript `import`) and Rust (`include_str!` at compile time). Both CDK and DynamoDB integration tests read key names from this single file to prevent drift.
+- **Schema source of truth:** `infra/control-plane/schema/forgeguard-orgs.json` — consumed by CDK (TypeScript `import`) and Rust (`include_str!` at compile time). Both CDK and DynamoDB integration tests read key names from this single file to prevent drift.
 
 ### Cognito User Pool (`forgeguard-{env}-cognito`)
 

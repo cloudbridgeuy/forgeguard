@@ -1,7 +1,7 @@
 import * as cdk from "aws-cdk-lib";
 import { aws_dynamodb as dynamodb } from "aws-cdk-lib";
 import { Construct } from "constructs";
-import schema from "../schema/dynamodb.json";
+import schema from "../schema/forgeguard-orgs.json";
 
 interface DynamoDbStackProps extends cdk.StackProps {
   environment: string;

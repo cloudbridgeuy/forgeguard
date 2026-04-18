@@ -8,6 +8,7 @@ mod lambda;
 pub(crate) mod lambda_core;
 pub(crate) mod op;
 pub(crate) mod op_core;
+pub(crate) mod schema;
 mod test;
 
 use clap::{Args, Subcommand};

@@ -19,6 +19,7 @@ use serde::Deserialize;
 use super::dynamo_local::{
     detect_container_runtime, discover_port, start_container, wait_for_dynamodb, ContainerGuard,
 };
+use super::schema::orgs_schema;
 
 // ---------------------------------------------------------------------------
 // CLI
@@ -85,7 +86,11 @@ async fn build_client(port: u16) -> Result<Client> {
 }
 
 /// Create the DynamoDB table with PK (HASH) + SK (RANGE) on PAY_PER_REQUEST.
+///
+/// Key attribute names are read from the shared schema file to prevent drift.
 async fn create_table(client: &Client, table: &str) -> Result<()> {
+    let schema = orgs_schema();
+
     println!("Creating DynamoDB table '{table}'...");
 
     client
@@ -93,31 +98,31 @@ async fn create_table(client: &Client, table: &str) -> Result<()> {
         .table_name(table)
         .attribute_definitions(
             AttributeDefinition::builder()
-                .attribute_name("PK")
+                .attribute_name(&schema.partition_key)
                 .attribute_type(ScalarAttributeType::S)
                 .build()
-                .context("failed to build PK attribute definition")?,
+                .context("failed to build partition key attribute definition")?,
         )
         .attribute_definitions(
             AttributeDefinition::builder()
-                .attribute_name("SK")
+                .attribute_name(&schema.sort_key)
                 .attribute_type(ScalarAttributeType::S)
                 .build()
-                .context("failed to build SK attribute definition")?,
+                .context("failed to build sort key attribute definition")?,
         )
         .key_schema(
             KeySchemaElement::builder()
-                .attribute_name("PK")
+                .attribute_name(&schema.partition_key)
                 .key_type(KeyType::Hash)
                 .build()
-                .context("failed to build PK key schema")?,
+                .context("failed to build partition key schema")?,
         )
         .key_schema(
             KeySchemaElement::builder()
-                .attribute_name("SK")
+                .attribute_name(&schema.sort_key)
                 .key_type(KeyType::Range)
                 .build()
-                .context("failed to build SK key schema")?,
+                .context("failed to build sort key schema")?,
         )
         .billing_mode(BillingMode::PayPerRequest)
         .send()
@@ -130,11 +135,17 @@ async fn create_table(client: &Client, table: &str) -> Result<()> {
 
 /// Read the seed file and insert each organization into DynamoDB.
 async fn seed_organizations(client: &Client, table: &str, seed_path: &str) -> Result<()> {
+    let schema = orgs_schema();
     let seed_path = Path::new(seed_path);
     let raw = std::fs::read_to_string(seed_path)
         .with_context(|| format!("failed to read seed file: {}", seed_path.display()))?;
 
     let seed: SeedFile = serde_json::from_str(&raw).context("failed to parse seed JSON")?;
+
+    let org_type = schema
+        .item_types
+        .get("org")
+        .ok_or_else(|| eyre::eyre!("missing 'org' item type in schema"))?;
 
     let now = chrono::Utc::now().to_rfc3339();
 
@@ -148,16 +159,19 @@ async fn seed_organizations(client: &Client, table: &str, seed_path: &str) -> Re
         // placeholder is fine — it gets recomputed on the next update.
         let etag = format!("\"{:016x}\"", 0u64);
 
+        let pk_value = org_type.pk.replace("{org_id}", org_id);
+        let sk_value = &org_type.sk;
+
         client
             .put_item()
             .table_name(table)
             .item(
-                "PK",
-                aws_sdk_dynamodb::types::AttributeValue::S(format!("ORG#{org_id}")),
+                &schema.partition_key,
+                aws_sdk_dynamodb::types::AttributeValue::S(pk_value),
             )
             .item(
-                "SK",
-                aws_sdk_dynamodb::types::AttributeValue::S("META".to_string()),
+                &schema.sort_key,
+                aws_sdk_dynamodb::types::AttributeValue::S(sk_value.clone()),
             )
             .item(
                 "org_id",

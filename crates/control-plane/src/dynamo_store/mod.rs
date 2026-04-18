@@ -4,8 +4,8 @@
 //! control-plane binary.
 //!
 //! Key attribute names (`PK`, `SK`) are read from the shared schema file
-//! at `infra/control-plane/schema/dynamodb.json` — the single source of
-//! truth consumed by both CDK (TypeScript) and Rust.
+//! at `infra/control-plane/schema/forgeguard-orgs.json` — the single source
+//! of truth consumed by both CDK (TypeScript) and Rust.
 
 use std::collections::HashMap;
 
@@ -32,7 +32,8 @@ struct KeySchema {
 }
 
 /// Schema JSON baked in at compile time. Build fails if the file is missing.
-const SCHEMA_JSON: &str = include_str!("../../../../infra/control-plane/schema/dynamodb.json");
+const SCHEMA_JSON: &str =
+    include_str!("../../../../infra/control-plane/schema/forgeguard-orgs.json");
 
 fn key_schema() -> &'static KeySchema {
     use std::sync::OnceLock;
@@ -46,7 +47,7 @@ fn key_schema() -> &'static KeySchema {
             Err(e) => {
                 // OnceLock requires a value, not a Result.
                 // This is a compile-time-embedded constant; log and abort.
-                tracing::error!("BUG: dynamodb.json schema is invalid: {e}");
+                tracing::error!("BUG: forgeguard-orgs.json schema is invalid: {e}");
                 std::process::abort();
             }
         }
