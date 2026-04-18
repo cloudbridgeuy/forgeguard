@@ -15,6 +15,7 @@ Authentication and authorization are handled by the `forgeguard-axum` middleware
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/health` | Health check -- returns `{"status": "ok"}` |
+| `GET` | `/metrics` | Prometheus metrics (anonymous, no auth) |
 | `POST` | `/api/v1/organizations` | Create organization (status: Draft) |
 | `GET` | `/api/v1/organizations` | List organizations (paginated: `?offset=&limit=`) |
 | `GET` | `/api/v1/organizations/{org_id}` | Get organization details |
@@ -105,10 +106,15 @@ on the organization's proxy config:
 - `PUT /api/v1/organizations/{org_id}` with `If-Match: <etag>` writes only if
   the stored etag still matches; otherwise it returns **412 Precondition Failed**
   with the current etag in the response body and `ETag` header.
+- Pass `If-Match: *` to write against any current representation — matches
+  Configured orgs unconditionally, fails closed (412) on Draft orgs.
 - `PUT` without `If-Match` preserves today's last-write-wins behaviour so that
   CLI and script callers are not broken.
 - Name-only `PUT` bodies (no `config` field) skip the etag check — names are
-  cosmetic and not covered by optimistic locking.
+  cosmetic and not covered by optimistic locking (wildcard included).
+- `POST /api/v1/organizations` with a `config` field returns the new org's
+  `ETag` header in the 201 response, so first-update callers can skip a
+  pre-flight GET.
 
 ForgeGuard-owned callers (`forgeguard_cli`, dashboard, xtask) should send
 `If-Match` on every PUT. Absence is tolerated only for ad-hoc external callers.
@@ -125,9 +131,35 @@ curl -is -H 'x-api-key: test-key' -H "If-Match: $ETAG" \
 # 200 OK on match, 412 Precondition Failed on mismatch.
 ```
 
+To write unconditionally against any configured org:
+
+```sh
+curl -is -H 'x-api-key: test-key' -H 'If-Match: *' \
+  -H 'content-type: application/json' \
+  -X PUT http://localhost:3001/api/v1/organizations/org-acme \
+  -d '{"config": { ... }}'
+# 200 OK for Configured orgs, 412 for Draft orgs.
+```
+
 Both backends (`--store=memory` and `--store=dynamodb`) enforce `If-Match`
 identically as of V3. Exercise the Dynamo path locally via
 `cargo xtask control-plane test`.
+
+### 5. Metrics
+
+The control plane exposes Prometheus metrics on `GET /metrics` (anonymous, no
+auth). 412 responses are counted with a reason label:
+
+```sh
+curl -s http://localhost:3001/metrics | grep put_org_412_total
+# forgeguard_control_plane_put_org_412_total{reason="draft_fail_closed"} 0
+# forgeguard_control_plane_put_org_412_total{reason="stale_etag"} 0
+# forgeguard_control_plane_put_org_412_total{reason="wildcard_on_draft"} 0
+```
+
+The `update_org` tracing span also carries a `precondition_reason` attribute
+mirroring the `reason` label, enabling per-request attribution via structured
+logs without adding an `org_id` label to the counter (cardinality risk).
 
 ### CLI Options
 
