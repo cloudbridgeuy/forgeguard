@@ -14,7 +14,7 @@ use forgeguard_core::{GroupName, OrganizationId, UserId};
 /// Carries the list of [`GroupName`]s the user belongs to within the
 /// organization.  An empty list is valid — the user is a member but has no
 /// groups assigned.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Membership {
     groups: Vec<GroupName>,
 }
