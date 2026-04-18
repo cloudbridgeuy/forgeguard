@@ -13,6 +13,8 @@ export class DynamoDbStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: DynamoDbStackProps) {
     super(scope, id, props);
 
+    const GSI1_INDEX_NAME = "GSI1";
+
     // Exclude the primary region from the replica list to avoid CDK errors.
     const primaryRegion = cdk.Stack.of(this).region;
     const allReplicaRegions = ["us-east-1", "us-east-2", "us-west-2"];
@@ -29,7 +31,7 @@ export class DynamoDbStack extends cdk.Stack {
       dynamoStream: dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
       globalSecondaryIndexes: [
         {
-          indexName: "GSI1",
+          indexName: GSI1_INDEX_NAME,
           partitionKey: { name: schema.sortKey, type: dynamodb.AttributeType.STRING },
           sortKey: { name: schema.partitionKey, type: dynamodb.AttributeType.STRING },
         },
@@ -49,7 +51,7 @@ export class DynamoDbStack extends cdk.Stack {
     });
 
     new cdk.CfnOutput(this, "GSI1Name", {
-      value: "GSI1",
+      value: GSI1_INDEX_NAME,
     });
   }
 }
