@@ -9,10 +9,6 @@ use std::pin::Pin;
 
 use forgeguard_core::{GroupName, OrganizationId, UserId};
 
-// ---------------------------------------------------------------------------
-// Membership
-// ---------------------------------------------------------------------------
-
 /// Result of a membership lookup.
 ///
 /// Carries the list of [`GroupName`]s the user belongs to within the
@@ -37,10 +33,6 @@ impl Membership {
     }
 }
 
-// ---------------------------------------------------------------------------
-// MembershipResolver trait
-// ---------------------------------------------------------------------------
-
 /// Resolves org membership for a user.
 ///
 /// Implementors perform I/O (DynamoDB `GetItem`).  The pipeline calls this
@@ -57,10 +49,6 @@ pub trait MembershipResolver: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = Option<Membership>> + Send + '_>>;
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -76,8 +64,6 @@ mod tests {
     fn new_with_groups_returns_groups() {
         let group = GroupName::new("admin").unwrap();
         let membership = Membership::new(vec![group.clone()]);
-        let groups = membership.groups();
-        assert_eq!(groups.len(), 1);
-        assert_eq!(groups[0], group);
+        assert_eq!(membership.groups(), &[group]);
     }
 }
