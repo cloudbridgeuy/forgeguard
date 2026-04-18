@@ -88,8 +88,7 @@ All flags use clap's `env` attribute — precedence is: CLI flag > env var > def
 - **Sign-in:** username or email
 - **MFA:** optional (TOTP only, no SMS)
 - **Password policy:** 12+ chars, upper, lower, digit, symbol
-- **Custom attribute:** `org_id` (immutable)
-- **Groups:** `admin` (precedence 0), `owner` (10), `member` (20)
+- **Identity-only:** no custom attributes, no Cognito groups. Org context (`tenant_id`) and roles (`groups`) come from DynamoDB membership items keyed by `PK=USER#{sub}, SK=ORG#{org_id}` — see [control-plane.md](./control-plane.md).
 - **App client:** `forgeguard-{env}-dashboard` — no secret, SRP auth, PKCE OAuth
 - **Domain:** `forgeguard-{env}.auth.{region}.amazoncognito.com`
 - **Outputs:** UserPoolId, UserPoolArn, AppClientId, JwksUrl, Issuer

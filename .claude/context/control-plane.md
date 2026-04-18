@@ -148,7 +148,7 @@ Auth is handled by the `forgeguard-axum` middleware, which runs the ForgeGuard a
 
 When auth is enabled, the `IdentityChain` contains resolvers tried in order:
 
-1. `CognitoJwtResolver` — Cognito JWT via `Authorization: Bearer`. Claims mapping: `sub` → user_id, `custom:org_id` → tenant_id, `cognito:groups` → groups. The optional `--audience` flag enables audience claim validation against the Cognito app client ID.
+1. `CognitoJwtResolver` — Cognito JWT via `Authorization: Bearer`. Identity-only mapping: `sub` → user_id. Org context (`tenant_id`) and roles (`groups`) are NOT read from the JWT — they are resolved per-request from the `X-ForgeGuard-Org-Id` header + a DynamoDB membership lookup (see Phase 5b). The optional `--audience` flag enables audience claim validation against the Cognito app client ID.
 2. `Ed25519SignatureResolver` — Ed25519 signed requests from BYOC proxies (see below).
 
 The `AuthConfig` struct (`app.rs`) validates the JWKS URL at construction time (Parse Don't Validate) and is `pub` so `fg-lambdas` can import it. The Lambda binary reads the same config from `FORGEGUARD_CP_JWKS_URL`, `FORGEGUARD_CP_ISSUER`, `FORGEGUARD_CP_AUDIENCE` env vars (injected by the CDK Lambda stack from Cognito stack outputs).
