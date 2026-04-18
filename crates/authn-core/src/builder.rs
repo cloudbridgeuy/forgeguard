@@ -1,7 +1,7 @@
 //! Test builder for Identity.
 
 use chrono::{DateTime, Utc};
-use forgeguard_core::{GroupName, TenantId, UserId};
+use forgeguard_core::{GroupName, PrincipalKind, TenantId, UserId};
 
 use crate::identity::{Identity, IdentityParams};
 
@@ -14,6 +14,7 @@ pub struct IdentityBuilder {
     expiry: Option<DateTime<Utc>>,
     resolver: &'static str,
     extra: Option<serde_json::Value>,
+    principal_kind: PrincipalKind,
 }
 
 impl IdentityBuilder {
@@ -25,6 +26,7 @@ impl IdentityBuilder {
             expiry: None,
             resolver: "test",
             extra: None,
+            principal_kind: PrincipalKind::User,
         }
     }
 
@@ -53,6 +55,11 @@ impl IdentityBuilder {
         self
     }
 
+    pub fn principal_kind(mut self, kind: PrincipalKind) -> Self {
+        self.principal_kind = kind;
+        self
+    }
+
     pub fn build(self) -> Identity {
         Identity::new(IdentityParams {
             user_id: self.user_id,
@@ -61,6 +68,7 @@ impl IdentityBuilder {
             expiry: self.expiry,
             resolver: self.resolver,
             extra: self.extra,
+            principal_kind: self.principal_kind,
         })
     }
 }
@@ -87,6 +95,7 @@ mod tests {
             .resolver("cognito")
             .expiry(expiry)
             .extra(extra.clone())
+            .principal_kind(PrincipalKind::Machine)
             .build();
 
         assert_eq!(identity.user_id().as_str(), "alice");
@@ -97,6 +106,7 @@ mod tests {
         assert_eq!(identity.resolver(), "cognito");
         assert_eq!(identity.expiry().unwrap(), &expiry);
         assert_eq!(identity.extra().unwrap(), &extra);
+        assert_eq!(identity.principal_kind(), PrincipalKind::Machine);
     }
 
     #[test]
@@ -109,5 +119,6 @@ mod tests {
         assert_eq!(identity.resolver(), "test");
         assert!(identity.expiry().is_none());
         assert!(identity.extra().is_none());
+        assert_eq!(identity.principal_kind(), PrincipalKind::User);
     }
 }

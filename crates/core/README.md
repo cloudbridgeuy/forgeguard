@@ -24,6 +24,20 @@ Draft -> PendingProvisioning -> Provisioning -> Active -> Suspended -> Deleting 
 
 Valid transitions are enforced by `OrgStatus::can_transition_to()`. `Organization::transition_to()` returns `Err` for invalid transitions.
 
+## Principal Types
+
+| Type | Module | Purpose |
+|------|--------|---------|
+| `PrincipalKind` | `action` | `User` (default) or `Machine`. Drives Cedar entity type selection in VP calls. |
+| `PrincipalRef` | `action` | Principal reference: wraps a `UserId` + `PrincipalKind`. Constructed via `PrincipalRef::new()` (User) or `PrincipalRef::machine()` (Machine). |
+
+`PrincipalKind` determines which Cedar entity type is used when authorizing with Verified Permissions:
+
+- `User` → `{ns}::user` (e.g. `forgeguard::user`)
+- `Machine` → `{ns}::Machine` (e.g. `forgeguard::Machine`)
+
+Machine principals carry an `org_id` attribute and have no group parents. The kind is set at resolver time (Ed25519 → Machine; Cognito JWT and static API key → User) and propagated through `Identity` → `build_query()` → `PrincipalRef`.
+
 ## Cedar types
 
 The crate provides Cedar-specific types for policy and schema generation:

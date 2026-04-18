@@ -219,7 +219,7 @@ async fn execute_scenario(
     // Build principal entity identifier.
     let principal_fgrn = principal_ref.to_fgrn(project, &tenant);
     let principal_entity = EntityIdentifier::builder()
-        .entity_type(PrincipalRef::vp_entity_type(project))
+        .entity_type(principal_ref.vp_entity_type(project))
         .entity_id(principal_fgrn.as_vp_entity_id())
         .build()
         .wrap_err("failed to build principal entity")?;
@@ -261,7 +261,7 @@ async fn execute_scenario(
 
     tracing::warn!(
         test = %scenario.name,
-        principal_type = %PrincipalRef::vp_entity_type(project),
+        principal_type = %principal_ref.vp_entity_type(project),
         principal_id = %principal_fgrn.as_vp_entity_id(),
         action_type = %scenario.action.vp_action_type(project),
         action_id = %scenario.action.vp_action_id(),
@@ -298,6 +298,10 @@ async fn execute_scenario(
 // ---------------------------------------------------------------------------
 
 /// Build VP inline entities: user entity (with group parents) + group entities.
+///
+/// Note: this function assumes `principal` is always a `PrincipalKind::User`.
+/// Machine principals are not yet supported in test scenarios and will produce
+/// incorrect entities (group parents attached to a machine entity).
 fn build_inline_entities(
     principal: &PrincipalRef,
     groups: &[GroupName],
@@ -323,7 +327,7 @@ fn build_inline_entities(
     // Build user entity with group parents.
     let mut user_builder = EntityItem::builder().identifier(
         EntityIdentifier::builder()
-            .entity_type(PrincipalRef::vp_entity_type(project))
+            .entity_type(principal.vp_entity_type(project))
             .entity_id(principal_fgrn.as_vp_entity_id())
             .build()
             .wrap_err("failed to build user entity identifier")?,

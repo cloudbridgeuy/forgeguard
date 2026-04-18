@@ -30,7 +30,10 @@ impl CacheKey {
 
 /// Build a deterministic cache key from a [`PolicyQuery`].
 ///
-/// Format: `{principal_user_id}|{action}|{resource_or_none}|{tenant_or_none}|{sorted_groups}`
+/// Format: `{principal_kind}|{principal_user_id}|{action}|{resource_or_none}|{tenant_or_none}|{sorted_groups}`
+///
+/// `principal_kind` is `"user"` or `"machine"`, preventing collisions between
+/// a Machine and a User principal that happen to share the same user ID.
 ///
 /// Groups are sorted alphabetically and comma-separated. Two queries
 /// with the same user/action/resource but different groups produce
@@ -39,6 +42,12 @@ impl CacheKey {
 /// Uses `Display` representations of the typed IDs so we don't need `Hash`
 /// on every core type.
 pub fn build_cache_key(query: &PolicyQuery) -> CacheKey {
+    use forgeguard_core::PrincipalKind;
+
+    let kind_part = match query.principal().kind() {
+        PrincipalKind::User => "user",
+        PrincipalKind::Machine => "machine",
+    };
     let principal_id = query.principal().user_id().as_str();
     let action = query.action().to_string();
 
@@ -66,7 +75,7 @@ pub fn build_cache_key(query: &PolicyQuery) -> CacheKey {
     };
 
     CacheKey(format!(
-        "{principal_id}|{action}|{resource_part}|{tenant_part}|{groups_part}"
+        "{kind_part}|{principal_id}|{action}|{resource_part}|{tenant_part}|{groups_part}"
     ))
 }
 
@@ -339,6 +348,26 @@ mod tests {
         let k1 = build_cache_key(&q1);
         let k2 = build_cache_key(&q2);
         assert_ne!(k1, k2);
+    }
+
+    #[test]
+    fn same_user_id_different_principal_kind_produces_different_keys() {
+        use forgeguard_core::PrincipalRef;
+
+        let user_id = UserId::new("shared-id").unwrap();
+        let user_principal = PrincipalRef::new(user_id.clone());
+        let machine_principal = PrincipalRef::machine(user_id);
+        let action = QualifiedAction::parse("todo:list:read").unwrap();
+
+        let q_user = PolicyQuery::new(user_principal, action.clone(), None, PolicyContext::new());
+        let q_machine = PolicyQuery::new(machine_principal, action, None, PolicyContext::new());
+
+        let k_user = build_cache_key(&q_user);
+        let k_machine = build_cache_key(&q_machine);
+
+        assert_ne!(k_user, k_machine);
+        assert!(k_user.as_str().starts_with("user|shared-id|"));
+        assert!(k_machine.as_str().starts_with("machine|shared-id|"));
     }
 
     #[test]

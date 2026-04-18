@@ -196,7 +196,7 @@ pub fn inject_client_ip(ip: IpAddr) -> (String, String) {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use forgeguard_authn_core::IdentityParams;
-    use forgeguard_core::{GroupName, TenantId, UserId};
+    use forgeguard_core::{GroupName, PrincipalKind, TenantId, UserId};
 
     use super::*;
 
@@ -208,6 +208,7 @@ mod tests {
             expiry: None,
             resolver: "jwt",
             extra: None,
+            principal_kind: PrincipalKind::User,
         })
     }
 

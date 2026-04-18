@@ -3,7 +3,7 @@
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 
-use forgeguard_core::{GroupName, TenantId, UserId};
+use forgeguard_core::{GroupName, PrincipalKind, TenantId, UserId};
 
 /// A resolved, trusted identity. Produced only by IdentityResolver implementations.
 /// Protocol adapters and the authz layer consume this without knowing how it was produced.
@@ -19,6 +19,8 @@ pub struct Identity {
     resolver: &'static str,
     /// Resolver-specific claims preserved for custom policy evaluation.
     extra: Option<serde_json::Value>,
+    /// Whether this identity represents a human user or a machine/service.
+    principal_kind: PrincipalKind,
 }
 
 /// Parameters for constructing an [`Identity`].
@@ -29,6 +31,7 @@ pub struct IdentityParams {
     pub expiry: Option<DateTime<Utc>>,
     pub resolver: &'static str,
     pub extra: Option<serde_json::Value>,
+    pub principal_kind: PrincipalKind,
 }
 
 impl Identity {
@@ -42,6 +45,7 @@ impl Identity {
             expiry: params.expiry,
             resolver: params.resolver,
             extra: params.extra,
+            principal_kind: params.principal_kind,
         }
     }
 
@@ -67,6 +71,10 @@ impl Identity {
 
     pub fn extra(&self) -> Option<&serde_json::Value> {
         self.extra.as_ref()
+    }
+
+    pub fn principal_kind(&self) -> PrincipalKind {
+        self.principal_kind
     }
 
     /// Whether this identity has expired relative to `now`.
@@ -95,6 +103,7 @@ mod tests {
             expiry,
             resolver: "test-resolver",
             extra,
+            principal_kind: PrincipalKind::User,
         })
     }
 
@@ -121,6 +130,7 @@ mod tests {
             expiry: None,
             resolver: "test-resolver",
             extra: None,
+            principal_kind: PrincipalKind::User,
         });
         assert!(id.tenant_id().is_none());
     }
@@ -145,6 +155,7 @@ mod tests {
             expiry: None,
             resolver: "test-resolver",
             extra: None,
+            principal_kind: PrincipalKind::User,
         });
         assert!(id.groups().is_empty());
     }
@@ -214,6 +225,28 @@ mod tests {
         assert!(!id.is_expired(now));
     }
 
+    // -- PrincipalKind tests --------------------------------------------------
+
+    #[test]
+    fn identity_principal_kind_accessor() {
+        let id = Identity::new(IdentityParams {
+            user_id: UserId::new("machine-key").unwrap(),
+            tenant_id: None,
+            groups: vec![],
+            expiry: None,
+            resolver: "ed25519",
+            extra: None,
+            principal_kind: PrincipalKind::Machine,
+        });
+        assert_eq!(id.principal_kind(), PrincipalKind::Machine);
+    }
+
+    #[test]
+    fn identity_default_params_is_user() {
+        let id = make_identity(None, None);
+        assert_eq!(id.principal_kind(), PrincipalKind::User);
+    }
+
     // -- Serialize test -------------------------------------------------------
 
     #[test]
@@ -229,5 +262,6 @@ mod tests {
         assert_eq!(val["resolver"], "test-resolver");
         assert_eq!(val["extra"]["custom"], true);
         assert!(val["expiry"].is_null());
+        assert_eq!(val["principal_kind"], "user");
     }
 }

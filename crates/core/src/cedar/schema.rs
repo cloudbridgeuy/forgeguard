@@ -75,6 +75,23 @@ impl CedarAttributeType {
     }
 }
 
+impl TryFrom<&str> for CedarAttributeType {
+    type Error = crate::Error;
+
+    fn try_from(s: &str) -> crate::Result<Self> {
+        match s {
+            "String" => Ok(Self::String),
+            "Long" => Ok(Self::Long),
+            "Boolean" => Ok(Self::Boolean),
+            _ => Err(crate::Error::Parse {
+                field: "attribute type",
+                value: s.to_string(),
+                reason: "must be one of: String, Long, Boolean",
+            }),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // generate_cedar_schema
 // ---------------------------------------------------------------------------
@@ -151,16 +168,16 @@ pub fn generate_cedar_schema(
     // Build entity types object
     let mut entity_types_map = serde_json::Map::new();
 
-    // user always has memberOf group
+    // User always has memberOf Group
     entity_types_map.insert(
-        "user".to_string(),
-        build_entity_type_value("user", Some(&["group".to_string()]), entity_config),
+        "User".to_string(),
+        build_entity_type_value("User", Some(&["Group".to_string()]), entity_config),
     );
 
-    // group always present
+    // Group always present
     entity_types_map.insert(
-        "group".to_string(),
-        build_entity_type_value("group", None, entity_config),
+        "Group".to_string(),
+        build_entity_type_value("Group", None, entity_config),
     );
 
     // Derived entity types
@@ -176,7 +193,7 @@ pub fn generate_cedar_schema(
             action_id.clone(),
             serde_json::json!({
                 "appliesTo": {
-                    "principalTypes": ["user", "group"],
+                    "principalTypes": ["User", "Group"],
                     "resourceTypes": resource_list,
                 }
             }),
@@ -288,8 +305,8 @@ mod tests {
         let ns_obj = parsed.get(ns.as_str()).unwrap().as_object().unwrap();
 
         let entity_types = ns_obj.get("entityTypes").unwrap().as_object().unwrap();
-        assert!(entity_types.contains_key("user"));
-        assert!(entity_types.contains_key("group"));
+        assert!(entity_types.contains_key("User"));
+        assert!(entity_types.contains_key("Group"));
         assert!(entity_types.contains_key("todo__list"));
 
         let actions = ns_obj.get("actions").unwrap().as_object().unwrap();
@@ -298,7 +315,7 @@ mod tests {
         let applies_to = read_list.get("appliesTo").unwrap();
         assert_eq!(
             applies_to.get("principalTypes").unwrap(),
-            &serde_json::json!(["user", "group"])
+            &serde_json::json!(["User", "Group"])
         );
         assert_eq!(
             applies_to.get("resourceTypes").unwrap(),
@@ -325,8 +342,8 @@ mod tests {
         let entity_types = ns_obj.get("entityTypes").unwrap().as_object().unwrap();
         // Only user and group should be present — no entity types from wildcards
         assert_eq!(entity_types.len(), 2);
-        assert!(entity_types.contains_key("user"));
-        assert!(entity_types.contains_key("group"));
+        assert!(entity_types.contains_key("User"));
+        assert!(entity_types.contains_key("Group"));
 
         let actions = ns_obj.get("actions").unwrap().as_object().unwrap();
         assert!(actions.is_empty());
@@ -367,14 +384,14 @@ mod tests {
 
         let entity_types = ns_obj.get("entityTypes").unwrap().as_object().unwrap();
         assert_eq!(entity_types.len(), 2);
-        assert!(entity_types.contains_key("user"));
-        assert!(entity_types.contains_key("group"));
+        assert!(entity_types.contains_key("User"));
+        assert!(entity_types.contains_key("Group"));
 
-        // user always has memberOfTypes: ["group"]
-        let user_obj = entity_types.get("user").unwrap();
+        // User always has memberOfTypes: ["Group"]
+        let user_obj = entity_types.get("User").unwrap();
         assert_eq!(
             user_obj.get("memberOfTypes").unwrap(),
-            &serde_json::json!(["group"])
+            &serde_json::json!(["Group"])
         );
 
         let actions = ns_obj.get("actions").unwrap().as_object().unwrap();
@@ -397,8 +414,8 @@ mod tests {
         let entity_types = ns_obj.get("entityTypes").unwrap().as_object().unwrap();
         assert!(entity_types.contains_key("todo__list"));
         assert!(entity_types.contains_key("todo__item"));
-        assert!(entity_types.contains_key("user"));
-        assert!(entity_types.contains_key("group"));
+        assert!(entity_types.contains_key("User"));
+        assert!(entity_types.contains_key("Group"));
 
         let actions = ns_obj.get("actions").unwrap().as_object().unwrap();
         assert!(actions.contains_key("todo-list-read"));
@@ -506,7 +523,7 @@ mod tests {
     fn schema_user_config_extends_default_member_of() {
         let mut config = HashMap::new();
         config.insert(
-            "user".to_string(),
+            "User".to_string(),
             EntitySchemaConfig::new(vec!["team".to_string()], HashMap::new()),
         );
 
@@ -517,11 +534,11 @@ mod tests {
         let ns_obj = parsed.get(ns.as_str()).unwrap().as_object().unwrap();
         let entity_types = ns_obj.get("entityTypes").unwrap().as_object().unwrap();
 
-        let user = entity_types.get("user").unwrap();
+        let user = entity_types.get("User").unwrap();
         let member_of = user.get("memberOfTypes").unwrap().as_array().unwrap();
-        // Should contain both the default "group" and the configured "team"
+        // Should contain both the default "Group" and the configured "team"
         let member_of_strs: Vec<&str> = member_of.iter().map(|v| v.as_str().unwrap()).collect();
-        assert!(member_of_strs.contains(&"group"), "default group preserved");
+        assert!(member_of_strs.contains(&"Group"), "default Group preserved");
         assert!(member_of_strs.contains(&"team"), "config team added");
     }
 

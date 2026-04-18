@@ -70,7 +70,7 @@ mod tests {
         let query = PolicyQuery::new(principal, action, None, context);
 
         let project = forgeguard_core::ProjectId::new("todo-app").unwrap();
-        assert_eq!(PrincipalRef::vp_entity_type(&project), "todo_app::user");
+        assert_eq!(query.principal().vp_entity_type(&project), "todo_app::User");
         assert_eq!(query.action().to_string(), "todo:list:read");
         assert!(query.resource().is_none());
     }

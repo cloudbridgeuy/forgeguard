@@ -39,6 +39,8 @@ pub(crate) mod known_segments {
         LazyLock::new(|| Segment::try_new("group").unwrap_or_else(|_| unreachable!()));
     pub(crate) static POLICY: LazyLock<Segment> =
         LazyLock::new(|| Segment::try_new("policy").unwrap_or_else(|_| unreachable!()));
+    pub(crate) static MACHINE: LazyLock<Segment> =
+        LazyLock::new(|| Segment::try_new("machine").unwrap_or_else(|_| unreachable!()));
 }
 
 // ---------------------------------------------------------------------------
@@ -166,6 +168,19 @@ impl Fgrn {
             Some(FgrnSegment::from_segment(tenant.as_segment())),
             FgrnSegment::from_segment(&known_segments::IAM),
             FgrnSegment::from_segment(&known_segments::USER),
+            FgrnSegment::from_segment(user_id.as_segment()),
+        )
+    }
+
+    /// Build an FGRN for a machine identity resource.
+    ///
+    /// Format: `fgrn:<project>:<tenant>:iam:machine:<user_id>`
+    pub fn machine(project: &ProjectId, tenant: &TenantId, user_id: &UserId) -> Self {
+        Self::new(
+            Some(FgrnSegment::from_segment(project.as_segment())),
+            Some(FgrnSegment::from_segment(tenant.as_segment())),
+            FgrnSegment::from_segment(&known_segments::IAM),
+            FgrnSegment::from_segment(&known_segments::MACHINE),
             FgrnSegment::from_segment(user_id.as_segment()),
         )
     }

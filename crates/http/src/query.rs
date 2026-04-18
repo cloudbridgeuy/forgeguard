@@ -5,14 +5,14 @@ use std::net::IpAddr;
 use forgeguard_authn_core::Identity;
 use forgeguard_authz_core::context::PolicyContext;
 use forgeguard_authz_core::query::PolicyQuery;
-use forgeguard_core::{PrincipalRef, ProjectId};
+use forgeguard_core::{PrincipalKind, PrincipalRef, ProjectId};
 
 use crate::route::MatchedRoute;
 
 /// Bridge identity + matched route into a policy query.
 ///
 /// Pure function — no I/O. Constructs:
-/// - `PrincipalRef` from `identity.user_id()`
+/// - `PrincipalRef` from `identity.user_id()` and `identity.principal_kind()`
 /// - Action from `matched_route.action()`
 /// - Resource from `matched_route.resource()`
 /// - `PolicyContext` with tenant, groups, IP, and extra claims
@@ -22,7 +22,10 @@ pub fn build_query(
     _project_id: &ProjectId,
     client_ip: Option<IpAddr>,
 ) -> PolicyQuery {
-    let principal = PrincipalRef::new(identity.user_id().clone());
+    let principal = match identity.principal_kind() {
+        PrincipalKind::User => PrincipalRef::new(identity.user_id().clone()),
+        PrincipalKind::Machine => PrincipalRef::machine(identity.user_id().clone()),
+    };
 
     let mut context = PolicyContext::new().with_groups(identity.groups().to_vec());
 
@@ -46,7 +49,7 @@ pub fn build_query(
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use forgeguard_core::{GroupName, ProjectId, QualifiedAction, TenantId, UserId};
+    use forgeguard_core::{GroupName, PrincipalKind, ProjectId, QualifiedAction, TenantId, UserId};
 
     use crate::method::HttpMethod;
     use crate::route::{RouteMapping, RouteMatcher};
@@ -62,6 +65,7 @@ mod tests {
             expiry: None,
             resolver: "jwt",
             extra: None,
+            principal_kind: PrincipalKind::User,
         })
     }
 
@@ -117,6 +121,52 @@ mod tests {
     }
 
     #[test]
+    fn build_query_user_kind() {
+        let routes = vec![RouteMapping::new(
+            HttpMethod::Get,
+            "/users".to_string(),
+            QualifiedAction::parse("todo:list:user").unwrap(),
+            None,
+            None,
+        )];
+        let matcher = RouteMatcher::new(&routes).unwrap();
+        let matched = matcher.match_request("GET", "/users").unwrap();
+        let identity = make_identity(Some("acme-corp"), &[]);
+        let project = ProjectId::new("my-app").unwrap();
+
+        let query = build_query(&identity, &matched, &project, None);
+
+        assert_eq!(query.principal().kind(), PrincipalKind::User);
+    }
+
+    #[test]
+    fn build_query_machine_kind() {
+        let routes = vec![RouteMapping::new(
+            HttpMethod::Get,
+            "/items".to_string(),
+            QualifiedAction::parse("todo:list:item").unwrap(),
+            None,
+            None,
+        )];
+        let matcher = RouteMatcher::new(&routes).unwrap();
+        let matched = matcher.match_request("GET", "/items").unwrap();
+        let identity = Identity::new(IdentityParams {
+            user_id: UserId::new("svc-worker").unwrap(),
+            tenant_id: Some(TenantId::new("acme-corp").unwrap()),
+            groups: vec![],
+            expiry: None,
+            resolver: "ed25519",
+            extra: None,
+            principal_kind: PrincipalKind::Machine,
+        });
+        let project = ProjectId::new("my-app").unwrap();
+
+        let query = build_query(&identity, &matched, &project, None);
+
+        assert_eq!(query.principal().kind(), PrincipalKind::Machine);
+    }
+
+    #[test]
     fn build_query_with_extra_claims() {
         let identity = Identity::new(IdentityParams {
             user_id: UserId::new("alice").unwrap(),
@@ -125,6 +175,7 @@ mod tests {
             expiry: None,
             resolver: "jwt",
             extra: Some(serde_json::json!({"role": "superadmin"})),
+            principal_kind: PrincipalKind::User,
         });
         let routes = vec![RouteMapping::new(
             HttpMethod::Get,

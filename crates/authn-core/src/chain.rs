@@ -42,7 +42,7 @@ mod tests {
     use std::future::Future;
     use std::pin::Pin;
 
-    use forgeguard_core::{GroupName, TenantId, UserId};
+    use forgeguard_core::{GroupName, PrincipalKind, TenantId, UserId};
 
     use crate::identity::IdentityParams;
 
@@ -73,6 +73,7 @@ mod tests {
                 expiry: None,
                 resolver: "bearer-resolver",
                 extra: None,
+                principal_kind: PrincipalKind::User,
             }))))
         }
     }
@@ -100,6 +101,7 @@ mod tests {
                 expiry: None,
                 resolver: "api-key-resolver",
                 extra: None,
+                principal_kind: PrincipalKind::User,
             }))))
         }
     }

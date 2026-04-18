@@ -331,6 +331,9 @@ pub struct ResourceRef {
     namespace: Namespace,
     entity: Entity,
     id: ResourceId,
+    /// Optional Cedar entity type override. When set, `vp_entity_type` uses
+    /// this directly instead of deriving from `namespace`/`entity`.
+    cedar_entity_type: Option<String>,
 }
 
 impl ResourceRef {
@@ -341,16 +344,37 @@ impl ResourceRef {
             namespace: action.namespace().clone(),
             entity: action.entity().clone(),
             id,
+            cedar_entity_type: None,
         }
     }
 
-    /// Verified Permissions entity type: e.g. "todo_app::todo__list"
+    /// Construct with an explicit Cedar entity type override.
+    pub fn from_route_with_entity_type(
+        action: &QualifiedAction,
+        id: ResourceId,
+        cedar_entity_type: String,
+    ) -> Self {
+        Self {
+            namespace: action.namespace().clone(),
+            entity: action.entity().clone(),
+            id,
+            cedar_entity_type: Some(cedar_entity_type),
+        }
+    }
+
+    /// Verified Permissions entity type: e.g. "todo_app::Organization"
     ///
-    /// Uses the VP namespace derived from the project ID and CedarEntityType format.
+    /// When a Cedar entity type override is set, uses it directly prefixed
+    /// with the VP namespace. Otherwise derives from namespace/entity segments.
     pub fn vp_entity_type(&self, project: &ProjectId) -> String {
         let ns = CedarNamespace::from_project(project);
-        let entity_type = CedarEntityType::new(&self.namespace, &self.entity);
-        format!("{}::{}", ns.as_str(), entity_type)
+        match &self.cedar_entity_type {
+            Some(override_type) => format!("{}::{}", ns.as_str(), override_type),
+            None => {
+                let entity_type = CedarEntityType::new(&self.namespace, &self.entity);
+                format!("{}::{}", ns.as_str(), entity_type)
+            }
+        }
     }
 
     /// Build the FGRN for this resource. Used as the Verified Permissions entity ID.
@@ -388,18 +412,50 @@ impl fmt::Display for ResourceRef {
 }
 
 // ---------------------------------------------------------------------------
+// PrincipalKind
+// ---------------------------------------------------------------------------
+
+/// Distinguishes human users from machine principals (service accounts / API keys).
+///
+/// Drives Cedar entity type selection:
+/// - `User`    → `{ns}::User`
+/// - `Machine` → `{ns}::Machine`
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PrincipalKind {
+    /// A human user identity (default).
+    #[default]
+    User,
+    /// A machine identity — service account or Ed25519-signed API key.
+    Machine,
+}
+
+// ---------------------------------------------------------------------------
 // PrincipalRef
 // ---------------------------------------------------------------------------
 
-/// Principal reference — always in the `iam::user` entity type.
+/// Principal reference — carries either a human user or a machine identity.
+#[derive(Debug)]
 pub struct PrincipalRef {
     user_id: UserId,
+    kind: PrincipalKind,
 }
 
 impl PrincipalRef {
-    /// Wrap a user ID as a principal reference.
+    /// Wrap a user ID as a human principal reference (default kind: `User`).
     pub fn new(user_id: UserId) -> Self {
-        Self { user_id }
+        Self {
+            user_id,
+            kind: PrincipalKind::User,
+        }
+    }
+
+    /// Wrap a user ID as a machine principal reference (kind: `Machine`).
+    pub fn machine(user_id: UserId) -> Self {
+        Self {
+            user_id,
+            kind: PrincipalKind::Machine,
+        }
     }
 
     /// Borrow the user ID.
@@ -407,26 +463,43 @@ impl PrincipalRef {
         &self.user_id
     }
 
-    /// Verified Permissions entity type for principals: e.g. "todo_app::user"
-    ///
-    /// Uses the VP namespace derived from the project ID.
-    pub fn vp_entity_type(project: &ProjectId) -> String {
-        let ns = CedarNamespace::from_project(project);
-        format!("{}::user", ns.as_str())
+    /// The kind of this principal.
+    pub fn kind(&self) -> PrincipalKind {
+        self.kind
     }
 
-    /// VP group entity type: e.g. "todo_app::group"
+    /// Verified Permissions entity type for this principal.
+    ///
+    /// - `User`    → `"{ns}::User"`    e.g. `"todo_app::User"`
+    /// - `Machine` → `"{ns}::Machine"` e.g. `"todo_app::Machine"`
+    ///
+    /// Uses the VP namespace derived from the project ID.
+    pub fn vp_entity_type(&self, project: &ProjectId) -> String {
+        let ns = CedarNamespace::from_project(project);
+        match self.kind {
+            PrincipalKind::User => format!("{}::User", ns.as_str()),
+            PrincipalKind::Machine => format!("{}::Machine", ns.as_str()),
+        }
+    }
+
+    /// VP group entity type: e.g. "todo_app::Group"
     ///
     /// Uses the VP namespace derived from the project ID.
     pub fn vp_group_entity_type(project: &ProjectId) -> String {
         let ns = CedarNamespace::from_project(project);
-        format!("{}::group", ns.as_str())
+        format!("{}::Group", ns.as_str())
     }
 
     /// Build the FGRN for this principal. Used as the Verified Permissions entity ID.
     /// Requires tenant because FGRNs include the tenant segment.
+    ///
+    /// - `User`    → `fgrn:<project>:<tenant>:iam:user:<user_id>`
+    /// - `Machine` → `fgrn:<project>:<tenant>:iam:machine:<user_id>`
     pub fn to_fgrn(&self, project: &ProjectId, tenant: &TenantId) -> Fgrn {
-        Fgrn::user(project, tenant, &self.user_id)
+        match self.kind {
+            PrincipalKind::User => Fgrn::user(project, tenant, &self.user_id),
+            PrincipalKind::Machine => Fgrn::machine(project, tenant, &self.user_id),
+        }
     }
 }
 
@@ -617,9 +690,34 @@ mod tests {
     // -- PrincipalRef --------------------------------------------------------
 
     #[test]
-    fn principal_ref_vp_entity_type() {
+    fn vp_entity_type_user() {
         let project = ProjectId::new("todo-app").unwrap();
-        assert_eq!(PrincipalRef::vp_entity_type(&project), "todo_app::user");
+        let principal = PrincipalRef::new(UserId::new("alice").unwrap());
+        assert_eq!(principal.vp_entity_type(&project), "todo_app::User");
+    }
+
+    #[test]
+    fn vp_entity_type_machine() {
+        let project = ProjectId::new("todo-app").unwrap();
+        let principal = PrincipalRef::machine(UserId::new("svc-worker").unwrap());
+        assert_eq!(principal.vp_entity_type(&project), "todo_app::Machine");
+    }
+
+    #[test]
+    fn principal_ref_default_is_user() {
+        let principal = PrincipalRef::new(UserId::new("alice").unwrap());
+        assert_eq!(principal.kind(), PrincipalKind::User);
+    }
+
+    #[test]
+    fn principal_ref_machine_constructor() {
+        let principal = PrincipalRef::machine(UserId::new("svc-worker").unwrap());
+        assert_eq!(principal.kind(), PrincipalKind::Machine);
+    }
+
+    #[test]
+    fn principal_kind_default_is_user() {
+        assert_eq!(PrincipalKind::default(), PrincipalKind::User);
     }
 
     #[test]
@@ -627,7 +725,7 @@ mod tests {
         let project = ProjectId::new("todo-app").unwrap();
         assert_eq!(
             PrincipalRef::vp_group_entity_type(&project),
-            "todo_app::group"
+            "todo_app::Group"
         );
     }
 
@@ -639,6 +737,19 @@ mod tests {
         let principal = PrincipalRef::new(user_id);
         let fgrn = principal.to_fgrn(&project, &tenant);
         assert_eq!(fgrn.to_string(), "fgrn:acme-app:acme-corp:iam:user:alice");
+    }
+
+    #[test]
+    fn principal_ref_machine_to_fgrn() {
+        let project = ProjectId::new("acme-app").unwrap();
+        let tenant = TenantId::new("acme-corp").unwrap();
+        let user_id = UserId::new("svc-worker").unwrap();
+        let principal = PrincipalRef::machine(user_id);
+        let fgrn = principal.to_fgrn(&project, &tenant);
+        assert_eq!(
+            fgrn.to_string(),
+            "fgrn:acme-app:acme-corp:iam:machine:svc-worker"
+        );
     }
 
     // -- ResourceRef ---------------------------------------------------------

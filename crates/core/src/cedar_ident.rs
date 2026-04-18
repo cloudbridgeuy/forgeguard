@@ -102,14 +102,14 @@ impl CedarEntityType {
         Self(format!("{}__{}", ns_ident.as_str(), entity_ident.as_str()))
     }
 
-    /// The `user` entity type (no namespace prefix).
+    /// The `User` entity type (no namespace prefix).
     pub fn user() -> Self {
-        Self("user".to_string())
+        Self("User".to_string())
     }
 
-    /// The `group` entity type (no namespace prefix).
+    /// The `Group` entity type (no namespace prefix).
     pub fn group() -> Self {
-        Self("group".to_string())
+        Self("Group".to_string())
     }
 
     /// Borrow the inner string.
@@ -241,12 +241,12 @@ mod tests {
 
     #[test]
     fn cedar_entity_type_user() {
-        assert_eq!(CedarEntityType::user().as_str(), "user");
+        assert_eq!(CedarEntityType::user().as_str(), "User");
     }
 
     #[test]
     fn cedar_entity_type_group() {
-        assert_eq!(CedarEntityType::group().as_str(), "group");
+        assert_eq!(CedarEntityType::group().as_str(), "Group");
     }
 
     #[test]

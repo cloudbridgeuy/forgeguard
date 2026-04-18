@@ -18,7 +18,7 @@ use crate::{CedarEntityType, CedarNamespace, Error, GroupName, ProjectId, Result
 /// Compile a single [`Policy`] into Cedar statements.
 ///
 /// When `scope` is `Some(group)`, the principal clause is scoped to that group
-/// (`principal in {ns}::group::"{group}"`). When `scope` is `None`, the
+/// (`principal in {ns}::Group::"{group}"`). When `scope` is `None`, the
 /// principal clause is unconstrained (`principal`), producing a global policy.
 ///
 /// For each [`PolicyStatement`] in the policy:
@@ -41,7 +41,7 @@ pub fn compile_policy_to_cedar(
 
         let principal_clause = match scope {
             Some(group) => format!(
-                "principal in {}::group::\"{}\"",
+                "principal in {}::Group::\"{}\"",
                 vp_ns.as_str(),
                 group.as_str()
             ),
@@ -169,7 +169,7 @@ fn build_unless_clause(stmt: &PolicyStatement, vp_ns: &CedarNamespace) -> String
 
     let conditions: Vec<String> = except
         .iter()
-        .map(|g| format!("principal in {}::group::\"{}\"", vp_ns.as_str(), g.as_str()))
+        .map(|g| format!("principal in {}::Group::\"{}\"", vp_ns.as_str(), g.as_str()))
         .collect();
 
     if conditions.len() == 1 {
@@ -301,7 +301,7 @@ mod tests {
 
         assert_eq!(stmts.len(), 1);
         assert!(stmts[0].starts_with("permit("));
-        assert!(stmts[0].contains("principal in acme_app::group::\"viewers\""));
+        assert!(stmts[0].contains("principal in acme_app::Group::\"viewers\""));
         assert!(stmts[0].contains("action in [acme_app::Action::\"todo-list-read\"]"));
         assert!(stmts[0].contains("resource"));
         assert!(stmts[0].ends_with(';'));
@@ -327,7 +327,7 @@ mod tests {
         assert_eq!(stmts.len(), 1);
         assert!(stmts[0].starts_with("forbid("));
         assert!(stmts[0].contains("unless {"));
-        assert!(stmts[0].contains("principal in acme_app::group::\"admin\""));
+        assert!(stmts[0].contains("principal in acme_app::Group::\"admin\""));
     }
 
     // -- Deny with multiple except groups uses || -----------------------------
@@ -349,8 +349,8 @@ mod tests {
 
         assert_eq!(stmts.len(), 1);
         assert!(stmts[0].contains(" || "));
-        assert!(stmts[0].contains("group::\"admin\""));
-        assert!(stmts[0].contains("group::\"ops\""));
+        assert!(stmts[0].contains("Group::\"admin\""));
+        assert!(stmts[0].contains("Group::\"ops\""));
     }
 
     // -- Wildcard action produces unconstrained action ------------------------
@@ -575,7 +575,7 @@ mod tests {
 
         // First statement: group-scoped permit
         assert!(stmts[0].starts_with("permit("));
-        assert!(stmts[0].contains("group::\"viewers\""));
+        assert!(stmts[0].contains("Group::\"viewers\""));
 
         // Second statement: global forbid with unless
         assert!(stmts[1].starts_with("forbid("));
@@ -609,7 +609,7 @@ mod tests {
             stmts[0]
         );
         // Must NOT contain a group scope
-        assert!(!stmts[0].contains("group::"));
+        assert!(!stmts[0].contains("Group::"));
     }
 
     // -- Global forbid with except emits forbid + unless ----------------------
@@ -636,6 +636,6 @@ mod tests {
             stmts[0]
         );
         assert!(stmts[0].contains("unless {"));
-        assert!(stmts[0].contains("principal in acme_app::group::\"admin\""));
+        assert!(stmts[0].contains("principal in acme_app::Group::\"admin\""));
     }
 }

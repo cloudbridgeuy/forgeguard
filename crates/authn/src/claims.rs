@@ -2,7 +2,7 @@
 
 use chrono::DateTime;
 use forgeguard_authn_core::{Identity, IdentityParams, JwtClaims};
-use forgeguard_core::{GroupName, TenantId, UserId};
+use forgeguard_core::{GroupName, PrincipalKind, TenantId, UserId};
 
 use crate::config::JwtResolverConfig;
 use crate::error::Result;
@@ -33,6 +33,7 @@ pub(crate) fn map_claims(claims: &JwtClaims, config: &JwtResolverConfig) -> Resu
         expiry,
         resolver: "cognito_jwt",
         extra,
+        principal_kind: PrincipalKind::User,
     }))
 }
 
@@ -171,6 +172,7 @@ mod tests {
         assert_eq!(identity.groups()[1].as_str(), "users");
         assert!(identity.expiry().is_some());
         assert_eq!(identity.resolver(), "cognito_jwt");
+        assert_eq!(identity.principal_kind(), PrincipalKind::User);
     }
 
     // -- User ID extraction ---------------------------------------------------

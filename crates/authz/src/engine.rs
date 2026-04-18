@@ -53,6 +53,15 @@ impl VpPolicyEngine {
         components: VpRequestComponents,
         entities: EntitiesDefinition,
     ) -> PolicyDecision {
+        tracing::debug!(
+            principal_type = %components.principal.entity_type(),
+            principal_id = %components.principal.entity_id(),
+            action_type = %components.action.action_type(),
+            action_id = %components.action.action_id(),
+            resource = ?components.resource.as_ref().map(|r| format!("{}::{}", r.entity_type(), r.entity_id())),
+            "VP IsAuthorized request"
+        );
+
         let mut req = self
             .client
             .is_authorized()
@@ -66,9 +75,23 @@ impl VpPolicyEngine {
         }
 
         let decision = match req.send().await {
-            Ok(output) => translate_vp_decision(output.decision()),
+            Ok(output) => {
+                for err in output.errors() {
+                    tracing::warn!(
+                        error = %err.error_description(),
+                        "VP evaluation error"
+                    );
+                }
+                for policy in output.determining_policies() {
+                    tracing::debug!(
+                        policy_id = %policy.policy_id(),
+                        "determining policy"
+                    );
+                }
+                translate_vp_decision(output.decision())
+            }
             Err(sdk_err) => {
-                tracing::warn!(error = %sdk_err, "VP SDK error — returning deny");
+                tracing::warn!(error = ?sdk_err, "VP SDK error — returning deny");
                 PolicyDecision::Deny {
                     reason: DenyReason::EvaluationError(sdk_err.to_string()),
                 }
@@ -86,6 +109,18 @@ impl PolicyEngine for VpPolicyEngine {
         query: &PolicyQuery,
     ) -> Pin<Box<dyn Future<Output = forgeguard_authz_core::Result<PolicyDecision>> + Send + '_>>
     {
+        let groups: Vec<&str> = query
+            .context()
+            .groups()
+            .iter()
+            .map(forgeguard_core::GroupName::as_str)
+            .collect();
+        tracing::debug!(
+            ?groups,
+            principal_kind = ?query.principal().kind(),
+            "VP evaluate — query context"
+        );
+
         let cache_key = build_cache_key(query);
 
         // Build VP request components (pure translation, no I/O).
@@ -99,10 +134,11 @@ impl PolicyEngine for VpPolicyEngine {
             }
         };
 
-        // Build inline entities (user + group hierarchy).
+        // Build inline entities (principal + groups + resource).
         let entities = match build_vp_entities(
             query.principal(),
             query.context().groups(),
+            query.resource(),
             &self.project_id,
             &self.tenant_id,
         ) {

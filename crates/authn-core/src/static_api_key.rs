@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 
-use forgeguard_core::{GroupName, TenantId, UserId};
+use forgeguard_core::{GroupName, PrincipalKind, TenantId, UserId};
 
 use crate::credential::Credential;
 use crate::error::{Error, Result};
@@ -64,6 +64,7 @@ impl IdentityResolver for StaticApiKeyResolver {
                     expiry: None, // API keys don't expire via this resolver
                     resolver: "static_api_key",
                     extra: None,
+                    principal_kind: PrincipalKind::User,
                 })),
                 None => Err(Error::InvalidCredential("unknown API key".into())),
             },
@@ -130,6 +131,7 @@ mod tests {
         assert!(identity.expiry().is_none());
         assert_eq!(identity.resolver(), "static_api_key");
         assert!(identity.extra().is_none());
+        assert_eq!(identity.principal_kind(), PrincipalKind::User);
     }
 
     #[tokio::test]

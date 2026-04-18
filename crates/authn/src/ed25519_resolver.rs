@@ -11,7 +11,7 @@ use forgeguard_authn_core::signing::{
     parse_signature_header, verify, CanonicalPayload, Timestamp, TimestampValidator,
 };
 use forgeguard_authn_core::signing_key_store::SigningKeyStore;
-use forgeguard_core::{TenantId, UserId};
+use forgeguard_core::{PrincipalKind, TenantId, UserId};
 use tracing::instrument;
 
 /// Default maximum allowed drift between request timestamp and server time.
@@ -103,6 +103,7 @@ impl<S: SigningKeyStore> Ed25519SignatureResolver<S> {
             expiry: None,
             resolver: "ed25519",
             extra: None,
+            principal_kind: PrincipalKind::Machine,
         }))
     }
 }
@@ -254,6 +255,7 @@ mod tests {
         assert!(identity.expiry().is_none());
         assert_eq!(identity.resolver(), "ed25519");
         assert!(identity.extra().is_none());
+        assert_eq!(identity.principal_kind(), PrincipalKind::Machine);
     }
 
     #[tokio::test]

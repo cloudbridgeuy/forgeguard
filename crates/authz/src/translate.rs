@@ -1,10 +1,10 @@
 //! Translation between `forgeguard_authz_core` types and AWS Verified Permissions SDK types.
 
 use aws_sdk_verifiedpermissions::types::{
-    ActionIdentifier, Decision, EntitiesDefinition, EntityIdentifier, EntityItem,
+    ActionIdentifier, AttributeValue, Decision, EntitiesDefinition, EntityIdentifier, EntityItem,
 };
 use forgeguard_authz_core::{DenyReason, PolicyDecision, PolicyQuery};
-use forgeguard_core::{GroupName, PrincipalRef, ProjectId, TenantId};
+use forgeguard_core::{GroupName, PrincipalKind, PrincipalRef, ProjectId, ResourceRef, TenantId};
 
 use crate::error::{Error, Result};
 
@@ -24,7 +24,7 @@ pub(crate) struct VpRequestComponents {
 /// Build VP request components from a [`PolicyQuery`].
 ///
 /// Maps:
-/// - principal -> entity type `"{vp_ns}::user"` + entity ID from `PrincipalRef::to_fgrn()`
+/// - principal -> entity type from `PrincipalRef::vp_entity_type()` + entity ID from `PrincipalRef::to_fgrn()`
 /// - action -> `QualifiedAction::vp_action_type(project)` + `vp_action_id()`
 /// - resource -> `ResourceRef::vp_entity_type(project)` + `ResourceRef::to_fgrn()` (if present)
 pub(crate) fn build_vp_request(
@@ -34,7 +34,7 @@ pub(crate) fn build_vp_request(
 ) -> Result<VpRequestComponents> {
     let principal_fgrn = query.principal().to_fgrn(project, tenant);
     let principal = EntityIdentifier::builder()
-        .entity_type(PrincipalRef::vp_entity_type(project))
+        .entity_type(query.principal().vp_entity_type(project))
         .entity_id(principal_fgrn.as_vp_entity_id())
         .build()
         .map_err(|e| Error::VerifiedPermissions(format!("building principal entity: {e}")))?;
@@ -68,59 +68,123 @@ pub(crate) fn build_vp_request(
 
 /// Build inline VP entities for the `IsAuthorized` request.
 ///
-/// Creates:
-/// - A user entity (`{vp_ns}::user`) with `parents` pointing to group entities
-/// - One group entity (`{vp_ns}::group`) per group, with no parents or attributes
+/// For **User** principals:
+/// - A user entity (`{vp_ns}::User`) with `org_id` attribute and `parents` pointing to group entities
+/// - One group entity (`{vp_ns}::Group`) per group, with no parents or attributes
+///
+/// For **Machine** principals:
+/// - A single machine entity (`{vp_ns}::Machine`) with an `org_id` string attribute
+///   set to the tenant ID value; no group parents.
+///
+/// When a **resource** is present, a resource entity is added with an `org_id`
+/// attribute matching the tenant. This is required for Cedar policies that
+/// scope access via `resource.org_id == principal.org_id`.
 ///
 /// VP has no entity store (design decision D5), so we pass entities inline
 /// at query time.
 pub(crate) fn build_vp_entities(
     principal: &PrincipalRef,
     groups: &[GroupName],
+    resource: Option<&ResourceRef>,
     project: &ProjectId,
     tenant: &TenantId,
 ) -> Result<EntitiesDefinition> {
     let principal_fgrn = principal.to_fgrn(project, tenant);
-    let group_type = PrincipalRef::vp_group_entity_type(project);
 
-    // Build group entity identifiers using group name (not FGRN) to match
-    // compiled Cedar policies which are tenant-independent.
-    let group_identifiers: Vec<EntityIdentifier> = groups
-        .iter()
-        .map(|g| {
-            EntityIdentifier::builder()
-                .entity_type(group_type.as_str())
-                .entity_id(g.as_str())
-                .build()
-        })
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|e| {
-            Error::VerifiedPermissions(format!("building group entity identifier: {e}"))
-        })?;
+    let mut entities: Vec<EntityItem> = match principal.kind() {
+        PrincipalKind::Machine => {
+            // Machine entity: org_id attribute = tenant_id, no group parents.
+            let machine_entity = EntityItem::builder()
+                .identifier(
+                    EntityIdentifier::builder()
+                        .entity_type(principal.vp_entity_type(project))
+                        .entity_id(principal_fgrn.as_vp_entity_id())
+                        .build()
+                        .map_err(|e| {
+                            Error::VerifiedPermissions(format!(
+                                "building machine entity identifier: {e}"
+                            ))
+                        })?,
+                )
+                .attributes(
+                    "org_id",
+                    AttributeValue::String(tenant.as_str().to_string()),
+                )
+                .build();
 
-    // Build the user entity with parents pointing to groups.
-    let mut user_builder = EntityItem::builder().identifier(
-        EntityIdentifier::builder()
-            .entity_type(PrincipalRef::vp_entity_type(project))
-            .entity_id(principal_fgrn.as_vp_entity_id())
-            .build()
-            .map_err(|e| {
-                Error::VerifiedPermissions(format!("building user entity identifier: {e}"))
-            })?,
-    );
+            vec![machine_entity]
+        }
+        PrincipalKind::User => {
+            let group_type = PrincipalRef::vp_group_entity_type(project);
 
-    for parent in &group_identifiers {
-        user_builder = user_builder.parents(parent.clone());
-    }
+            // Build group entity identifiers using group name (not FGRN) to match
+            // compiled Cedar policies which are tenant-independent.
+            let group_identifiers: Vec<EntityIdentifier> = groups
+                .iter()
+                .map(|g| {
+                    EntityIdentifier::builder()
+                        .entity_type(group_type.as_str())
+                        .entity_id(g.as_str())
+                        .build()
+                })
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(|e| {
+                    Error::VerifiedPermissions(format!("building group entity identifier: {e}"))
+                })?;
 
-    let user_entity = user_builder.build();
+            // Build the user entity with parents pointing to groups and org_id attribute.
+            let mut user_builder = EntityItem::builder()
+                .identifier(
+                    EntityIdentifier::builder()
+                        .entity_type(principal.vp_entity_type(project))
+                        .entity_id(principal_fgrn.as_vp_entity_id())
+                        .build()
+                        .map_err(|e| {
+                            Error::VerifiedPermissions(format!(
+                                "building user entity identifier: {e}"
+                            ))
+                        })?,
+                )
+                .attributes(
+                    "org_id",
+                    AttributeValue::String(tenant.as_str().to_string()),
+                );
 
-    let mut entities = vec![user_entity];
+            for parent in &group_identifiers {
+                user_builder = user_builder.parents(parent.clone());
+            }
 
-    // Build group entities (no parents, no attributes).
-    for group_id in &group_identifiers {
-        let group_entity = EntityItem::builder().identifier(group_id.clone()).build();
-        entities.push(group_entity);
+            let user_entity = user_builder.build();
+
+            // Build group entities (no parents, no attributes) and chain after the user entity.
+            let group_entities = group_identifiers
+                .iter()
+                .map(|id| EntityItem::builder().identifier(id.clone()).build());
+
+            std::iter::once(user_entity).chain(group_entities).collect()
+        }
+    };
+
+    // Add resource entity with org_id attribute for tenant-scoped policies.
+    if let Some(res) = resource {
+        let resource_entity = EntityItem::builder()
+            .identifier(
+                EntityIdentifier::builder()
+                    .entity_type(res.vp_entity_type(project))
+                    .entity_id(res.id().as_str())
+                    .build()
+                    .map_err(|e| {
+                        Error::VerifiedPermissions(format!(
+                            "building resource entity identifier: {e}"
+                        ))
+                    })?,
+            )
+            .attributes(
+                "org_id",
+                AttributeValue::String(tenant.as_str().to_string()),
+            )
+            .build();
+        entities.push(resource_entity);
     }
 
     Ok(EntitiesDefinition::EntityList(entities))
@@ -176,7 +240,7 @@ mod tests {
         let query = make_query_without_resource();
         let components = build_vp_request(&query, &test_project(), &test_tenant()).unwrap();
 
-        assert_eq!(components.principal.entity_type(), "acme_app::user");
+        assert_eq!(components.principal.entity_type(), "acme_app::User");
         assert_eq!(
             components.principal.entity_id(),
             "fgrn:acme-app:acme-corp:iam:user:alice"
@@ -208,12 +272,27 @@ mod tests {
         assert!(decision.is_denied());
     }
 
+    // -- build_vp_request machine entity type --------------------------------
+
+    #[test]
+    fn build_vp_request_machine_entity_type() {
+        let principal = PrincipalRef::machine(UserId::new("svc-worker").unwrap());
+        let action = QualifiedAction::parse("todo:list:read").unwrap();
+        let context = PolicyContext::new();
+        let query = PolicyQuery::new(principal, action, None, context);
+
+        let components = build_vp_request(&query, &test_project(), &test_tenant()).unwrap();
+
+        assert_eq!(components.principal.entity_type(), "acme_app::Machine");
+    }
+
     // -- build_vp_entities ---------------------------------------------------
 
     #[test]
     fn entities_user_with_no_groups() {
         let principal = PrincipalRef::new(UserId::new("alice").unwrap());
-        let entities = build_vp_entities(&principal, &[], &test_project(), &test_tenant()).unwrap();
+        let entities =
+            build_vp_entities(&principal, &[], None, &test_project(), &test_tenant()).unwrap();
 
         match &entities {
             EntitiesDefinition::EntityList(items) => {
@@ -221,9 +300,17 @@ mod tests {
                 assert_eq!(items.len(), 1);
                 let user_item = &items[0];
                 let ident = user_item.identifier().expect("identifier set");
-                assert_eq!(ident.entity_type(), "acme_app::user");
+                assert_eq!(ident.entity_type(), "acme_app::User");
                 assert_eq!(ident.entity_id(), "fgrn:acme-app:acme-corp:iam:user:alice");
                 assert!(user_item.parents().is_empty());
+
+                // User entity carries org_id attribute.
+                let attrs = user_item.attributes().expect("attributes set");
+                let org_id = attrs.get("org_id").expect("org_id attribute present");
+                assert_eq!(
+                    org_id.as_string().expect("org_id is a String value"),
+                    "acme-corp"
+                );
             }
             _ => panic!("expected EntityList variant"),
         }
@@ -237,7 +324,7 @@ mod tests {
             GroupName::new("viewer").unwrap(),
         ];
         let entities =
-            build_vp_entities(&principal, &groups, &test_project(), &test_tenant()).unwrap();
+            build_vp_entities(&principal, &groups, None, &test_project(), &test_tenant()).unwrap();
 
         match &entities {
             EntitiesDefinition::EntityList(items) => {
@@ -252,7 +339,7 @@ mod tests {
                     .iter()
                     .map(aws_sdk_verifiedpermissions::types::EntityIdentifier::entity_type)
                     .collect();
-                assert!(parent_types.iter().all(|t| *t == "acme_app::group"));
+                assert!(parent_types.iter().all(|t| *t == "acme_app::Group"));
 
                 // Group entities have no parents.
                 assert!(items[1].parents().is_empty());
@@ -267,7 +354,7 @@ mod tests {
         let principal = PrincipalRef::new(UserId::new("bob").unwrap());
         let groups = vec![GroupName::new("editor").unwrap()];
         let entities =
-            build_vp_entities(&principal, &groups, &test_project(), &test_tenant()).unwrap();
+            build_vp_entities(&principal, &groups, None, &test_project(), &test_tenant()).unwrap();
 
         match &entities {
             EntitiesDefinition::EntityList(items) => {
@@ -275,12 +362,54 @@ mod tests {
 
                 // Group entity ID matches the group name (not FGRN).
                 let group_ident = items[1].identifier().expect("identifier set");
-                assert_eq!(group_ident.entity_type(), "acme_app::group");
+                assert_eq!(group_ident.entity_type(), "acme_app::Group");
                 assert_eq!(group_ident.entity_id(), "editor");
 
                 // User's parent matches the group entity.
                 let user_parent = &items[0].parents()[0];
                 assert_eq!(user_parent.entity_id(), "editor");
+            }
+            _ => panic!("expected EntityList variant"),
+        }
+    }
+
+    #[test]
+    fn build_vp_entities_machine_has_org_id_attribute() {
+        let principal = PrincipalRef::machine(UserId::new("svc-worker").unwrap());
+        let entities =
+            build_vp_entities(&principal, &[], None, &test_project(), &test_tenant()).unwrap();
+
+        match &entities {
+            EntitiesDefinition::EntityList(items) => {
+                assert_eq!(items.len(), 1);
+                let machine = &items[0];
+                let ident = machine.identifier().expect("identifier set");
+                assert_eq!(ident.entity_type(), "acme_app::Machine");
+
+                let attrs = machine.attributes().expect("attributes set");
+                let org_id = attrs.get("org_id").expect("org_id attribute present");
+                assert_eq!(
+                    org_id.as_string().expect("org_id is a String value"),
+                    "acme-corp"
+                );
+            }
+            _ => panic!("expected EntityList variant"),
+        }
+    }
+
+    #[test]
+    fn build_vp_entities_machine_no_group_parents() {
+        let principal = PrincipalRef::machine(UserId::new("svc-worker").unwrap());
+        // Even if groups are passed they should be ignored for Machine principals.
+        let groups = vec![GroupName::new("admin").unwrap()];
+        let entities =
+            build_vp_entities(&principal, &groups, None, &test_project(), &test_tenant()).unwrap();
+
+        match &entities {
+            EntitiesDefinition::EntityList(items) => {
+                // Only the machine entity — no group entities.
+                assert_eq!(items.len(), 1);
+                assert!(items[0].parents().is_empty());
             }
             _ => panic!("expected EntityList variant"),
         }
