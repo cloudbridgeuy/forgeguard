@@ -26,9 +26,6 @@ export class CognitoStack extends cdk.Stack {
       },
       mfa: cognito.Mfa.OPTIONAL,
       mfaSecondFactor: { sms: false, otp: true },
-      customAttributes: {
-        org_id: new cognito.StringAttribute({ mutable: false }),
-      },
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
@@ -52,27 +49,6 @@ export class CognitoStack extends cdk.Stack {
       cognitoDomain: {
         domainPrefix: `forgeguard-${props.environment}`,
       },
-    });
-
-    new cognito.CfnUserPoolGroup(this, "AdminGroup", {
-      userPoolId: this.userPool.userPoolId,
-      groupName: "admin",
-      description: "Full control plane access",
-      precedence: 0,
-    });
-
-    new cognito.CfnUserPoolGroup(this, "OwnerGroup", {
-      userPoolId: this.userPool.userPoolId,
-      groupName: "owner",
-      description: "Organization owner access",
-      precedence: 10,
-    });
-
-    new cognito.CfnUserPoolGroup(this, "MemberGroup", {
-      userPoolId: this.userPool.userPoolId,
-      groupName: "member",
-      description: "Organization member access",
-      precedence: 20,
     });
 
     cdk.Tags.of(this).add("project", "forgeguard");
