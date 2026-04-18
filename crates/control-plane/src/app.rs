@@ -116,6 +116,7 @@ fn build_forgeguard(auth: Option<&AuthConfig>) -> color_eyre::Result<Arc<ForgeGu
     let route_matcher = RouteMatcher::new(&[])?;
 
     let health_route = anon_route("GET", "/health")?;
+    let metrics_route = anon_route("GET", "/metrics")?;
 
     let (public_routes, chain, auth_providers) = match auth {
         Some(auth) => {
@@ -126,10 +127,14 @@ fn build_forgeguard(auth: Option<&AuthConfig>) -> color_eyre::Result<Arc<ForgeGu
             let resolver = CognitoJwtResolver::new(config);
             let chain = IdentityChain::new(vec![Arc::new(resolver)]);
 
-            (vec![health_route], chain, vec!["jwt".to_string()])
+            (
+                vec![health_route, metrics_route],
+                chain,
+                vec!["jwt".to_string()],
+            )
         }
         None => {
-            let mut routes = vec![health_route];
+            let mut routes = vec![health_route, metrics_route];
             for &(method, path) in API_ROUTES {
                 routes.push(anon_route(method, path)?);
             }
@@ -159,6 +164,7 @@ fn build_router<S: OrgStore + 'static>(store: Arc<S>, fg: Arc<ForgeGuard>) -> Ro
 
     Router::new()
         .route("/health", get(handlers::health_handler))
+        .route("/metrics", get(handlers::metrics_handler))
         .route(
             "/api/v1/organizations",
             post(handlers::create_handler::<S>).get(handlers::list_handler::<S>),

@@ -7,5 +7,6 @@ mod dynamo_store;
 mod error;
 pub(crate) mod etag;
 mod handlers;
+pub(crate) mod metrics;
 mod signing_key;
 mod store;

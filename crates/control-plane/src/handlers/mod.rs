@@ -38,6 +38,25 @@ pub(crate) async fn health_handler() -> Json<serde_json::Value> {
     Json(serde_json::json!({"status": "ok"}))
 }
 
+pub(crate) async fn metrics_handler() -> Response {
+    use prometheus::Encoder;
+    let encoder = prometheus::TextEncoder::new();
+    let mut buf = Vec::new();
+    if encoder.encode(&prometheus::gather(), &mut buf).is_err() {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+    let content_type: axum::http::HeaderValue = encoder
+        .format_type()
+        .parse()
+        .unwrap_or_else(|_| axum::http::HeaderValue::from_static("text/plain"));
+    (
+        StatusCode::OK,
+        [(axum::http::header::CONTENT_TYPE, content_type)],
+        buf,
+    )
+        .into_response()
+}
+
 pub(crate) async fn create_handler<S: OrgStore>(
     State(store): State<Arc<S>>,
     Json(body): Json<CreateOrgRequest>,
@@ -189,6 +208,11 @@ pub(crate) struct UpdateOrgRequest {
 /// Returns `200 OK` with an `ETag` header on success, `412 Precondition Failed`
 /// (also with the current `ETag`) on a stale match, and `404 Not Found` when
 /// the org does not exist.
+#[tracing::instrument(
+    name = "update_org",
+    skip_all,
+    fields(org_id = %raw_org_id, precondition_reason = tracing::field::Empty)
+)]
 pub(crate) async fn update_handler<S: OrgStore>(
     Path(raw_org_id): Path<String>,
     State(store): State<Arc<S>>,
@@ -234,13 +258,16 @@ pub(crate) async fn update_handler<S: OrgStore>(
     } else {
         ResolvedIfMatch::Absent
     };
-    let expected_etag = match resolved {
+    let expected_etag = match &resolved {
         ResolvedIfMatch::Absent => None,
-        ResolvedIfMatch::Strong(e) => Some(e),
+        ResolvedIfMatch::Strong(e) => Some(e.clone()),
         // Wildcard with existing config — unconditional write; check already passed.
         ResolvedIfMatch::WildcardMatched => None,
         // Wildcard on a Draft org — fail closed: no stored representation exists.
         ResolvedIfMatch::WildcardOnDraft => {
+            crate::metrics::record_precondition_failed(
+                crate::metrics::PreconditionReason::WildcardOnDraft,
+            );
             return (
                 StatusCode::PRECONDITION_FAILED,
                 Json(serde_json::json!({
@@ -274,6 +301,13 @@ pub(crate) async fn update_handler<S: OrgStore>(
         )
             .into_response(),
         Err(crate::error::Error::PreconditionFailed { current_etag }) => {
+            let reason = crate::metrics::precondition_reason(
+                &resolved,
+                record
+                    .configured()
+                    .map(crate::store::ConfiguredConfig::etag),
+            );
+            crate::metrics::record_precondition_failed(reason);
             let mut response_headers = HeaderMap::new();
             // Only emit ETag when `current_etag` is non-empty. An empty
             // string signals a Draft org (no config yet); empty strings
@@ -372,11 +406,18 @@ pub(super) mod test_support {
 
     pub fn test_app(store: Arc<InMemoryOrgStore>) -> Router {
         let route_matcher = RouteMatcher::new(&[]).unwrap();
-        let public_routes = vec![PublicRoute::new(
-            "GET".parse().unwrap(),
-            "/health".to_string(),
-            PublicAuthMode::Anonymous,
-        )];
+        let public_routes = vec![
+            PublicRoute::new(
+                "GET".parse().unwrap(),
+                "/health".to_string(),
+                PublicAuthMode::Anonymous,
+            ),
+            PublicRoute::new(
+                "GET".parse().unwrap(),
+                "/metrics".to_string(),
+                PublicAuthMode::Anonymous,
+            ),
+        ];
         let public_route_matcher = PublicRouteMatcher::new(&public_routes).unwrap();
         let config = PipelineConfig::new(PipelineConfigParams {
             route_matcher,
@@ -428,6 +469,7 @@ pub(super) mod test_support {
                 "/api/v1/organizations/{org_id}/keys/{key_id}",
                 axum::routing::delete(super::keys::revoke_key_handler::<InMemoryOrgStore>),
             )
+            .route("/metrics", axum::routing::get(super::metrics_handler))
             .with_state(store)
             .layer(axum::middleware::from_fn_with_state(fg, forgeguard_layer))
     }

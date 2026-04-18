@@ -1854,6 +1854,7 @@ dependencies = [
  "forgeguard_http",
  "forgeguard_proxy_core",
  "http-body-util",
+ "prometheus",
  "rand 0.8.5",
  "serde",
  "serde_json",

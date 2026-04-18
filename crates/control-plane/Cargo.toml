@@ -36,6 +36,7 @@ forgeguard_authz_core = { workspace = true }
 forgeguard_core = { workspace = true }
 forgeguard_http = { workspace = true }
 forgeguard_proxy_core = { workspace = true }
+prometheus = { workspace = true }
 rand = { workspace = true } #unified
 serde = { workspace = true }
 serde_json = { workspace = true }
