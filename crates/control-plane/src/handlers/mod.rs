@@ -11,6 +11,7 @@ use forgeguard_core::{OrgStatus, Organization, OrganizationId};
 use serde::Deserialize;
 
 use crate::config::OrgConfig;
+use crate::etag::{self, ResolvedIfMatch};
 use crate::store::{OrgRecord, OrgStore};
 
 pub(crate) use keys::{generate_key_handler, list_keys_handler, revoke_key_handler};
@@ -53,7 +54,18 @@ pub(crate) async fn create_handler<S: OrgStore>(
     let org = Organization::new(org_id, body.name, OrgStatus::Draft, now);
 
     match store.create(org, body.config).await {
-        Ok(record) => (StatusCode::CREATED, Json(record.org().clone())).into_response(),
+        Ok(record) => {
+            let mut response_headers = HeaderMap::new();
+            if let Some(val) = record.configured().and_then(|c| c.etag().parse().ok()) {
+                response_headers.insert(axum::http::header::ETAG, val);
+            }
+            (
+                StatusCode::CREATED,
+                response_headers,
+                Json(record.org().clone()),
+            )
+                .into_response()
+        }
         Err(crate::error::Error::Conflict(msg)) => (
             StatusCode::CONFLICT,
             Json(serde_json::json!({"error": msg})),
@@ -205,17 +217,40 @@ pub(crate) async fn update_handler<S: OrgStore>(
 
     // If the body omits `config`, keep whatever was previously stored
     // (None for Draft orgs, Some(...) for Configured ones).
-    let body_has_config = body.config.is_some();
+    let caller_supplied_config = body.config.is_some();
     let config = body.config.or_else(|| record.config().cloned());
 
-    // Derive the optimistic-locking expectation from the request, using the
-    // pure core. When the body has no `config`, `derive_expected_etag`
-    // returns `None` — name-only PUTs skip the check.
-    let if_match = headers
+    // Derive the optimistic-locking expectation. Name-only PUTs (no `config`
+    // in the body) are unconditional; all other cases go through resolve_if_match.
+    let if_match_parsed = headers
         .get(axum::http::header::IF_MATCH)
         .and_then(|v| v.to_str().ok())
-        .and_then(crate::etag::parse_if_match);
-    let expected_etag = crate::etag::derive_expected_etag(body_has_config, if_match.as_deref());
+        .and_then(etag::parse_if_match);
+    let stored_etag = record
+        .configured()
+        .map(crate::store::ConfiguredConfig::etag);
+    let resolved = if caller_supplied_config {
+        etag::resolve_if_match(if_match_parsed, stored_etag)
+    } else {
+        ResolvedIfMatch::Absent
+    };
+    let expected_etag = match resolved {
+        ResolvedIfMatch::Absent => None,
+        ResolvedIfMatch::Strong(e) => Some(e),
+        // Wildcard with existing config — unconditional write; check already passed.
+        ResolvedIfMatch::WildcardMatched => None,
+        // Wildcard on a Draft org — fail closed: no stored representation exists.
+        ResolvedIfMatch::WildcardOnDraft => {
+            return (
+                StatusCode::PRECONDITION_FAILED,
+                Json(serde_json::json!({
+                    "error": "etag mismatch",
+                    "current_etag": "",
+                })),
+            )
+                .into_response();
+        }
+    };
 
     match store
         .update(&org_id, org, config, expected_etag.as_deref())
@@ -395,6 +430,34 @@ pub(super) mod test_support {
             )
             .with_state(store)
             .layer(axum::middleware::from_fn_with_state(fg, forgeguard_layer))
+    }
+
+    pub async fn create_draft_org(
+        app: &axum::Router,
+        org_id: &str,
+        name: &str,
+    ) -> axum::response::Response {
+        use axum::body::Body;
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let body = serde_json::to_vec(&serde_json::json!({
+            "org_id": org_id,
+            "name": name,
+        }))
+        .unwrap();
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/organizations")
+                    .header("x-api-key", TEST_API_KEY)
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
     }
 
     pub fn create_org_json(org_id: &str, name: &str) -> serde_json::Value {

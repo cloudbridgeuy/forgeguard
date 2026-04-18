@@ -197,6 +197,136 @@ async fn list_orgs_pagination() {
     assert_eq!(json.len(), 2);
 }
 
+// ── ETag on POST create tests ──────────────────────────────────
+
+/// POST create with a `config` field returns 201 with a quoted ETag header.
+#[tokio::test]
+async fn post_create_with_config_returns_etag() {
+    let store = empty_store();
+    let app = test_app(Arc::clone(&store));
+
+    let body = serde_json::to_string(&create_org_json("org-etag-post", "ETag Post Org")).unwrap();
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/organizations")
+        .header("content-type", "application/json")
+        .header("x-api-key", TEST_API_KEY)
+        .body(Body::from(body))
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let etag = response
+        .headers()
+        .get(axum::http::header::ETAG)
+        .expect("ETag header must be present on configured POST create")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        etag.starts_with('"') && etag.ends_with('"'),
+        "ETag must be a quoted string, got: {etag}"
+    );
+}
+
+/// POST create without a `config` field returns 201 with no ETag header.
+#[tokio::test]
+async fn post_create_without_config_returns_no_etag() {
+    let store = empty_store();
+    let app = test_app(Arc::clone(&store));
+
+    // Draft create — no `config` key.
+    let body = serde_json::to_string(&serde_json::json!({
+        "org_id": "org-draft-no-etag",
+        "name": "Draft No ETag"
+    }))
+    .unwrap();
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/organizations")
+        .header("content-type", "application/json")
+        .header("x-api-key", TEST_API_KEY)
+        .body(Body::from(body))
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    assert!(
+        response.headers().get(axum::http::header::ETAG).is_none(),
+        "Draft POST create must NOT include an ETag header"
+    );
+}
+
+/// The ETag returned by POST create is a valid `If-Match` value for the
+/// subsequent first PUT — callers can skip the pre-flight GET entirely.
+#[tokio::test]
+async fn post_create_etag_is_valid_if_match_for_subsequent_update() {
+    let store = empty_store();
+
+    // 1. POST create with config — capture the ETag.
+    let app = test_app(Arc::clone(&store));
+    let body =
+        serde_json::to_string(&create_org_json("org-etag-roundtrip", "ETag Roundtrip")).unwrap();
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/organizations")
+        .header("content-type", "application/json")
+        .header("x-api-key", TEST_API_KEY)
+        .body(Body::from(body))
+        .unwrap();
+    let create_res = app.oneshot(request).await.unwrap();
+    assert_eq!(create_res.status(), StatusCode::CREATED);
+    let create_etag = create_res
+        .headers()
+        .get(axum::http::header::ETAG)
+        .expect("create must return ETag")
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    // 2. PUT immediately with the create ETag — no pre-flight GET needed.
+    let app = test_app(Arc::clone(&store));
+    let put_body = serde_json::to_string(&serde_json::json!({
+        "config": {
+            "version": "2026-04-07",
+            "project_id": "proj",
+            "upstream_url": "https://updated.example.com",
+            "default_policy": "deny",
+            "routes": [],
+            "public_routes": [],
+            "features": {}
+        }
+    }))
+    .unwrap();
+    let put_req = Request::builder()
+        .method("PUT")
+        .uri("/api/v1/organizations/org-etag-roundtrip")
+        .header("content-type", "application/json")
+        .header("x-api-key", TEST_API_KEY)
+        .header("if-match", &create_etag)
+        .body(Body::from(put_body))
+        .unwrap();
+    let put_res = app.oneshot(put_req).await.unwrap();
+    assert_eq!(
+        put_res.status(),
+        StatusCode::OK,
+        "PUT must succeed when If-Match uses the create ETag"
+    );
+
+    let fresh_etag = put_res
+        .headers()
+        .get(axum::http::header::ETAG)
+        .expect("PUT 200 must return a fresh ETag")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert_ne!(
+        fresh_etag, create_etag,
+        "PUT ETag must differ from the create ETag"
+    );
+}
+
 // ── Update tests ───────────────────────────────────────────────
 
 #[tokio::test]
