@@ -672,3 +672,31 @@ fn parse_cluster_config_invalid_listen_addr_errors() {
     let err = parse_config(toml).unwrap_err();
     assert!(err.to_string().contains("cluster.listen_cluster_addr"));
 }
+
+#[test]
+fn schema_config_to_entity_config_translates_namespaced_entries() {
+    use std::collections::HashMap;
+
+    use forgeguard_core::CedarAttributeType;
+
+    let schema_config = SchemaConfig::new(HashMap::from([(
+        "todo".to_string(),
+        HashMap::from([(
+            "list".to_string(),
+            EntitySchema::new(
+                vec!["todo::project".to_string()],
+                HashMap::from([("title".to_string(), "String".to_string())]),
+            ),
+        )]),
+    )]));
+
+    let entity_config = schema_config.to_entity_config().expect("entities present");
+
+    assert!(entity_config.contains_key("todo__list"));
+    let list_cfg = &entity_config["todo__list"];
+    assert_eq!(list_cfg.member_of(), &["todo__project".to_string()]);
+    assert_eq!(
+        list_cfg.attributes().get("title"),
+        Some(&CedarAttributeType::String)
+    );
+}

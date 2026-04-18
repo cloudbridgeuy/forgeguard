@@ -22,6 +22,12 @@ pub struct RouteMapping {
     action: QualifiedAction,
     resource_param: Option<String>,
     feature_gate: Option<FlagName>,
+    /// Optional Cedar entity type for the resource. When set, overrides the
+    /// auto-derived `{namespace}__{entity}` format in VP requests.
+    resource_entity_type: Option<String>,
+    /// Fallback resource ID used when no `resource_param` is present in the path.
+    /// Enables collection-level endpoints to pass a synthetic resource to VP.
+    default_resource_id: Option<ResourceId>,
 }
 
 impl RouteMapping {
@@ -39,7 +45,26 @@ impl RouteMapping {
             action,
             resource_param,
             feature_gate,
+            resource_entity_type: None,
+            default_resource_id: None,
         }
+    }
+
+    /// Set an explicit Cedar entity type for the resource.
+    pub fn with_resource_entity_type(mut self, entity_type: impl Into<String>) -> Self {
+        self.resource_entity_type = Some(entity_type.into());
+        self
+    }
+
+    /// Set a default resource ID used when no path parameter is present.
+    ///
+    /// The ID must be a valid `ResourceId` (kebab-case, `[a-z0-9-]`). Returns
+    /// an error if the value is invalid so misconfigured routes fail at startup.
+    pub fn with_default_resource_id(mut self, id: &str) -> Result<Self> {
+        self.default_resource_id = Some(ResourceId::parse(id).map_err(|e| {
+            crate::Error::Config(format!("invalid default_resource_id {id:?}: {e}"))
+        })?);
+        Ok(self)
     }
 
     /// The HTTP method for this route.
@@ -113,6 +138,8 @@ struct RouteValue {
     action: QualifiedAction,
     resource_param: Option<String>,
     feature_gate: Option<FlagName>,
+    resource_entity_type: Option<String>,
+    default_resource_id: Option<ResourceId>,
 }
 
 // ---------------------------------------------------------------------------
@@ -142,6 +169,8 @@ impl RouteMatcher {
                 action: route.action().clone(),
                 resource_param: route.resource_param.clone(),
                 feature_gate: route.feature_gate.clone(),
+                resource_entity_type: route.resource_entity_type.clone(),
+                default_resource_id: route.default_resource_id.clone(),
             };
 
             let pattern = normalize_pattern(&normalize_path(route.path_pattern()));
@@ -255,11 +284,21 @@ fn build_matched_route(matched: &matchit::Match<'_, '_, &RouteValue>) -> Matched
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
 
-    let resource = value.resource_param.as_ref().and_then(|param_name| {
-        params
-            .get(param_name)
-            .and_then(|id_str| ResourceId::parse(id_str).ok())
-            .map(|rid| ResourceRef::from_route(&value.action, rid))
+    let resolved_id = value
+        .resource_param
+        .as_ref()
+        .and_then(|param_name| {
+            params
+                .get(param_name)
+                .and_then(|id_str| ResourceId::parse(id_str).ok())
+        })
+        .or_else(|| value.default_resource_id.clone());
+
+    let resource = resolved_id.map(|rid| match &value.resource_entity_type {
+        Some(entity_type) => {
+            ResourceRef::from_route_with_entity_type(&value.action, rid, entity_type.clone())
+        }
+        None => ResourceRef::from_route(&value.action, rid),
     });
 
     MatchedRoute {
@@ -484,5 +523,63 @@ mod tests {
         let m = matcher.match_request("GET", "/users/Alice").unwrap();
         assert!(m.resource().is_none());
         assert_eq!(m.path_params().get("id").unwrap(), "Alice");
+    }
+
+    #[test]
+    fn default_resource_used_when_no_path_param() {
+        let route = RouteMapping::new(
+            HttpMethod::Get,
+            "/organizations".to_string(),
+            QualifiedAction::parse("cp:organization:read").unwrap(),
+            None,
+            None,
+        )
+        .with_resource_entity_type("Organization")
+        .with_default_resource_id("collection")
+        .unwrap();
+
+        let matcher = RouteMatcher::new(&[route]).unwrap();
+        let m = matcher.match_request("GET", "/organizations").unwrap();
+
+        let resource = m.resource().expect("should have a default resource");
+        let project = forgeguard_core::ProjectId::new("test-app").unwrap();
+        assert_eq!(resource.vp_entity_type(&project), "test_app::Organization");
+        assert_eq!(resource.id().as_str(), "collection");
+    }
+
+    #[test]
+    fn path_param_takes_precedence_over_default_resource() {
+        let route = RouteMapping::new(
+            HttpMethod::Get,
+            "/organizations/{org_id}".to_string(),
+            QualifiedAction::parse("cp:organization:read").unwrap(),
+            Some("org_id".to_string()),
+            None,
+        )
+        .with_resource_entity_type("Organization")
+        .with_default_resource_id("collection")
+        .unwrap();
+
+        let matcher = RouteMatcher::new(&[route]).unwrap();
+        let m = matcher
+            .match_request("GET", "/organizations/org-acme")
+            .unwrap();
+
+        let resource = m.resource().expect("should have resource from path");
+        assert_eq!(resource.id().as_str(), "org-acme");
+    }
+
+    #[test]
+    fn with_default_resource_id_rejects_invalid_id() {
+        let result = RouteMapping::new(
+            HttpMethod::Get,
+            "/organizations".to_string(),
+            QualifiedAction::parse("cp:organization:read").unwrap(),
+            None,
+            None,
+        )
+        .with_default_resource_id("Invalid_ID");
+
+        assert!(result.is_err(), "uppercase/underscore IDs must be rejected");
     }
 }

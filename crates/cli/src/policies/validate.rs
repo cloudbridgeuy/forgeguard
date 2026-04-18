@@ -22,7 +22,13 @@ pub(crate) fn run(config_path: &Path, json: bool) -> Result<()> {
     // Collect actions from route definitions.
     let actions: Vec<_> = config.routes().iter().map(|r| r.action().clone()).collect();
 
-    let schema = generate_cedar_schema(config.policies(), &actions, config.project_id(), None);
+    let entity_config = config.schema().to_entity_config();
+    let schema = generate_cedar_schema(
+        config.policies(),
+        &actions,
+        config.project_id(),
+        entity_config.as_ref(),
+    );
 
     if json {
         print_json(&schema, &compiled_policies)?;

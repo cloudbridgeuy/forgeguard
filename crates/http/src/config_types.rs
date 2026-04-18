@@ -2,7 +2,9 @@
 
 use std::collections::HashMap;
 
-use forgeguard_core::{CedarEntityRef, GroupName, QualifiedAction};
+use forgeguard_core::{
+    CedarAttributeType, CedarEntityRef, EntitySchemaConfig, GroupName, QualifiedAction,
+};
 
 // ---------------------------------------------------------------------------
 // AwsConfig
@@ -55,6 +57,52 @@ impl SchemaConfig {
     /// The entity definitions, keyed by namespace then entity name.
     pub fn entities(&self) -> &HashMap<String, HashMap<String, EntitySchema>> {
         &self.entities
+    }
+
+    /// Convert proxy schema config to the flat entity config format used by
+    /// `generate_cedar_schema`.
+    ///
+    /// Translates namespaced entries (`namespace`, `entity`) to flat Cedar
+    /// entity type keys (`namespace__entity`) with hyphens replaced by
+    /// underscores. Returns `None` when the schema has no entities.
+    /// Attribute type strings that are not `"String"`, `"Long"`, or
+    /// `"Boolean"` are silently skipped.
+    pub fn to_entity_config(&self) -> Option<HashMap<String, EntitySchemaConfig>> {
+        if self.entities.is_empty() {
+            return None;
+        }
+
+        let result = self
+            .entities
+            .iter()
+            .flat_map(|(ns, entity_map)| {
+                let ns_ident = ns.replace('-', "_");
+                entity_map.iter().map(move |(entity_name, schema)| {
+                    let entity_ident = entity_name.replace('-', "_");
+                    let key = format!("{ns_ident}__{entity_ident}");
+
+                    let attributes = schema
+                        .attributes()
+                        .iter()
+                        .filter_map(|(name, type_str)| {
+                            CedarAttributeType::try_from(type_str.as_str())
+                                .ok()
+                                .map(|t| (name.clone(), t))
+                        })
+                        .collect();
+
+                    let member_of = schema
+                        .member_of()
+                        .iter()
+                        .map(|m| m.replace("::", "__").replace('-', "_"))
+                        .collect();
+                    let config = EntitySchemaConfig::new(member_of, attributes);
+                    (key, config)
+                })
+            })
+            .collect();
+
+        Some(result)
     }
 }
 
