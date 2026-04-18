@@ -1,6 +1,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used)]
 
 pub(crate) mod error;
+pub(crate) mod membership;
 pub(crate) mod pipeline;
 pub(crate) mod pipeline_config;
 pub(crate) mod pipeline_outcome;
@@ -9,6 +10,7 @@ pub(crate) mod source;
 pub(crate) mod tenant;
 
 pub use error::{Error, Result};
+pub use membership::{Membership, MembershipResolver};
 pub use pipeline::evaluate_pipeline;
 pub use pipeline_config::{PipelineConfig, PipelineConfigParams};
 pub use pipeline_outcome::PipelineOutcome;
