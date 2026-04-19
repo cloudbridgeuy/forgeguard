@@ -96,68 +96,53 @@ pub async fn evaluate_pipeline(
     }
 
     // Phase 5b: Org membership enrichment
-    // If we have an identity and a membership resolver, read X-ForgeGuard-Org-Id
-    // header, validate membership, and enrich identity with tenant_id + groups.
+    // If a resolver is configured AND the identity has no tenant_id yet
+    // (JWT auth never sets one; Ed25519 machine auth always does), read
+    // X-ForgeGuard-Org-Id, validate membership, and enrich the identity.
     if let Some(resolver) = config.membership_resolver() {
-        let needs_enrichment = identity.as_ref().is_some_and(|id| id.tenant_id().is_none());
-
-        if needs_enrichment {
-            // Only enrich if the resolver didn't already set tenant_id
-            // (Ed25519 machine auth sets it; JWT auth does not after D1)
+        if identity.as_ref().is_some_and(|id| id.tenant_id().is_none()) {
             let org_header = input
                 .headers()
                 .iter()
                 .find(|(name, _)| name.eq_ignore_ascii_case("x-forgeguard-org-id"))
                 .map(|(_, value)| value.as_str());
 
-            match org_header {
-                Some(org_str) => {
-                    let Ok(org_id) = forgeguard_core::OrganizationId::new(org_str) else {
-                        return reject_json(400, "Invalid X-ForgeGuard-Org-Id header");
-                    };
-
-                    // Extract fields from identity before the await (ends the borrow).
-                    let (user_id, expiry, resolver_name, extra, principal_kind) =
-                        if let Some(id) = &identity {
-                            (
-                                id.user_id().clone(),
-                                id.expiry().copied(),
-                                id.resolver(),
-                                id.extra().cloned(),
-                                id.principal_kind(),
-                            )
-                        } else {
-                            // needs_enrichment guarantees identity is Some here.
-                            unreachable!("identity is Some when needs_enrichment is true")
-                        };
-
-                    match resolver.resolve(&user_id, &org_id).await {
-                        Some(membership) => {
-                            // Reconstruct identity with org context from membership
-                            identity = Some(Identity::new(IdentityParams {
-                                user_id,
-                                tenant_id: Some(
-                                    forgeguard_core::TenantId::new(org_id.as_str()).unwrap_or_else(
-                                        |_| unreachable!("OrganizationId is a valid Segment"),
-                                    ),
-                                ),
-                                groups: membership.groups().to_vec(),
-                                expiry,
-                                resolver: resolver_name,
-                                extra,
-                                principal_kind,
-                            }));
-                        }
-                        None => {
-                            return reject_json(403, "Not a member of this organization");
-                        }
-                    }
-                }
+            // Validate/parse the header before consuming the identity, so the
+            // early-return paths leave `identity` untouched.
+            let org_id = match org_header {
                 None if require_credential => {
                     return reject_json(400, "Missing X-ForgeGuard-Org-Id header");
                 }
                 None => {
-                    // No org header on optional/public route — continue without org
+                    // No org header on an optional/public route — skip enrichment.
+                    None
+                }
+                Some(org_str) => match forgeguard_core::OrganizationId::new(org_str) {
+                    Ok(id) => Some(id),
+                    Err(_) => return reject_json(400, "Invalid X-ForgeGuard-Org-Id header"),
+                },
+            };
+
+            // `org_id` is `Some` only when the header was present and valid.
+            // Move `identity` out before the `.await` so the resolver can
+            // borrow `user_id` without holding an `Option::as_ref` borrow.
+            // The `is_some_and` guard above guarantees the `take` succeeds.
+            if let (Some(org_id), Some(id)) = (org_id, identity.take()) {
+                match resolver.resolve(id.user_id(), &org_id).await {
+                    Some(membership) => {
+                        identity = Some(Identity::new(IdentityParams {
+                            user_id: id.user_id().clone(),
+                            tenant_id: Some(org_id.into()),
+                            groups: membership.groups().to_vec(),
+                            expiry: id.expiry().copied(),
+                            resolver: id.resolver(),
+                            extra: id.extra().cloned(),
+                            principal_kind: id.principal_kind(),
+                        }));
+                    }
+                    None => {
+                        return reject_json(403, "Not a member of this organization");
+                    }
                 }
             }
         }
