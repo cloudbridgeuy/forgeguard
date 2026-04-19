@@ -84,7 +84,7 @@ pub async fn dynamodb_router(
         dynamo_client.clone(),
         table_name.to_string(),
     )));
-    let membership_resolver: Arc<dyn MembershipResolver> = Arc::new(DynamoMembershipResolver::new(
+    let membership_resolver = Arc::new(DynamoMembershipResolver::new(
         dynamo_client.clone(),
         table_name.to_string(),
     ));

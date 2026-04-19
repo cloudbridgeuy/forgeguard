@@ -2,8 +2,6 @@
 //!
 //! Implements [`MembershipResolver`] by performing a `GetItem` against the
 //! shared DynamoDB table using `USER#<user_id>` as PK and `ORG#<org_id>` as SK.
-//!
-//! Wired into `app.rs` in Task 10.
 
 use std::collections::HashMap;
 use std::future::Future;
