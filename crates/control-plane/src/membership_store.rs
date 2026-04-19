@@ -5,9 +5,6 @@
 //!
 //! Wired into `app.rs` in Task 10.
 
-// Pre-staged — entire module is wired in Task 10.
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;

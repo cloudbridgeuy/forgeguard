@@ -22,11 +22,12 @@ use forgeguard_http::{
     DefaultPolicy, HttpMethod, PublicAuthMode, PublicRoute, PublicRouteMatcher, RouteMapping,
     RouteMatcher,
 };
-use forgeguard_proxy_core::{PipelineConfig, PipelineConfigParams};
+use forgeguard_proxy_core::{MembershipResolver, PipelineConfig, PipelineConfigParams};
 use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::dynamo_store::DynamoOrgStore;
+use crate::membership_store::DynamoMembershipResolver;
 use crate::signing_key_store::DynamoSigningKeyStore;
 use crate::store::{self, AnyOrgStore, OrgStore};
 
@@ -83,13 +84,22 @@ pub async fn dynamodb_router(
         dynamo_client.clone(),
         table_name.to_string(),
     )));
+    let membership_resolver: Arc<dyn MembershipResolver> = Arc::new(DynamoMembershipResolver::new(
+        dynamo_client.clone(),
+        table_name.to_string(),
+    ));
     let ed25519_resolver: Option<Arc<dyn IdentityResolver>> = if auth.is_some() {
         let key_store = DynamoSigningKeyStore::new(dynamo_client, table_name.to_string());
         Some(Arc::new(Ed25519SignatureResolver::new(key_store)))
     } else {
         None
     };
-    let fg = build_forgeguard(auth, ed25519_resolver, Some(vp_client))?;
+    let fg = build_forgeguard(
+        auth,
+        ed25519_resolver,
+        Some(vp_client),
+        Some(membership_resolver),
+    )?;
     Ok(build_router(s, fg))
 }
 
@@ -102,7 +112,7 @@ pub fn memory_router(config_path: &Path, auth: Option<&AuthConfig>) -> color_eyr
     let s = Arc::new(AnyOrgStore::Memory(inner));
     // Ed25519 resolver requires DynamoDB for key lookup; memory mode has no DynamoDB client.
     // VP engine is also unavailable in memory mode — StaticPolicyEngine(Allow) is used instead.
-    let fg = build_forgeguard(auth, None, None)?;
+    let fg = build_forgeguard(auth, None, None, None)?;
     Ok(build_router(s, fg))
 }
 
@@ -216,6 +226,7 @@ fn build_forgeguard(
     auth: Option<&AuthConfig>,
     ed25519_resolver: Option<Arc<dyn IdentityResolver>>,
     vp_client: Option<aws_sdk_verifiedpermissions::Client>,
+    membership_resolver: Option<Arc<dyn MembershipResolver>>,
 ) -> color_eyre::Result<Arc<ForgeGuard>> {
     let health_route = anon_route("GET", "/health")?;
     let metrics_route = anon_route("GET", "/metrics")?;
@@ -298,7 +309,7 @@ fn build_forgeguard(
         default_policy,
         debug_mode: false,
         auth_providers,
-        membership_resolver: None,
+        membership_resolver,
     });
     Ok(Arc::new(ForgeGuard::new(pipeline_config, chain, engine)))
 }
