@@ -8,13 +8,30 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use forgeguard_axum::ForgeGuardIdentity;
 use forgeguard_core::{OrgStatus, Organization, OrganizationId};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::config::OrgConfig;
 use crate::etag::{self, ResolvedIfMatch};
 use crate::store::{OrgRecord, OrgStore};
 
 pub(crate) use keys::{generate_key_handler, list_keys_handler, revoke_key_handler};
+
+/// Response body emitted on every `412 Precondition Failed` from `PUT /organizations/{id}`.
+///
+/// The `reason` field surfaces the same label that drives the Prometheus counter
+/// (`PreconditionReason::as_label()`), keeping the wire shape, metrics, and span
+/// fields a single source of truth.
+#[derive(Debug, Serialize)]
+pub(crate) struct PreconditionFailedBody {
+    /// Stable machine-readable error code. Always `"etag mismatch"` for 412 responses.
+    error: &'static str,
+    /// Machine-readable reason: one of `"stale_etag"`, `"draft_fail_closed"`,
+    /// or `"wildcard_on_draft"`.
+    reason: &'static str,
+    /// The ETag of the current stored representation (empty string for Draft orgs
+    /// that have no config yet).
+    current_etag: String,
+}
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct CreateOrgRequest {
@@ -270,10 +287,11 @@ pub(crate) async fn update_handler<S: OrgStore>(
             );
             return (
                 StatusCode::PRECONDITION_FAILED,
-                Json(serde_json::json!({
-                    "error": "etag mismatch",
-                    "current_etag": "",
-                })),
+                Json(PreconditionFailedBody {
+                    error: "etag mismatch",
+                    reason: crate::metrics::PreconditionReason::WildcardOnDraft.as_label(),
+                    current_etag: String::new(),
+                }),
             )
                 .into_response();
         }
@@ -325,10 +343,11 @@ pub(crate) async fn update_handler<S: OrgStore>(
             (
                 StatusCode::PRECONDITION_FAILED,
                 response_headers,
-                Json(serde_json::json!({
-                    "error": "etag mismatch",
-                    "current_etag": current_etag,
-                })),
+                Json(PreconditionFailedBody {
+                    error: "etag mismatch",
+                    reason: reason.as_label(),
+                    current_etag,
+                }),
             )
                 .into_response()
         }

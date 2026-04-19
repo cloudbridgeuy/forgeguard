@@ -148,6 +148,7 @@ async fn update_with_stale_if_match_returns_412_and_current_etag() {
     let bytes = res.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(json["error"], "etag mismatch");
+    assert_eq!(json["reason"], "stale_etag");
     assert_eq!(json["current_etag"], current_header);
 }
 
@@ -362,6 +363,7 @@ async fn draft_put_with_any_if_match_returns_412() {
     let body_bytes = put_res.into_body().collect().await.unwrap().to_bytes();
     let body_json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
     assert_eq!(body_json["error"], "etag mismatch");
+    assert_eq!(body_json["reason"], "draft_fail_closed");
     assert_eq!(body_json["current_etag"], "");
 
     // The Draft must still have no config — proxy-config returns 409.
@@ -513,7 +515,149 @@ async fn put_wildcard_on_draft_returns_412() {
     let body_bytes = put_res.into_body().collect().await.unwrap().to_bytes();
     let body_json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
     assert_eq!(body_json["error"], "etag mismatch");
+    assert_eq!(body_json["reason"], "wildcard_on_draft");
     assert_eq!(body_json["current_etag"], "");
+}
+
+// -----------------------------------------------------------------
+// Optimistic-locking tests (issue #56, V5) — Body `reason` field assertions
+// -----------------------------------------------------------------
+
+/// V5 — 412 body on a Configured org with a stale strong `If-Match` includes
+/// `reason == "stale_etag"`.
+#[tokio::test]
+async fn put_412_body_includes_stale_etag_reason() {
+    let store = build_test_store();
+    let app = test_app(store.clone());
+
+    let put_body = serde_json::to_vec(&serde_json::json!({
+        "config": {
+            "version": "2026-04-07",
+            "project_id": "todo-app",
+            "upstream_url": "https://stale-reason.example",
+            "default_policy": "deny",
+            "routes": [],
+            "public_routes": [],
+            "features": {}
+        }
+    }))
+    .unwrap();
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/api/v1/organizations/org-acme")
+                .header("x-api-key", TEST_API_KEY)
+                .header("if-match", "\"definitely-not-the-etag\"")
+                .header("content-type", "application/json")
+                .body(Body::from(put_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::PRECONDITION_FAILED);
+    let current_etag = res
+        .headers()
+        .get(axum::http::header::ETAG)
+        .expect("ETag header on 412")
+        .to_str()
+        .unwrap()
+        .to_string();
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["error"], "etag mismatch");
+    assert_eq!(body["reason"], "stale_etag");
+    assert_eq!(body["current_etag"], current_etag);
+}
+
+/// V5 — 412 body on a Draft org with a strong `If-Match` includes
+/// `reason == "draft_fail_closed"`.
+#[tokio::test]
+async fn put_412_body_includes_draft_fail_closed_reason() {
+    let store = empty_store();
+    let app = test_app(store.clone());
+
+    let create_res = create_draft_org(&app, "org-v5-draft-strong", "V5 Draft Strong").await;
+    assert_eq!(create_res.status(), StatusCode::CREATED);
+
+    let put_body = serde_json::to_vec(&serde_json::json!({
+        "config": {
+            "version": "2026-04-07",
+            "project_id": "proj",
+            "upstream_url": "https://draft-reason.example",
+            "default_policy": "deny",
+            "routes": [],
+            "public_routes": [],
+            "features": {}
+        }
+    }))
+    .unwrap();
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/api/v1/organizations/org-v5-draft-strong")
+                .header("x-api-key", TEST_API_KEY)
+                .header("if-match", "\"anything\"")
+                .header("content-type", "application/json")
+                .body(Body::from(put_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::PRECONDITION_FAILED);
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["error"], "etag mismatch");
+    assert_eq!(body["reason"], "draft_fail_closed");
+}
+
+/// V5 — 412 body on a Draft org with `If-Match: *` includes
+/// `reason == "wildcard_on_draft"`.
+#[tokio::test]
+async fn put_412_body_includes_wildcard_on_draft_reason() {
+    let store = empty_store();
+    let app = test_app(store.clone());
+
+    let create_res = create_draft_org(&app, "org-v5-wildcard-draft", "V5 Wildcard Draft").await;
+    assert_eq!(create_res.status(), StatusCode::CREATED);
+
+    let put_body = serde_json::to_vec(&serde_json::json!({
+        "config": {
+            "version": "2026-04-07",
+            "project_id": "proj",
+            "upstream_url": "https://wildcard-draft-reason.example",
+            "default_policy": "deny",
+            "routes": [],
+            "public_routes": [],
+            "features": {}
+        }
+    }))
+    .unwrap();
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/api/v1/organizations/org-v5-wildcard-draft")
+                .header("x-api-key", TEST_API_KEY)
+                .header("if-match", "*")
+                .header("content-type", "application/json")
+                .body(Body::from(put_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::PRECONDITION_FAILED);
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["error"], "etag mismatch");
+    assert_eq!(body["reason"], "wildcard_on_draft");
 }
 
 /// V2 — Mixed body (name + config) with stale If-Match is rejected wholesale.
@@ -579,6 +723,7 @@ async fn name_plus_config_put_honors_if_match() {
     let body_bytes = put_res.into_body().collect().await.unwrap().to_bytes();
     let body_json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
     assert_eq!(body_json["error"], "etag mismatch");
+    assert_eq!(body_json["reason"], "stale_etag");
     assert_eq!(body_json["current_etag"], real_etag);
 
     // 3. Neither name nor config was mutated.
