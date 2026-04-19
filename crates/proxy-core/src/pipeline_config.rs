@@ -132,6 +132,7 @@ mod tests {
         assert_eq!(config.default_policy(), DefaultPolicy::Deny);
         assert!(config.debug_mode());
         assert_eq!(config.auth_providers(), &["jwt"]);
+        assert!(config.membership_resolver().is_none());
     }
 
     #[test]
