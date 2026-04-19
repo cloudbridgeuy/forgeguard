@@ -286,7 +286,6 @@ fn build_policy_engine(
         let cache = forgeguard_authz::TieredCache::new(l1, l2, authz.cache_ttl());
 
         let project_id = config.project_id().clone();
-
         let engine = VpPolicyEngine::new(vp_client, &engine_config, project_id, cache);
         Ok(Arc::new(engine))
     } else {

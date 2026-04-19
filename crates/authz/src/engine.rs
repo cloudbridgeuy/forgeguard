@@ -27,6 +27,19 @@ pub struct VpPolicyEngine {
     cache: TieredCache,
 }
 
+/// Return an immediately-resolved deny future carrying an `EvaluationError`.
+///
+/// Used by `evaluate()` to consolidate the three early-return arms that all
+/// produce the same shape: `Ok(Deny { EvaluationError(msg) })`.
+fn deny_eval_error(
+    msg: impl Into<String>,
+) -> Pin<Box<dyn Future<Output = forgeguard_authz_core::Result<PolicyDecision>> + Send + 'static>> {
+    let decision = PolicyDecision::Deny {
+        reason: DenyReason::EvaluationError(msg.into()),
+    };
+    Box::pin(std::future::ready(Ok(decision)))
+}
+
 impl VpPolicyEngine {
     /// Create a new engine with an injected VP client.
     pub fn new(
@@ -119,10 +132,7 @@ impl PolicyEngine for VpPolicyEngine {
         );
 
         let Some(tenant_id) = query.context().tenant_id() else {
-            let decision = PolicyDecision::Deny {
-                reason: DenyReason::EvaluationError("no tenant_id in query context".to_string()),
-            };
-            return Box::pin(std::future::ready(Ok(decision)));
+            return deny_eval_error("no tenant_id in query context");
         };
 
         let cache_key = build_cache_key(query);
@@ -130,12 +140,7 @@ impl PolicyEngine for VpPolicyEngine {
         // Build VP request components (pure translation, no I/O).
         let components = match build_vp_request(query, &self.project_id, tenant_id) {
             Ok(c) => c,
-            Err(e) => {
-                let decision = PolicyDecision::Deny {
-                    reason: DenyReason::EvaluationError(e.to_string()),
-                };
-                return Box::pin(std::future::ready(Ok(decision)));
-            }
+            Err(e) => return deny_eval_error(e.to_string()),
         };
 
         // Build inline entities (principal + groups + resource).
@@ -147,12 +152,7 @@ impl PolicyEngine for VpPolicyEngine {
             tenant_id,
         ) {
             Ok(e) => e,
-            Err(e) => {
-                let decision = PolicyDecision::Deny {
-                    reason: DenyReason::EvaluationError(e.to_string()),
-                };
-                return Box::pin(std::future::ready(Ok(decision)));
-            }
+            Err(e) => return deny_eval_error(e.to_string()),
         };
 
         Box::pin(async move {
