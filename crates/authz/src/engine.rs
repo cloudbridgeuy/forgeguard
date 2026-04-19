@@ -5,7 +5,7 @@ use std::pin::Pin;
 
 use aws_sdk_verifiedpermissions::types::EntitiesDefinition;
 use forgeguard_authz_core::{CacheStats, DenyReason, PolicyDecision, PolicyEngine, PolicyQuery};
-use forgeguard_core::{ProjectId, TenantId};
+use forgeguard_core::ProjectId;
 
 use crate::cache::{build_cache_key, CacheKey};
 use crate::config::VpEngineConfig;
@@ -24,7 +24,6 @@ pub struct VpPolicyEngine {
     client: aws_sdk_verifiedpermissions::Client,
     policy_store_id: String,
     project_id: ProjectId,
-    tenant_id: TenantId,
     cache: TieredCache,
 }
 
@@ -34,14 +33,12 @@ impl VpPolicyEngine {
         client: aws_sdk_verifiedpermissions::Client,
         config: &VpEngineConfig,
         project_id: ProjectId,
-        tenant_id: TenantId,
         cache: TieredCache,
     ) -> Self {
         Self {
             client,
             policy_store_id: config.policy_store_id().to_string(),
             project_id,
-            tenant_id,
             cache,
         }
     }
@@ -121,10 +118,17 @@ impl PolicyEngine for VpPolicyEngine {
             "VP evaluate — query context"
         );
 
+        let Some(tenant_id) = query.context().tenant_id() else {
+            let decision = PolicyDecision::Deny {
+                reason: DenyReason::EvaluationError("no tenant_id in query context".to_string()),
+            };
+            return Box::pin(std::future::ready(Ok(decision)));
+        };
+
         let cache_key = build_cache_key(query);
 
         // Build VP request components (pure translation, no I/O).
-        let components = match build_vp_request(query, &self.project_id, &self.tenant_id) {
+        let components = match build_vp_request(query, &self.project_id, tenant_id) {
             Ok(c) => c,
             Err(e) => {
                 let decision = PolicyDecision::Deny {
@@ -140,7 +144,7 @@ impl PolicyEngine for VpPolicyEngine {
             query.context().groups(),
             query.resource(),
             &self.project_id,
-            &self.tenant_id,
+            tenant_id,
         ) {
             Ok(e) => e,
             Err(e) => {

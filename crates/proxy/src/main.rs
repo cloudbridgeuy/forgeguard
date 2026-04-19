@@ -286,10 +286,8 @@ fn build_policy_engine(
         let cache = forgeguard_authz::TieredCache::new(l1, l2, authz.cache_ttl());
 
         let project_id = config.project_id().clone();
-        let tenant_id = forgeguard_core::TenantId::new("default")
-            .map_err(|e| color_eyre::eyre::eyre!("invalid default tenant: {e}"))?;
 
-        let engine = VpPolicyEngine::new(vp_client, &engine_config, project_id, tenant_id, cache);
+        let engine = VpPolicyEngine::new(vp_client, &engine_config, project_id, cache);
         Ok(Arc::new(engine))
     } else {
         Ok(Arc::new(AllowAllEngine))

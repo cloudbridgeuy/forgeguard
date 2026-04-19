@@ -17,7 +17,7 @@ use forgeguard_authz::cache::AuthzCache;
 use forgeguard_authz::{TieredCache, VpEngineConfig, VpPolicyEngine};
 use forgeguard_authz_core::{PolicyDecision, StaticPolicyEngine};
 use forgeguard_axum::{forgeguard_layer, ForgeGuard};
-use forgeguard_core::{FlagConfig, ProjectId, QualifiedAction, TenantId};
+use forgeguard_core::{FlagConfig, ProjectId, QualifiedAction};
 use forgeguard_http::{
     DefaultPolicy, HttpMethod, PublicAuthMode, PublicRoute, PublicRouteMatcher, RouteMapping,
     RouteMatcher,
@@ -246,14 +246,12 @@ fn build_forgeguard(
             let engine: Arc<dyn forgeguard_authz_core::PolicyEngine> = match vp_client {
                 Some(client) => {
                     let vp_config = VpEngineConfig::new(&auth.policy_store_id);
-                    let tenant_id = TenantId::new("forgeguard")?;
                     let l1 = AuthzCache::new(vp_config.cache_ttl(), vp_config.cache_max_entries());
                     let cache = TieredCache::new(l1, None, vp_config.cache_ttl());
                     Arc::new(VpPolicyEngine::new(
                         client,
                         &vp_config,
                         project_id.clone(),
-                        tenant_id,
                         cache,
                     ))
                 }
