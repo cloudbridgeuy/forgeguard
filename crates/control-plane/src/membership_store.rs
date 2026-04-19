@@ -5,6 +5,10 @@
 //!
 //! Wired into `app.rs` in Task 10.
 
+// Pre-staged — entire module is wired in Task 10.
+#![allow(dead_code)]
+
+use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 
@@ -14,24 +18,18 @@ use forgeguard_proxy_core::{Membership, MembershipResolver};
 
 use crate::dynamo_store::{pk, sk, ORG_PREFIX};
 
-// Pre-staged — wired in Task 10.
-#[allow(dead_code)]
 const USER_PREFIX: &str = "USER#";
 
 /// DynamoDB-backed implementation of [`MembershipResolver`].
 ///
 /// Performs a single `GetItem` per call.  Returns `None` when no membership
 /// record exists (user is not a member of the org).
-// Pre-staged — wired in Task 10.
-#[allow(dead_code)]
 pub(crate) struct DynamoMembershipResolver {
     client: aws_sdk_dynamodb::Client,
     table_name: String,
 }
 
 impl DynamoMembershipResolver {
-    // Pre-staged — wired in Task 10.
-    #[allow(dead_code)]
     pub(crate) fn new(client: aws_sdk_dynamodb::Client, table_name: String) -> Self {
         Self { client, table_name }
     }
@@ -70,19 +68,14 @@ impl MembershipResolver for DynamoMembershipResolver {
 ///
 /// Returns `None` when the `groups` attribute is absent or is not a list.
 /// Invalid [`GroupName`] values are silently skipped.
-// Pre-staged — called from `resolve`; exported here for exhaustive unit testing.
-#[allow(dead_code)]
-pub(crate) fn parse_groups(
-    item: &std::collections::HashMap<String, AttributeValue>,
-) -> Option<Vec<GroupName>> {
-    let groups_attr = item.get("groups")?;
-    let list = groups_attr.as_l().ok()?;
-    let groups: Vec<GroupName> = list
-        .iter()
-        .filter_map(|v| v.as_s().ok())
-        .filter_map(|s| GroupName::new(s).ok())
-        .collect();
-    Some(groups)
+pub(crate) fn parse_groups(item: &HashMap<String, AttributeValue>) -> Option<Vec<GroupName>> {
+    let list = item.get("groups")?.as_l().ok()?;
+    Some(
+        list.iter()
+            .filter_map(|v| v.as_s().ok())
+            .filter_map(|s| GroupName::new(s).ok())
+            .collect(),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -92,8 +85,6 @@ pub(crate) fn parse_groups(
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use std::collections::HashMap;
-
     use aws_sdk_dynamodb::types::AttributeValue;
 
     use super::*;
