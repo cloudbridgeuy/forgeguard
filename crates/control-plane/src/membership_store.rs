@@ -60,7 +60,12 @@ impl MembershipResolver for DynamoMembershipResolver {
             };
 
             let item = result.item?;
-            let groups = parse_groups(&item)?;
+            let Some(groups) = parse_groups(&item) else {
+                tracing::warn!(
+                    "membership item exists but `groups` attribute is missing or malformed; treating as not a member"
+                );
+                return None;
+            };
             Some(Membership::new(groups))
         })
     }

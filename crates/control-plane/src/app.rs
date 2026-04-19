@@ -84,22 +84,21 @@ pub async fn dynamodb_router(
         dynamo_client.clone(),
         table_name.to_string(),
     )));
-    let membership_resolver = Arc::new(DynamoMembershipResolver::new(
-        dynamo_client.clone(),
-        table_name.to_string(),
-    ));
+    let membership_resolver: Option<Arc<dyn MembershipResolver>> = if auth.is_some() {
+        Some(Arc::new(DynamoMembershipResolver::new(
+            dynamo_client.clone(),
+            table_name.to_string(),
+        )))
+    } else {
+        None
+    };
     let ed25519_resolver: Option<Arc<dyn IdentityResolver>> = if auth.is_some() {
         let key_store = DynamoSigningKeyStore::new(dynamo_client, table_name.to_string());
         Some(Arc::new(Ed25519SignatureResolver::new(key_store)))
     } else {
         None
     };
-    let fg = build_forgeguard(
-        auth,
-        ed25519_resolver,
-        Some(vp_client),
-        Some(membership_resolver),
-    )?;
+    let fg = build_forgeguard(auth, ed25519_resolver, Some(vp_client), membership_resolver)?;
     Ok(build_router(s, fg))
 }
 
