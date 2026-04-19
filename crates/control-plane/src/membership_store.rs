@@ -12,13 +12,11 @@ use aws_sdk_dynamodb::types::AttributeValue;
 use forgeguard_core::{GroupName, OrganizationId, UserId};
 use forgeguard_proxy_core::{Membership, MembershipResolver};
 
-use crate::dynamo_store::{pk, sk};
+use crate::dynamo_store::{pk, sk, ORG_PREFIX};
 
 // Pre-staged — wired in Task 10.
 #[allow(dead_code)]
 const USER_PREFIX: &str = "USER#";
-#[allow(dead_code)]
-const ORG_PREFIX: &str = "ORG#";
 
 /// DynamoDB-backed implementation of [`MembershipResolver`].
 ///
