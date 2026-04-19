@@ -188,7 +188,7 @@ BYOC Proxy                              Control Plane
 
 **Wiring in `app.rs`:** `dynamodb_router()` creates a `DynamoSigningKeyStore` (backed by the same DynamoDB table), wraps it in `Ed25519SignatureResolver`, and appends it to the `IdentityChain` after `CognitoJwtResolver`. Memory mode never gets the Ed25519 resolver.
 
-**VP Authorization (V4):** When auth is enabled and a VP client is available (`--store=dynamodb` + `--jwks-url` + `--policy-store-id`), the policy engine is `VpPolicyEngine`. The Cedar project namespace is `forgeguard` (from `ProjectId::new("forgeguard")`), with a fixed `tenant_id = "forgeguard"`. `DefaultPolicy::Deny` is used — unmatched routes are denied. See the Authorization section below for the route-to-action mapping and PrincipalKind routing.
+**VP Authorization (V4):** When auth is enabled and a VP client is available (`--store=dynamodb` + `--jwks-url` + `--policy-store-id`), the policy engine is `VpPolicyEngine`. The Cedar project namespace is `forgeguard` (from `ProjectId::new("forgeguard")`). The tenant is read per request from `PolicyContext::tenant_id()` — populated from the `X-ForgeGuard-Org-Id` header during pipeline Phase 5b (membership enrichment) — so the engine is no longer bound to a static tenant at construction time. `DefaultPolicy::Deny` is used — unmatched routes are denied. See the Authorization section below for the route-to-action mapping and PrincipalKind routing.
 
 ## Authorization
 
@@ -200,7 +200,7 @@ BYOC Proxy                              Control Plane
 | `--jwks-url` + `--store=memory` | `StaticPolicyEngine(Allow)` | `Deny` |
 | `--jwks-url` + `--store=dynamodb` + `--policy-store-id` | `VpPolicyEngine` | `Deny` |
 
-The Cedar namespace is `forgeguard` (from `ProjectId::new("forgeguard")`). The fixed tenant is `TenantId::new("forgeguard")`.
+The Cedar namespace is `forgeguard` (from `ProjectId::new("forgeguard")`). The tenant is resolved per request from `PolicyContext::tenant_id()` (populated from `X-ForgeGuard-Org-Id` via pipeline Phase 5b), not fixed at engine construction.
 
 ### Route-to-Action Mapping
 
