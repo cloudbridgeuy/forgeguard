@@ -124,24 +124,29 @@ pub async fn evaluate_pipeline(
             };
 
             // `org_id` is `Some` only when the header was present and valid.
-            // Move `identity` out before the `.await` so the resolver can
-            // borrow `user_id` without holding an `Option::as_ref` borrow.
-            // The `is_some_and` guard above guarantees the `take` succeeds.
-            if let (Some(org_id), Some(id)) = (org_id, identity.take()) {
-                match resolver.resolve(id.user_id(), &org_id).await {
-                    Some(membership) => {
-                        identity = Some(Identity::new(IdentityParams {
-                            user_id: id.user_id().clone(),
-                            tenant_id: Some(org_id.into()),
-                            groups: membership.groups().to_vec(),
-                            expiry: id.expiry().copied(),
-                            resolver: id.resolver(),
-                            extra: id.extra().cloned(),
-                            principal_kind: id.principal_kind(),
-                        }));
-                    }
-                    None => {
-                        return reject_json(403, "Not a member of this organization");
+            // Only drain `identity` when `org_id` is `Some`; if the header was
+            // absent on an optional/public route we must leave `identity` intact
+            // so downstream phases (flags, policy, forward) still see it.
+            if let Some(org_id) = org_id {
+                // The `is_some_and(|id| id.tenant_id().is_none())` guard above
+                // ensures `identity` is `Some` here — the inner `if let` is
+                // always true; the `None` arm is a no-op safety net.
+                if let Some(id) = identity.take() {
+                    match resolver.resolve(id.user_id(), &org_id).await {
+                        Some(membership) => {
+                            identity = Some(Identity::new(IdentityParams {
+                                user_id: id.user_id().clone(),
+                                tenant_id: Some(org_id.into()),
+                                groups: membership.groups().to_vec(),
+                                expiry: id.expiry().copied(),
+                                resolver: id.resolver(),
+                                extra: id.extra().cloned(),
+                                principal_kind: id.principal_kind(),
+                            }));
+                        }
+                        None => {
+                            return reject_json(403, "Not a member of this organization");
+                        }
                     }
                 }
             }

@@ -926,3 +926,48 @@ async fn no_membership_resolver_skips_phase_5b() {
         other => panic!("expected Forward with identity (no tenant), got {other:?}"),
     }
 }
+
+/// Test 7: opportunistic route + membership resolver configured + no org header.
+///
+/// Regression test for the silent-drop bug: `identity.take()` was called
+/// unconditionally as part of tuple construction, draining `identity` to `None`
+/// even when `org_id` was `None`. The fix ensures `take()` is only called when
+/// `org_id` is `Some`.
+///
+/// Invariants:
+/// - `PanicMembershipResolver` panics if called — proves the resolver is never
+///   invoked when the org header is absent.
+/// - The forwarded identity must be the unenriched JWT identity (no tenant_id),
+///   not `None`.
+#[tokio::test]
+async fn no_org_header_on_opportunistic_route_preserves_identity() {
+    let public_routes = vec![PublicRoute::new(
+        "GET".parse().unwrap(),
+        "/opt".to_string(),
+        PublicAuthMode::Opportunistic,
+    )];
+    // PanicMembershipResolver will panic if Phase 5b calls resolve() —
+    // proving the resolver is skipped when there is no org header.
+    let resolver = Arc::new(PanicMembershipResolver);
+    let config = make_config_with_membership(&[], &public_routes, DefaultPolicy::Deny, resolver);
+    let chain = make_chain_with_jwt_identity();
+    let engine = allow_engine();
+    // Valid bearer token, but NO X-ForgeGuard-Org-Id header.
+    let req = input_with_bearer("GET", "/opt", "valid-token");
+
+    let outcome = evaluate_pipeline(&config, &req, &chain, &engine).await;
+
+    match outcome {
+        PipelineOutcome::Forward {
+            identity: Some(id), ..
+        } => {
+            // Identity must be the unenriched JWT identity — not silently dropped.
+            assert_eq!(id.user_id().as_str(), "alice");
+            assert!(
+                id.tenant_id().is_none(),
+                "identity must be unenriched (no org header was sent)"
+            );
+        }
+        other => panic!("expected Forward with unenriched identity, got {other:?}"),
+    }
+}
