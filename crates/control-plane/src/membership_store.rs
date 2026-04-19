@@ -45,7 +45,7 @@ impl MembershipResolver for DynamoMembershipResolver {
         let sk_value = format!("{ORG_PREFIX}{org_id}");
 
         Box::pin(async move {
-            let result = self
+            let result = match self
                 .client
                 .get_item()
                 .table_name(&self.table_name)
@@ -53,7 +53,16 @@ impl MembershipResolver for DynamoMembershipResolver {
                 .key(sk(), AttributeValue::S(sk_value))
                 .send()
                 .await
-                .ok()?;
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "DynamoDB GetItem failed for membership lookup; treating as not a member"
+                    );
+                    return None;
+                }
+            };
 
             let item = result.item?;
             let groups = parse_groups(&item)?;
@@ -138,5 +147,14 @@ mod tests {
         let result = parse_groups(&item).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0], GroupName::new("admin").unwrap());
+    }
+
+    #[test]
+    fn parse_groups_wrong_attribute_type() {
+        // Data corruption: `groups` stored as String instead of List → treated as absent.
+        let mut item = HashMap::new();
+        item.insert("groups".to_string(), AttributeValue::S("admin".into()));
+
+        assert!(parse_groups(&item).is_none());
     }
 }
