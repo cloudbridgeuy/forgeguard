@@ -11,7 +11,7 @@ use forgeguard_core::{OrgStatus, Organization, OrganizationId};
 use serde::{Deserialize, Serialize};
 
 use crate::config::OrgConfig;
-use crate::etag::{self, ResolvedIfMatch};
+use crate::etag::{self, IfNoneMatchResult, ResolvedIfMatch};
 use crate::store::{OrgRecord, OrgStore};
 
 pub(crate) use keys::{generate_key_handler, list_keys_handler, revoke_key_handler};
@@ -114,20 +114,51 @@ pub(crate) async fn create_handler<S: OrgStore>(
     }
 }
 
+#[tracing::instrument(
+    name = "show_org",
+    skip_all,
+    fields(org_id = %raw_org_id, if_none_match_hit = tracing::field::Empty),
+)]
 pub(crate) async fn get_handler<S: OrgStore>(
     Path(raw_org_id): Path<String>,
     State(store): State<Arc<S>>,
+    headers: HeaderMap,
 ) -> Response {
     let Ok(org_id) = OrganizationId::new(&raw_org_id) else {
         return not_found();
     };
 
-    match store.get(&org_id).await {
-        Ok(Some(record)) => (StatusCode::OK, Json(record.org().clone())).into_response(),
-        Ok(None) => not_found(),
+    let record = match store.get(&org_id).await {
+        Ok(Some(r)) => r,
+        Ok(None) => return not_found(),
         Err(e) => {
             tracing::error!(org_id = %raw_org_id, error = %e, "get org failed");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    let if_none_match_parsed = headers
+        .get(axum::http::header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(etag::parse_if_match);
+    let stored_etag = record
+        .configured()
+        .map(crate::store::ConfiguredConfig::etag);
+
+    let response_headers = etag_header_map(stored_etag);
+
+    match etag::check_if_none_match(if_none_match_parsed, stored_etag) {
+        IfNoneMatchResult::Matched | IfNoneMatchResult::WildcardMatched => {
+            tracing::Span::current().record("if_none_match_hit", true);
+            (
+                StatusCode::NOT_MODIFIED,
+                response_headers,
+                axum::body::Body::empty(),
+            )
+                .into_response()
+        }
+        IfNoneMatchResult::NotMatched | IfNoneMatchResult::WildcardOnDraft => {
+            (StatusCode::OK, response_headers, Json(record.org().clone())).into_response()
         }
     }
 }
@@ -381,6 +412,18 @@ fn not_found() -> Response {
         Json(serde_json::json!({"error": "not found"})),
     )
         .into_response()
+}
+
+/// Build a [`HeaderMap`] containing an `ETag` header when `stored_etag` is
+/// `Some`. Returns an empty map for Draft orgs (no stored representation).
+fn etag_header_map(stored_etag: Option<&str>) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    if let Some(etag_str) = stored_etag {
+        if let Ok(val) = etag_str.parse() {
+            headers.insert(axum::http::header::ETAG, val);
+        }
+    }
+    headers
 }
 
 // ---------------------------------------------------------------------------

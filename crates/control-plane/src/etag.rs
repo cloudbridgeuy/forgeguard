@@ -61,7 +61,6 @@ pub(crate) enum EtagCheck {
 /// Maps directly to HTTP status: [`Matched`][IfNoneMatchResult::Matched] /
 /// [`WildcardMatched`][IfNoneMatchResult::WildcardMatched] → 304;
 /// everything else → 200 + body.
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum IfNoneMatchResult {
     /// No header, or header parsed but nothing to compare (e.g. Draft org
@@ -146,7 +145,6 @@ pub(crate) fn check_etag(stored: Option<&str>, expected: Option<&str>) -> EtagCh
 /// | `Some(Strong(h))`         | `Some(s)` if `h == s` | `Matched`           |
 /// | `Some(Strong(h))`         | `Some(s)` if `h != s` | `NotMatched`        |
 /// | `Some(Strong(_))`         | `None`                | `NotMatched`        |
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn check_if_none_match(
     header: Option<IfMatch>,
     stored_etag: Option<&str>,
