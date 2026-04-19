@@ -36,6 +36,8 @@ pub struct PipelineConfigParams {
     pub default_policy: DefaultPolicy,
     pub debug_mode: bool,
     pub auth_providers: Vec<String>,
+    /// Optional resolver for org membership lookups.  `None` skips Phase 5b
+    /// (membership enrichment) — used by BYOC proxies and single-org callers.
     pub membership_resolver: Option<Arc<dyn MembershipResolver>>,
 }
 
@@ -228,5 +230,38 @@ mod tests {
         });
 
         assert!(config.auth_providers().is_empty());
+    }
+
+    #[test]
+    fn membership_resolver_accessor_returns_some_when_provided() {
+        use std::future::Future;
+        use std::pin::Pin;
+
+        use crate::membership::{Membership, MembershipResolver};
+        use forgeguard_core::{OrganizationId, UserId};
+
+        struct StubResolver;
+        impl MembershipResolver for StubResolver {
+            fn resolve(
+                &self,
+                _user_id: &UserId,
+                _org_id: &OrganizationId,
+            ) -> Pin<Box<dyn Future<Output = Option<Membership>> + Send + '_>> {
+                Box::pin(async { None })
+            }
+        }
+
+        let config = PipelineConfig::new(PipelineConfigParams {
+            route_matcher: RouteMatcher::new(&[]).unwrap(),
+            public_route_matcher: PublicRouteMatcher::new(&[]).unwrap(),
+            flag_config: FlagConfig::default(),
+            project_id: ProjectId::new("test-project").unwrap(),
+            default_policy: DefaultPolicy::Deny,
+            debug_mode: false,
+            auth_providers: vec![],
+            membership_resolver: Some(Arc::new(StubResolver)),
+        });
+
+        assert!(config.membership_resolver().is_some());
     }
 }
