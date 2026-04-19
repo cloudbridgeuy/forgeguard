@@ -9,29 +9,48 @@ name = "Globex Corporation"
 [[user]]
 username = "acme-admin"
 email = "admin@acme.forgeguard.dev"
-group = "admin"
+default_org = "org-acme"
+
+[[user.memberships]]
 org_id = "org-acme"
+groups = ["admin"]
+
+[[user.memberships]]
+org_id = "org-globex"
+groups = ["member"]
 
 [[user]]
 username = "acme-member"
 email = "member@acme.forgeguard.dev"
-group = "member"
+default_org = "org-acme"
+
+[[user.memberships]]
 org_id = "org-acme"
+groups = ["member"]
 
 [[user]]
 username = "acme-owner"
 email = "owner@acme.forgeguard.dev"
-group = "owner"
+default_org = "org-acme"
+
+[[user.memberships]]
 org_id = "org-acme"
+groups = ["owner"]
 
 [[user]]
 username = "globex-admin"
 email = "admin@globex.forgeguard.dev"
-group = "admin"
+default_org = "org-globex"
+
+[[user.memberships]]
 org_id = "org-globex"
+groups = ["admin"]
 
 [[user]]
 username = "globex-member"
 email = "member@globex.forgeguard.dev"
-group = "member"
+default_org = "org-globex"
+
+[[user.memberships]]
 org_id = "org-globex"
+groups = ["member"]
