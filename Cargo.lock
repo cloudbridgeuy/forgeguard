@@ -339,6 +339,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-sdk-cognitoidentityprovider"
+version = "1.114.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "182a6190ad9fda85f415d40e26bcc34414604a14ef2478b27213f855656b69c5"
+dependencies = [
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http",
+ "aws-smithy-json",
+ "aws-smithy-observability",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "fastrand",
+ "http 0.2.12",
+ "http 1.4.0",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
 name = "aws-sdk-dynamodb"
 version = "1.110.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5640,6 +5664,7 @@ version = "0.1.0"
 dependencies = [
  "aws-config",
  "aws-sdk-cloudformation",
+ "aws-sdk-cognitoidentityprovider",
  "aws-sdk-dynamodb",
  "aws-sdk-lambda",
  "aws-sdk-verifiedpermissions",
@@ -5647,13 +5672,16 @@ dependencies = [
  "clap",
  "color-eyre",
  "duct",
+ "forgeguard_authn_core",
  "glob",
  "libc",
+ "reqwest",
  "serde",
  "serde_json",
  "tokio",
  "toml",
  "toml_edit",
+ "uuid",
  "zip",
 ]
 
