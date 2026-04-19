@@ -1,10 +1,11 @@
 //! Pure helpers for optimistic-locking etag handling.
 //!
-//! This module is the functional core for the `If-Match` / ETag flow on
-//! `PUT /api/v1/organizations/{org_id}`. Every function here is pure:
-//! deterministic, no I/O, no shared-state mutation. The imperative shell
-//! (the handler and the store) calls into these functions and translates
-//! their outputs into HTTP responses or storage side effects.
+//! This module is the functional core for the `If-Match` / `If-None-Match` /
+//! ETag flow on `PUT /api/v1/organizations/{org_id}` and the corresponding
+//! `GET` reads. Every function here is pure: deterministic, no I/O, no
+//! shared-state mutation. The imperative shell (the handler and the store)
+//! calls into these functions and translates their outputs into HTTP responses
+//! or storage side effects.
 
 /// Parsed form of the `If-Match` request header.
 ///
@@ -53,6 +54,27 @@ pub(crate) enum EtagCheck {
     /// an empty string means there is no stored etag (a draft org has no
     /// config yet).
     Mismatch { current: String },
+}
+
+/// Outcome of comparing an `If-None-Match` header against the stored etag.
+///
+/// Maps directly to HTTP status: [`Matched`][IfNoneMatchResult::Matched] /
+/// [`WildcardMatched`][IfNoneMatchResult::WildcardMatched] → 304;
+/// everything else → 200 + body.
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum IfNoneMatchResult {
+    /// No header, or header parsed but nothing to compare (e.g. Draft org
+    /// with a strong `If-None-Match`). Handler returns 200 + body.
+    NotMatched,
+    /// Strong etag matched stored etag. Handler returns 304.
+    Matched,
+    /// `If-None-Match: *` against a Configured org. Handler returns 304.
+    WildcardMatched,
+    /// `If-None-Match: *` against a Draft org (no representation). Handler
+    /// returns 200 + body. Kept as a distinct variant so the handler match is
+    /// total and the intent is self-documenting.
+    WildcardOnDraft,
 }
 
 /// Parse the raw `If-Match` header value into an [`IfMatch`] ADT.
@@ -110,6 +132,31 @@ pub(crate) fn check_etag(stored: Option<&str>, expected: Option<&str>) -> EtagCh
         (Some(_), None) => EtagCheck::Mismatch {
             current: String::new(),
         },
+    }
+}
+
+/// Compare an `If-None-Match` header against the currently stored etag and
+/// produce an explicit outcome.
+///
+/// | `header`                  | `stored_etag`         | Result              |
+/// |---------------------------|-----------------------|---------------------|
+/// | `None`                    | any                   | `NotMatched`        |
+/// | `Some(Wildcard)`          | `Some(_)`             | `WildcardMatched`   |
+/// | `Some(Wildcard)`          | `None`                | `WildcardOnDraft`   |
+/// | `Some(Strong(h))`         | `Some(s)` if `h == s` | `Matched`           |
+/// | `Some(Strong(h))`         | `Some(s)` if `h != s` | `NotMatched`        |
+/// | `Some(Strong(_))`         | `None`                | `NotMatched`        |
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn check_if_none_match(
+    header: Option<IfMatch>,
+    stored_etag: Option<&str>,
+) -> IfNoneMatchResult {
+    match (header, stored_etag) {
+        (None, _) => IfNoneMatchResult::NotMatched,
+        (Some(IfMatch::Wildcard), Some(_)) => IfNoneMatchResult::WildcardMatched,
+        (Some(IfMatch::Wildcard), None) => IfNoneMatchResult::WildcardOnDraft,
+        (Some(IfMatch::Strong(h)), Some(s)) if h == s => IfNoneMatchResult::Matched,
+        (Some(IfMatch::Strong(_)), _) => IfNoneMatchResult::NotMatched,
     }
 }
 
@@ -233,6 +280,66 @@ mod tests {
             EtagCheck::Mismatch {
                 current: String::new()
             }
+        );
+    }
+
+    // --- check_if_none_match ------------------------------------------------
+
+    #[test]
+    fn check_none_header_is_not_matched() {
+        assert_eq!(
+            check_if_none_match(None, Some("\"abc\"")),
+            IfNoneMatchResult::NotMatched
+        );
+        assert_eq!(
+            check_if_none_match(None, None),
+            IfNoneMatchResult::NotMatched
+        );
+    }
+
+    #[test]
+    fn check_wildcard_on_configured_is_wildcard_matched() {
+        assert_eq!(
+            check_if_none_match(Some(IfMatch::Wildcard), Some("\"abc\"")),
+            IfNoneMatchResult::WildcardMatched
+        );
+    }
+
+    #[test]
+    fn check_wildcard_on_draft() {
+        assert_eq!(
+            check_if_none_match(Some(IfMatch::Wildcard), None),
+            IfNoneMatchResult::WildcardOnDraft
+        );
+    }
+
+    #[test]
+    fn check_strong_matching_stored_is_matched() {
+        assert_eq!(
+            check_if_none_match(
+                Some(IfMatch::Strong("\"abc123\"".to_owned())),
+                Some("\"abc123\"")
+            ),
+            IfNoneMatchResult::Matched
+        );
+    }
+
+    #[test]
+    fn check_strong_differing_from_stored_is_not_matched() {
+        assert_eq!(
+            check_if_none_match(
+                Some(IfMatch::Strong("\"stale\"".to_owned())),
+                Some("\"current\"")
+            ),
+            IfNoneMatchResult::NotMatched
+        );
+    }
+
+    #[test]
+    fn check_strong_on_draft_is_not_matched() {
+        assert_eq!(
+            check_if_none_match(Some(IfMatch::Strong("\"abc\"".to_owned())), None),
+            IfNoneMatchResult::NotMatched
         );
     }
 }
