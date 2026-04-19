@@ -63,6 +63,7 @@ mod tests {
             default_policy: DefaultPolicy::Deny,
             debug_mode: false,
             auth_providers: vec![],
+            membership_resolver: None,
         })
     }
 

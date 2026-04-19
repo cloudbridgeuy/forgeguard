@@ -161,6 +161,7 @@ mod tests {
             default_policy,
             debug_mode,
             auth_providers: vec![],
+            membership_resolver: None,
         });
         let chain = IdentityChain::new(vec![]);
         let engine = Arc::new(StaticPolicyEngine::new(PolicyDecision::Allow));

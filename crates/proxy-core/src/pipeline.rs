@@ -382,6 +382,7 @@ mod tests {
             default_policy,
             debug_mode,
             auth_providers: vec!["jwt".to_string()],
+            membership_resolver: None,
         })
     }
 
@@ -401,6 +402,7 @@ mod tests {
             default_policy,
             debug_mode: false,
             auth_providers: vec!["jwt".to_string()],
+            membership_resolver: None,
         })
     }
 

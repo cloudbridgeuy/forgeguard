@@ -108,6 +108,7 @@ fn run(app: App) -> color_eyre::Result<()> {
         default_policy: config.default_policy(),
         debug_mode: opts.debug,
         auth_providers: config.auth().chain_order().to_vec(),
+        membership_resolver: None,
     });
 
     let signing = if let Some(signing_config) = config.signing() {

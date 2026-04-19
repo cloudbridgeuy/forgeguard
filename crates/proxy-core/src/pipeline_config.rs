@@ -1,7 +1,11 @@
 //! Pipeline configuration — the immutable config consumed by the auth pipeline.
 
+use std::sync::Arc;
+
 use forgeguard_core::{FlagConfig, ProjectId};
 use forgeguard_http::{DefaultPolicy, PublicRouteMatcher, RouteMatcher};
+
+use crate::membership::MembershipResolver;
 
 // ---------------------------------------------------------------------------
 // PipelineConfig
@@ -20,6 +24,7 @@ pub struct PipelineConfig {
     default_policy: DefaultPolicy,
     debug_mode: bool,
     auth_providers: Vec<String>,
+    membership_resolver: Option<Arc<dyn MembershipResolver>>,
 }
 
 /// Parameters for constructing a [`PipelineConfig`].
@@ -31,6 +36,7 @@ pub struct PipelineConfigParams {
     pub default_policy: DefaultPolicy,
     pub debug_mode: bool,
     pub auth_providers: Vec<String>,
+    pub membership_resolver: Option<Arc<dyn MembershipResolver>>,
 }
 
 impl PipelineConfig {
@@ -44,6 +50,7 @@ impl PipelineConfig {
             default_policy: params.default_policy,
             debug_mode: params.debug_mode,
             auth_providers: params.auth_providers,
+            membership_resolver: params.membership_resolver,
         }
     }
 
@@ -81,6 +88,11 @@ impl PipelineConfig {
     pub fn auth_providers(&self) -> &[String] {
         &self.auth_providers
     }
+
+    /// The optional membership resolver for org membership lookups.
+    pub fn membership_resolver(&self) -> Option<&dyn MembershipResolver> {
+        self.membership_resolver.as_deref()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -109,6 +121,7 @@ mod tests {
             default_policy,
             debug_mode,
             auth_providers: vec!["jwt".to_string()],
+            membership_resolver: None,
         })
     }
 
@@ -147,6 +160,7 @@ mod tests {
             default_policy: DefaultPolicy::Deny,
             debug_mode: false,
             auth_providers: vec![],
+            membership_resolver: None,
         });
 
         let matched = config.route_matcher().match_request("GET", "/health");
@@ -172,6 +186,7 @@ mod tests {
             default_policy: DefaultPolicy::Deny,
             debug_mode: false,
             auth_providers: vec![],
+            membership_resolver: None,
         });
 
         let result = config.public_route_matcher().check("GET", "/public");
@@ -190,6 +205,7 @@ mod tests {
             default_policy: DefaultPolicy::Deny,
             debug_mode: false,
             auth_providers: vec!["jwt".to_string(), "api-key".to_string()],
+            membership_resolver: None,
         });
 
         assert_eq!(config.auth_providers().len(), 2);
@@ -207,6 +223,7 @@ mod tests {
             default_policy: DefaultPolicy::Passthrough,
             debug_mode: false,
             auth_providers: vec![],
+            membership_resolver: None,
         });
 
         assert!(config.auth_providers().is_empty());

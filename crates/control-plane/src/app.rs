@@ -300,6 +300,7 @@ fn build_forgeguard(
         default_policy,
         debug_mode: false,
         auth_providers,
+        membership_resolver: None,
     });
     Ok(Arc::new(ForgeGuard::new(pipeline_config, chain, engine)))
 }

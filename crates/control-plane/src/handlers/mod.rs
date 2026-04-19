@@ -494,6 +494,7 @@ pub(super) mod test_support {
             default_policy: DefaultPolicy::Passthrough,
             debug_mode: false,
             auth_providers: vec!["api-key".to_string()],
+            membership_resolver: None,
         });
 
         let mut keys = HashMap::new();
