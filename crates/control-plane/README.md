@@ -18,7 +18,7 @@ Authentication and authorization are handled by the `forgeguard-axum` middleware
 | `GET` | `/metrics` | Prometheus metrics (anonymous, no auth) |
 | `POST` | `/api/v1/organizations` | Create organization (status: Draft) |
 | `GET` | `/api/v1/organizations` | List organizations (paginated: `?offset=&limit=`) |
-| `GET` | `/api/v1/organizations/{org_id}` | Get organization details |
+| `GET` | `/api/v1/organizations/{org_id}` | Get organization details (supports `If-None-Match` → `304 Not Modified`) |
 | `PUT` | `/api/v1/organizations/{org_id}` | Update organization name and/or config |
 | `DELETE` | `/api/v1/organizations/{org_id}` | Delete organization |
 | `GET` | `/api/v1/organizations/{org_id}/proxy-config` | Per-org proxy config with ETag caching |
@@ -103,9 +103,13 @@ The `orgs.json` file is gitignored (contains AWS resource IDs).
 on the organization's proxy config:
 
 - `GET /api/v1/organizations/{org_id}/proxy-config` returns the current `ETag`.
+- `GET /api/v1/organizations/{org_id}` supports `If-None-Match`: returns
+  **304 Not Modified** when the stored etag matches (or org is Configured and
+  `If-None-Match: *` is sent); returns **200** with full body otherwise.
 - `PUT /api/v1/organizations/{org_id}` with `If-Match: <etag>` writes only if
   the stored etag still matches; otherwise it returns **412 Precondition Failed**
-  with the current etag in the response body and `ETag` header.
+  with the current etag and a `reason` field in the body (mirrors the
+  `forgeguard_control_plane_put_org_412_total{reason=...}` Prometheus label).
 - Pass `If-Match: *` to write against any current representation — matches
   Configured orgs unconditionally, fails closed (412) on Draft orgs.
 - `PUT` without `If-Match` preserves today's last-write-wins behaviour so that
@@ -139,6 +143,21 @@ curl -is -H 'x-api-key: test-key' -H 'If-Match: *' \
   -X PUT http://localhost:3001/api/v1/organizations/org-acme \
   -d '{"config": { ... }}'
 # 200 OK for Configured orgs, 412 for Draft orgs.
+```
+
+Conditional GET — skip re-downloading an unchanged org config:
+
+```sh
+ETAG=$(curl -si \
+  -H 'x-api-key: test-key' \
+  http://localhost:3001/api/v1/organizations/org-acme \
+  | awk 'tolower($1) == "etag:" {print $2}' | tr -d '\r')
+
+curl -is \
+  -H 'x-api-key: test-key' \
+  -H "If-None-Match: $ETAG" \
+  http://localhost:3001/api/v1/organizations/org-acme
+# -> HTTP/1.1 304 Not Modified
 ```
 
 Both backends (`--store=memory` and `--store=dynamodb`) enforce `If-Match`

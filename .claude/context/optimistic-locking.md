@@ -3,10 +3,10 @@
 Implements RFC 7232 `If-Match` / `412 Precondition Failed` on proxy-config updates
 so that two concurrent writers cannot silently overwrite each other.
 
-Scope: **V4 shipped** — both `InMemoryOrgStore` and `DynamoOrgStore` enforce
-`If-Match` identically (V3 parity). V4 adds wildcard `If-Match: *` semantics,
-`ETag` on `POST` create, and 412 Prometheus metrics with structured span
-attributes. The backend choice (`--store=memory` vs `--store=dynamodb`) is
+Scope: **V5 shipped** — both `InMemoryOrgStore` and `DynamoOrgStore` enforce
+`If-Match` / `If-None-Match` identically. V5 adds conditional GET (304) on
+`GET /api/v1/organizations/{org_id}` and a typed `reason` field on all 412
+bodies. The backend choice (`--store=memory` vs `--store=dynamodb`) is
 observationally indistinguishable for PUT semantics.
 
 ## Semantics
@@ -14,17 +14,28 @@ observationally indistinguishable for PUT semantics.
 | Request | Stored | Result |
 |---|---|---|
 | `PUT` with `If-Match: "X"` — body has `config` — current etag is `"X"` | match | `200 OK`, `ETag: "<new>"`, writes |
-| `PUT` with `If-Match: "Y"` — body has `config` — current etag is `"X"` | mismatch | `412 Precondition Failed`, `ETag: "X"`, body `{"error":"etag mismatch","current_etag":"\"X\""}` |
-| `PUT` with `If-Match: "Y"` — body has `config` — org is Draft (no config) | mismatch (empty) | `412`, body `{"error":"etag mismatch","current_etag":""}` |
+| `PUT` with `If-Match: "Y"` — body has `config` — current etag is `"X"` | mismatch | `412 Precondition Failed`, `ETag: "X"`, body `{"error":"etag mismatch","reason":"stale_etag","current_etag":"\"X\""}` |
+| `PUT` with `If-Match: "Y"` — body has `config` — org is Draft (no config) | mismatch (empty) | `412`, body `{"error":"etag mismatch","reason":"draft_fail_closed","current_etag":""}` |
 | `PUT` with stale `If-Match` — body has **both** `name` and `config` | mismatch | `412 Precondition Failed`, neither name nor config applied |
 | `PUT` without `If-Match` — body has `config` | skipped | `200 OK`, unconditional write (backwards-compat) |
 | `PUT` with or without `If-Match` — body has **no** `config` (name-only) | skipped | `200 OK`, name updated, etag unchanged |
 | `PUT` first-config on Draft without `If-Match` | n/a | `200 OK`, new etag |
 | `PUT` with `If-Match: *` — body has `config` — org is Configured | wildcard match | `200 OK`, writes, fresh ETag |
-| `PUT` with `If-Match: *` — body has `config` — org is Draft | wildcard fail-closed | `412`, body `{"error":"etag mismatch","current_etag":""}`, no ETag response header |
+| `PUT` with `If-Match: *` — body has `config` — org is Draft | wildcard fail-closed | `412`, body `{"error":"etag mismatch","reason":"wildcard_on_draft","current_etag":""}`, no ETag response header |
 | `PUT` with `If-Match: *` — body has **no** `config` (name-only) | wildcard ignored | `200 OK`, name updated, wildcard ignored with the rest |
 | `POST /api/v1/organizations` — body has `config` | n/a (create) | `201 Created`, `ETag: "<new>"` |
 | `POST /api/v1/organizations` — body has **no** `config` (Draft create) | n/a (create) | `201 Created`, no ETag header |
+
+### Conditional GET — `If-None-Match` on `GET /api/v1/organizations/{org_id}`
+
+| Request | Stored | Result |
+|---|---|---|
+| `GET` with `If-None-Match: "X"` — stored etag is `"X"` | match | `304 Not Modified`, `ETag: "X"`, empty body |
+| `GET` with `If-None-Match: "Y"` — stored etag is `"X"` | mismatch | `200 OK`, full body, `ETag: "X"` |
+| `GET` with `If-None-Match: *` — org is Configured | wildcard match | `304 Not Modified`, `ETag: "<stored>"`, empty body |
+| `GET` with `If-None-Match: *` — org is Draft (no stored etag) | wildcard on draft | `200 OK`, full body, no ETag header |
+| `GET` with `If-None-Match: "X"` — org is Draft (no stored etag) | no etag to match | `200 OK`, full body, no ETag header |
+| `GET` without `If-None-Match` or malformed header | skipped | `200 OK`, full body, `ETag: "<stored>"` when Configured |
 
 Etag format: `"<xxh64 hex>"` — 16-char hex hash of canonical OrgConfig JSON,
 double-quotes included (RFC 7232 strong etag).
@@ -46,6 +57,16 @@ handlers::update_handler          ← imperative shell (HTTP extraction + respon
         └─ etag::check_etag         ← pure: (stored, expected) → EtagCheck
               │
               └─ EtagCheck::Mismatch { current } → Err(Error::PreconditionFailed { current_etag })
+
+handlers::show_handler            ← imperative shell (HTTP extraction + response)
+  │
+  ├─ etag::parse_if_match          ← pure: header → Option<IfMatch>
+  └─ etag::check_if_none_match     ← pure: (Option<IfMatch>, stored) → IfNoneMatchResult
+          │
+          ├─ IfNoneMatchResult::Matched           → 304, ETag header, empty body
+          ├─ IfNoneMatchResult::WildcardMatched   → 304, ETag header, empty body
+          ├─ IfNoneMatchResult::NotMatched        → 200, full body, ETag header when Configured
+          └─ IfNoneMatchResult::WildcardOnDraft   → 200, full body, no ETag
 ```
 
 ### Pure core — `crates/control-plane/src/etag.rs`
@@ -69,11 +90,20 @@ handlers::update_handler          ← imperative shell (HTTP extraction + respon
 - `check_etag(stored: Option<&str>, expected: Option<&str>) -> EtagCheck` — the
   decision for the strong-match path. Draft-org case: `stored = None` +
   `expected = Some(_)` → `Mismatch { current: "" }` (fail closed).
+- `IfNoneMatchResult` enum — four-variant ADT covering all dispatch arms for
+  the GET handler: `NotMatched` (no header, or strong header with no stored
+  etag or mismatch → 200), `Matched` (strong header equals stored etag → 304),
+  `WildcardMatched` (`*` against Configured org → 304), `WildcardOnDraft` (`*`
+  against Draft org → 200).
+- `check_if_none_match(header: Option<IfMatch>, stored: Option<&str>) -> IfNoneMatchResult` —
+  pure conditional-GET decision. Wildcard / strong-match on a Configured org →
+  `Matched` / `WildcardMatched` (304). Draft org, mismatch, or absent header →
+  `NotMatched` / `WildcardOnDraft` (200).
 
 `derive_expected_etag` was removed; its logic is subsumed by `resolve_if_match`.
 
-15 unit tests — every branch and boundary covered (11 parser/resolver/check
-variants + 4 retained `check_etag` tests).
+21 unit tests — every branch and boundary covered (7 `parse_if_match` + 4
+`resolve_if_match` + 4 `check_etag` + 6 `check_if_none_match`).
 
 ### Imperative shell — `store::OrgStore::update`
 
@@ -124,6 +154,32 @@ PreconditionFailed { current_etag: String },
 the response header and in the JSON body without coupling to the store's
 lifetime.
 
+## 412 body schema
+
+Every 412 response includes a `reason` field that identifies which precondition
+check fired. The label values are the single source of truth shared between the
+JSON body and the `forgeguard_control_plane_put_org_412_total{reason=...}`
+Prometheus metric.
+
+| `reason` value | When it fires |
+|---|---|
+| `stale_etag` | Strong `If-Match` value did not match the stored etag |
+| `draft_fail_closed` | Strong `If-Match` sent against a Draft org (no stored etag) |
+| `wildcard_on_draft` | `If-Match: *` sent against a Draft org |
+
+JSON body shape (strong-match / stale case):
+
+```json
+{"error":"etag mismatch","reason":"stale_etag","current_etag":"\"abc\""}
+```
+
+Draft fail-closed body (`current_etag` is empty string, `reason` distinguishes
+it from a regular stale-etag):
+
+```json
+{"error":"etag mismatch","reason":"draft_fail_closed","current_etag":""}
+```
+
 ## Client expectations
 
 ForgeGuard-owned callers (`forgeguard_cli`, dashboard, xtask) **should** send
@@ -148,17 +204,20 @@ the change, and retry.
 
 | Layer | Count | Where |
 |---|---|---|
-| Pure core — `etag.rs` | 15 unit tests (11 parser/resolver/check + 4 `check_etag`) | `crates/control-plane/src/etag.rs#[cfg(test)]` |
+| Pure core — `etag.rs` | 21 unit tests (7 `parse_if_match` + 4 `resolve_if_match` + 4 `check_etag` + 6 `check_if_none_match`) | `crates/control-plane/src/etag.rs#[cfg(test)]` |
 | Pure core — `precondition_reason` | 4 unit tests | `crates/control-plane/src/metrics.rs#[cfg(test)]` |
 | Pure core — `build_update_condition` | 2 unit tests | `crates/control-plane/src/dynamo_store/mod.rs#[cfg(test)]` |
 | Store — `InMemoryOrgStore` | 4 direct tests | `crates/control-plane/src/store/tests.rs` |
 | Store — `DynamoOrgStore` | 6 direct tests (feature `dynamodb-tests`) | `crates/control-plane/src/dynamo_store/tests.rs` |
-| Handler — `optimistic_locking.rs` | 10 wire-level tests | `crates/control-plane/src/handlers/tests/optimistic_locking.rs` |
+| Handler — `basic.rs` | 5 wire-level tests | `crates/control-plane/src/handlers/tests/basic.rs` |
+| Handler — `draft.rs` | 5 wire-level tests | `crates/control-plane/src/handlers/tests/draft.rs` |
+| Handler — `optimistic_locking.rs` | 13 wire-level tests | `crates/control-plane/src/handlers/tests/optimistic_locking.rs` |
 | Handler — `crud.rs` | 16 wire-level tests | `crates/control-plane/src/handlers/tests/crud.rs` |
+| Handler — `conditional_get.rs` | 7 wire-level tests | `crates/control-plane/src/handlers/tests/conditional_get.rs` |
 | Handler — `metrics_412.rs` | 3 wire-level tests | `crates/control-plane/src/handlers/tests/metrics_412.rs` |
 | Handler — `metrics_endpoint.rs` | 1 wire-level test | `crates/control-plane/src/handlers/tests/metrics_endpoint.rs` |
 
-V1 ships 4 of the handler tests (matching / stale / absent / name-only ignored). V2 adds 3 more pinning Draft first-PUT and mixed name+config semantics (`draft_first_put_without_if_match_succeeds_and_returns_etag`, `draft_put_with_any_if_match_returns_412`, `name_plus_config_put_honors_if_match`). V3 adds 6 direct `DynamoOrgStore` tests mirroring the V1 + V2 scenarios against a live `dynamodb-local` — run via `cargo xtask control-plane test`. V4 adds wildcard handler tests, POST ETag tests, 412 metric counter tests, and metrics endpoint smoke test — 113 tests passing in `-p forgeguard_control_plane --lib`.
+V1 ships 4 of the handler tests (matching / stale / absent / name-only ignored). V2 adds 3 more pinning Draft first-PUT and mixed name+config semantics (`draft_first_put_without_if_match_succeeds_and_returns_etag`, `draft_put_with_any_if_match_returns_412`, `name_plus_config_put_honors_if_match`). V3 adds 6 direct `DynamoOrgStore` tests mirroring the V1 + V2 scenarios against a live `dynamodb-local` — run via `cargo xtask control-plane test`. V4 adds wildcard handler tests, POST ETag tests, 412 metric counter tests, and metrics endpoint smoke test. V5 adds 7 `conditional_get.rs` handler tests and 6 `check_if_none_match` pure core tests.
 
 Run via `cargo xtask lint` (includes `cargo test -p forgeguard_control_plane`).
 
@@ -196,11 +255,7 @@ Verify end-to-end with `cargo xtask control-plane test` (boots
 forgeguard_control_plane_put_org_412_total{reason="<value>"}
 ```
 
-| `reason` label value | Trigger |
-|---|---|
-| `stale_etag` | Strong `If-Match` value did not match stored etag |
-| `draft_fail_closed` | Strong `If-Match` sent against a Draft org (no stored etag) |
-| `wildcard_on_draft` | `If-Match: *` sent against a Draft org |
+The `reason` label values are defined in [412 body schema](#412-body-schema).
 
 No `org_id` label is included — adding per-org cardinality would produce an
 unbounded label set. Per-org attribution is available via structured logs
@@ -233,9 +288,25 @@ V4 is an observability and ergonomics slice on top of V3.
 - 412 Prometheus counter (`forgeguard_control_plane_put_org_412_total`) with
   `reason` label and matching `precondition_reason` span attribute.
 
-No client crate wiring is included. V5 is the consumer-crate slice
-(`forgeguard_cli`, dashboard, xtask adopting `If-Match` on every mutating
-call).
+No client crate wiring is included in V4.
+
+## V5 — Conditional GET and typed 412 body
+
+V5 is an ergonomics and observability slice on top of V4.
+
+**What V5 delivers:**
+
+- `If-None-Match` on `GET /api/v1/organizations/{org_id}` — four handler
+  branches: strong-match → 304; strong-mismatch or Draft → 200; wildcard on
+  Configured → 304; wildcard on Draft → 200. Behaviour is symmetric with the
+  existing `If-None-Match` on `/proxy-config`.
+- `check_if_none_match(header: Option<IfMatch>, stored: Option<&str>) -> IfNoneMatchResult`
+  pure core in `etag.rs` — the decision lives entirely outside the HTTP layer.
+  `IfNoneMatchResult` is a four-variant ADT (`NotMatched` / `Matched` /
+  `WildcardMatched` / `WildcardOnDraft`).
+- `reason` field on all 412 response bodies — values and schema documented in
+  [412 body schema](#412-body-schema); the same label drives the
+  `forgeguard_control_plane_put_org_412_total{reason=...}` Prometheus counter.
 
 ## References
 
