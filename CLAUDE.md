@@ -20,6 +20,7 @@
 - **CP auth:** optional Cognito JWT via `--jwks-url` + `--issuer`; omit for dev mode (no auth) — see [control-plane.md](./.claude/context/control-plane.md)
 - **CP authz (V4):** `VpPolicyEngine` with `DefaultPolicy::Deny` when `--jwks-url` + `--policy-store-id` are set; `cp:*` action mapping — see [control-plane.md](./.claude/context/control-plane.md)
 - **Principal kinds:** Cognito JWT → `PrincipalKind::User` → Cedar `User`; Ed25519 signed → `PrincipalKind::Machine` → Cedar `Machine` — see [authn-wiring.md](./.claude/context/authn-wiring.md)
+- **Membership model:** JWT is identity-only (`sub`); org + groups resolved per-request from `X-ForgeGuard-Org-Id` header + DynamoDB `PK=USER#{sub}, SK=ORG#{org_id}` lookup (pipeline Phase 5b). Inverted GSI1 lists users per org — see [authn-wiring.md](./.claude/context/authn-wiring.md) and [control-plane.md](./.claude/context/control-plane.md)
 - **Infrastructure:** `cargo xtask control-plane infra {deploy,diff,destroy,status}` — CDK + 1Password, see [infra-control-plane.md](./.claude/context/infra-control-plane.md)
 - **Cedar sync:** `cargo xtask control-plane cedar {status,diff,sync}` — VP policy management, see [verified-permissions.md](./.claude/context/verified-permissions.md)
 - **Manual QA tools:** `cargo xtask control-plane {seed,token,curl}` — seed Cognito/DynamoDB, mint JWTs, send signed requests — see [xtask-control-plane-tools.md](./.claude/context/xtask-control-plane-tools.md)
