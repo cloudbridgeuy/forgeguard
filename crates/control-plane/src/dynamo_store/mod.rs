@@ -66,6 +66,7 @@ pub(crate) fn sk() -> &'static str {
 
 pub(crate) const SK_META: &str = "META";
 pub(crate) const ORG_PREFIX: &str = "ORG#";
+pub(crate) const USER_PREFIX: &str = "USER#";
 
 // ---------------------------------------------------------------------------
 // DynamoOrgStore
