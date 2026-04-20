@@ -13,7 +13,7 @@ export class CognitoStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: CognitoStackProps) {
     super(scope, id, props);
 
-    this.userPool = new cognito.UserPool(this, "DashboardUserPool", {
+    this.userPool = new cognito.UserPool(this, "DashboardUserPoolV2", {
       userPoolName: `forgeguard-${props.environment}-dashboard-users`,
       selfSignUpEnabled: false,
       signInAliases: { username: true, email: true },
@@ -26,7 +26,7 @@ export class CognitoStack extends cdk.Stack {
       },
       mfa: cognito.Mfa.OPTIONAL,
       mfaSecondFactor: { sms: false, otp: true },
-      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
     this.appClient = this.userPool.addClient("DashboardClient", {

@@ -96,6 +96,22 @@ All flags use clap's `env` attribute — precedence is: CLI flag > env var > def
 
 The Lambda stack reads Cognito outputs as cross-stack references and injects them as env vars (`FORGEGUARD_CP_JWKS_URL`, `FORGEGUARD_CP_ISSUER`, `FORGEGUARD_CP_AUDIENCE`) into the control-plane function.
 
+#### Schema changes that require pool replacement
+
+Cognito does not support removing or modifying custom schema attributes or Cognito groups on a live user pool (`AddCustomAttributes` exists; no delete/modify counterpart). A CDK change that removes such an attribute will deploy as `UPDATE_FAILED` with `Existing schema attributes cannot be modified or deleted`.
+
+When a schema change is required, force pool recreation by changing the construct id (e.g., `DashboardUserPool` → `DashboardUserPoolV2`). CDK emits a new logical id; CloudFormation creates a fresh pool and handles the old one per its `RemovalPolicy`.
+
+Because the Lambda and VP stacks import pool exports (`userPoolId`, `userPoolArn`, `appClientId`), a straight CDK redeploy blocks with `Cannot update export … as it is in use`. The canonical migration is:
+
+1. Replace the cognito props passed to `LambdaStack`/`VerifiedPermissionsStack` in `bin/app.ts` with dummy literals (`"DECOMMISSIONED"` / `undefined`).
+2. `cdk deploy forgeguard-prod-lambda forgeguard-prod-vp --exclusively` — drops imports.
+3. Apply the pool rename in `cognito-stack.ts` and `cdk deploy forgeguard-prod-cognito --exclusively`.
+4. Restore the real cognito props in `bin/app.ts` and `cargo xtask control-plane infra deploy`.
+5. Update 1Password entries (auto-refreshed by `infra deploy`) and run `cargo xtask control-plane seed`.
+
+The old pool is deleted per its `removalPolicy` (or orphaned on `RETAIN`). Child `UserPoolDomain`/`UserPoolClient` resources whose physical parent is already gone may land in `DELETE_FAILED`; the parent stack still reaches `UPDATE_COMPLETE` and the zombie does not block subsequent deploys.
+
 ## FCIS Split (xtask)
 
 | Module | Role | Pure? |
