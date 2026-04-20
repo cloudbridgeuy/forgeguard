@@ -180,6 +180,7 @@ async fn seed_users(p: SeedUsersParams<'_>) -> Result<()> {
         config,
     } = p;
 
+    let schema = orgs_schema();
     let now = chrono::Utc::now().to_rfc3339();
 
     for user in config.users() {
@@ -262,8 +263,8 @@ async fn seed_users(p: SeedUsersParams<'_>) -> Result<()> {
             dynamo_client
                 .put_item()
                 .table_name(table_name)
-                .item("PK", AttributeValue::S(pk_value.clone()))
-                .item("SK", AttributeValue::S(sk_value))
+                .item(&schema.partition_key, AttributeValue::S(pk_value.clone()))
+                .item(&schema.sort_key, AttributeValue::S(sk_value))
                 .item("user_id", AttributeValue::S(user_sub.clone()))
                 .item("org_id", AttributeValue::S(membership.org_id().to_string()))
                 .item("groups", AttributeValue::L(groups_list))
