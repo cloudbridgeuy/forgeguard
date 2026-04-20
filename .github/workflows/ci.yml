@@ -23,7 +23,7 @@ jobs:
       base_ref: ${{ steps.resolve-base.outputs.base_ref }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -109,7 +109,7 @@ jobs:
       CRATES: ${{ needs.plan.outputs.crates }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -188,7 +188,7 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -252,7 +252,7 @@ jobs:
        contains(needs.plan.outputs.crates, 'forgeguard_ffi_wasm'))
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -283,7 +283,7 @@ jobs:
       RUSTDOCFLAGS: "-D warnings"
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -317,7 +317,7 @@ jobs:
     if: "!(github.event_name == 'push' && startsWith(github.event.head_commit.message, 'chore: bump version'))"
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -337,7 +337,7 @@ jobs:
     if: "!(github.event_name == 'push' && startsWith(github.event.head_commit.message, 'chore: bump version'))"
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Install cargo-deny
         uses: EmbarkStudios/cargo-deny-action@v2
@@ -348,7 +348,7 @@ jobs:
     if: "!(github.event_name == 'push' && startsWith(github.event.head_commit.message, 'chore: bump version'))"
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Check for typos
         uses: crate-ci/typos@master
@@ -359,7 +359,7 @@ jobs:
     if: "!(github.event_name == 'push' && startsWith(github.event.head_commit.message, 'chore: bump version'))"
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
