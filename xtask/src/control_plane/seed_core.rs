@@ -44,13 +44,16 @@ impl SeedOrg {
 /// A Cognito user to create for testing.
 ///
 /// Each user may belong to multiple organizations via [`SeedMembership`].
-/// `default_org` identifies which organization's Cognito user pool owns this
-/// user's account. `memberships` lists all organizations the user belongs to,
-/// each with one or more group roles.
+/// `default_org` is a UI/fixture hint (the user's preferred startup org) and
+/// is not persisted to Cognito or DynamoDB. `memberships` lists all
+/// organizations the user belongs to, each with one or more group roles.
 #[derive(Deserialize)]
 pub(crate) struct SeedUser {
     username: String,
     email: String,
+    // Validated by serde to guard against typos in seed.toml, but never
+    // written to Cognito or DynamoDB — it is a UI startup hint only.
+    #[allow(dead_code)]
     default_org: String,
     memberships: Vec<SeedMembership>,
 }
@@ -64,6 +67,7 @@ impl SeedUser {
         &self.email
     }
 
+    #[cfg(test)]
     pub(crate) fn default_org(&self) -> &str {
         &self.default_org
     }
