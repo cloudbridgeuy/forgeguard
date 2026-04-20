@@ -9,9 +9,17 @@ Authentication I/O crate — Cognito JWT and Ed25519 signed-request identity res
 ## Public API
 
 - `CognitoJwtResolver` — implements `IdentityResolver` for Cognito JWTs (`Credential::Bearer`)
-- `JwtResolverConfig` — configuration with JWKS URL, issuer, audience, claim mappings
+- `JwtResolverConfig` — configuration with JWKS URL, issuer, and (optional) audience
 - `Ed25519SignatureResolver<S>` — implements `IdentityResolver` for BYOC proxy signed requests (`Credential::SignedRequest`)
 - `Error` / `Result<T>` — crate error types
+
+## JWT identity is sub-only
+
+`CognitoJwtResolver` returns an `Identity` carrying only `user_id` (the `sub`
+claim) and `PrincipalKind::User`. It does **not** read `custom:org_id` or
+`cognito:groups`. Org selection and group roles are resolved per-request by
+the proxy pipeline's Phase 5b from the `X-ForgeGuard-Org-Id` header plus a
+`MembershipResolver` lookup (see `forgeguard_proxy_core`).
 
 ## Ed25519SignatureResolver
 

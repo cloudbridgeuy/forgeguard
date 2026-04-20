@@ -262,6 +262,34 @@ Machine principals carry an `org_id` attribute and have no group parents. User p
 
 `--store=memory` cannot use `VpPolicyEngine` — no DynamoDB client is available for key lookup, so `StaticPolicyEngine(Allow)` is used instead, even when `--jwks-url` is provided.
 
+## Membership Model
+
+Per-user organization roles live in DynamoDB, not in JWT claims. Each
+membership is a single item keyed by the user's Cognito `sub` and the
+organization ID:
+
+| Attribute | Value | Purpose |
+|-----------|-------|---------|
+| `PK` | `USER#{sub}` | Partition by user |
+| `SK` | `ORG#{org_id}` | One item per (user, org) pair |
+| `user_id` | `{sub}` | Convenience duplicate for GSI lookups |
+| `org_id` | `{org_id}` | Convenience duplicate for GSI lookups |
+| `groups` | `L[S]` | Group roles within this organization |
+| `joined_at` | ISO-8601 string | Creation timestamp |
+
+An **inverted GSI** (`SK` as partition key, `PK` as sort key) supports
+listing every user in a given organization (`ORG#{org_id}` → all `USER#*`).
+
+At request time the proxy's Phase 5b reads the `X-ForgeGuard-Org-Id` header,
+calls the `MembershipResolver` (`GetItem` on `PK=USER#{sub}, SK=ORG#{org_id}`),
+and either replaces the `Identity` with a tenant+groups-enriched copy or
+rejects the request (`403` when the user is not a member, `400` when the
+header is missing on a credential-required route).
+
+`DynamoMembershipResolver` (in `membership_store.rs`) is wired into the
+control plane's `IdentityChain` whenever both `--jwks-url` and
+`--store=dynamodb` are configured.
+
 ## Domain Model
 
 The control plane uses the `Organization` entity from `forgeguard_core` to represent each org. File-loaded orgs are created with `OrgStatus::Active`. The `OrgStore` trait is async with generic handlers (no `dyn` dispatch):
