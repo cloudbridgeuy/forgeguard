@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 
+use aws_sdk_dynamodb::error::DisplayErrorContext;
 use aws_sdk_dynamodb::types::AttributeValue;
 use forgeguard_core::{GroupName, OrganizationId, UserId};
 use forgeguard_proxy_core::{Membership, MembershipResolver};
@@ -36,6 +37,8 @@ impl MembershipResolver for DynamoMembershipResolver {
     ) -> Pin<Box<dyn Future<Output = Option<Membership>> + Send + '_>> {
         let pk_value = format!("{USER_PREFIX}{user_id}");
         let sk_value = format!("{ORG_PREFIX}{org_id}");
+        let user_id = user_id.clone();
+        let org_id = org_id.clone();
 
         Box::pin(async move {
             let result = match self
@@ -50,7 +53,7 @@ impl MembershipResolver for DynamoMembershipResolver {
                 Ok(r) => r,
                 Err(e) => {
                     tracing::warn!(
-                        error = %e,
+                        error = %DisplayErrorContext(&e),
                         "DynamoDB GetItem failed for membership lookup; treating as not a member"
                     );
                     return None;
@@ -64,6 +67,12 @@ impl MembershipResolver for DynamoMembershipResolver {
                 );
                 return None;
             };
+            tracing::info!(
+                user_id = %user_id,
+                org_id = %org_id,
+                group_count = groups.len(),
+                "membership enrichment succeeded"
+            );
             Some(Membership::new(groups))
         })
     }

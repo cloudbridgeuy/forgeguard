@@ -78,6 +78,10 @@ pub async fn dynamodb_router(
     let sdk_config = aws_config::defaults(aws_config::BehaviorVersion::latest())
         .load()
         .await;
+    tracing::info!(
+        region = ?sdk_config.region(),
+        "AWS SDK configuration loaded for control plane"
+    );
     let dynamo_client = aws_sdk_dynamodb::Client::new(&sdk_config);
     let vp_client = aws_sdk_verifiedpermissions::Client::new(&sdk_config);
     let s = Arc::new(AnyOrgStore::DynamoDb(DynamoOrgStore::new(
