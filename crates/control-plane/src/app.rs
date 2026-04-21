@@ -203,6 +203,12 @@ fn cp_route_actions() -> forgeguard_http::Result<Vec<RouteMapping>> {
             "cp:key:revoke",
             Some("org_id"),
         ),
+        (
+            "POST",
+            "/api/v1/organizations/{org_id}/keys/{key_id}/rotate",
+            "cp:key:rotate",
+            Some("org_id"),
+        ),
     ];
 
     entries
@@ -369,8 +375,8 @@ mod tests {
         let mappings = cp_route_actions().expect("cp_route_actions must not fail");
         assert_eq!(
             mappings.len(),
-            9,
-            "expected 9 route mappings, got {}",
+            10,
+            "expected 10 route mappings, got {}",
             mappings.len()
         );
         // Confirm each action string round-trips correctly through QualifiedAction
@@ -384,6 +390,7 @@ mod tests {
             "cp:key:generate",
             "cp:key:read",
             "cp:key:revoke",
+            "cp:key:rotate",
         ];
         for (mapping, expected) in mappings.iter().zip(expected_actions.iter()) {
             assert_eq!(
@@ -434,6 +441,11 @@ mod tests {
                 "DELETE",
                 "/api/v1/organizations/org-123/keys/key-456",
                 "cp:key:revoke",
+            ),
+            (
+                "POST",
+                "/api/v1/organizations/org-123/keys/key-456/rotate",
+                "cp:key:rotate",
             ),
         ];
 
