@@ -66,6 +66,8 @@ impl MembershipResolver for DynamoMembershipResolver {
             };
             let Some(groups) = parse_groups(&item) else {
                 tracing::warn!(
+                    user_id = %user_id,
+                    org_id = %org_id,
                     "membership item exists but `groups` attribute is missing or malformed; returning error"
                 );
                 return Err(ResolveError::new("malformed groups attribute"));

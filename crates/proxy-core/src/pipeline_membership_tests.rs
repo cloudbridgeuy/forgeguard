@@ -2,22 +2,21 @@
 //!
 //! Included by `pipeline_tests.rs` as a submodule.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
+use forgeguard_authn_core::{IdentityBuilder, IdentityChain};
 use forgeguard_core::{GroupName, OrganizationId, PrincipalKind, TenantId, UserId};
 use forgeguard_http::{DefaultPolicy, PublicAuthMode, PublicRoute};
-
-use crate::membership::{Membership, MembershipResolver, ResolveError};
-use crate::PipelineOutcome;
 
 use super::{
     allow_engine, input_with_bearer, input_with_bearer_and_org, make_chain_with_jwt_identity,
     make_config, make_config_with_membership, MockIdentityResolver,
 };
-use std::future::Future;
-use std::pin::Pin;
 
-use forgeguard_authn_core::{IdentityBuilder, IdentityChain};
+use crate::membership::{Membership, MembershipResolver, ResolveError};
+use crate::PipelineOutcome;
 
 // -----------------------------------------------------------------------
 // Mock membership resolvers (Phase 5b)
@@ -39,10 +38,10 @@ impl MembershipResolver for SucceedingMembershipResolver {
     }
 }
 
-/// A membership resolver that always returns Ok(None) (not a member).
-struct FailingMembershipResolver;
+/// A membership resolver that always returns `Ok(None)` — user is not a member.
+struct NotMemberResolver;
 
-impl MembershipResolver for FailingMembershipResolver {
+impl MembershipResolver for NotMemberResolver {
     fn resolve(
         &self,
         _user_id: &UserId,
@@ -109,7 +108,7 @@ async fn membership_enrichment_sets_tenant_and_groups() {
 /// Test 2: resolver returns Ok(None) — 403 with correct body.
 #[tokio::test]
 async fn membership_not_found_rejects_403() {
-    let resolver = Arc::new(FailingMembershipResolver);
+    let resolver = Arc::new(NotMemberResolver);
     let config = make_config_with_membership(&[], &[], DefaultPolicy::Passthrough, resolver);
     let chain = make_chain_with_jwt_identity();
     let engine = allow_engine();
