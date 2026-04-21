@@ -284,7 +284,11 @@ At request time the proxy's Phase 5b reads the `X-ForgeGuard-Org-Id` header,
 calls the `MembershipResolver` (`GetItem` on `PK=USER#{sub}, SK=ORG#{org_id}`),
 and either replaces the `Identity` with a tenant+groups-enriched copy or
 rejects the request (`403` when the user is not a member, `400` when the
-header is missing on a credential-required route).
+header is missing on a credential-required route). A DynamoDB I/O failure or
+malformed `groups` attribute causes `DynamoMembershipResolver` to return
+`Err(ResolveError)`, which the pipeline maps to HTTP `500 Internal Server
+Error`; the error detail is logged via `tracing::warn!` in the shell and never
+leaks to the response body.
 
 `DynamoMembershipResolver` (in `membership_store.rs`) is wired into the
 control plane's `IdentityChain` whenever both `--jwks-url` and
