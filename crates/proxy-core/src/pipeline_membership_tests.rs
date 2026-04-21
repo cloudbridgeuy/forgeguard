@@ -39,9 +39,9 @@ impl MembershipResolver for SucceedingMembershipResolver {
 }
 
 /// A membership resolver that always returns `Ok(None)` — user is not a member.
-struct NotMemberResolver;
+struct NonMemberMembershipResolver;
 
-impl MembershipResolver for NotMemberResolver {
+impl MembershipResolver for NonMemberMembershipResolver {
     fn resolve(
         &self,
         _user_id: &UserId,
@@ -108,7 +108,7 @@ async fn membership_enrichment_sets_tenant_and_groups() {
 /// Test 2: resolver returns Ok(None) — 403 with correct body.
 #[tokio::test]
 async fn membership_not_found_rejects_403() {
-    let resolver = Arc::new(NotMemberResolver);
+    let resolver = Arc::new(NonMemberMembershipResolver);
     let config = make_config_with_membership(&[], &[], DefaultPolicy::Passthrough, resolver);
     let chain = make_chain_with_jwt_identity();
     let engine = allow_engine();
