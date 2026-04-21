@@ -140,6 +140,10 @@ const API_ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/v1/organizations/{org_id}/keys"),
     ("GET", "/api/v1/organizations/{org_id}/keys"),
     ("DELETE", "/api/v1/organizations/{org_id}/keys/{key_id}"),
+    (
+        "POST",
+        "/api/v1/organizations/{org_id}/keys/{key_id}/rotate",
+    ),
 ];
 
 /// Route-to-action mappings for all control-plane API routes.
