@@ -237,7 +237,7 @@ mod tests {
         use std::future::Future;
         use std::pin::Pin;
 
-        use crate::membership::{Membership, MembershipResolver};
+        use crate::membership::{Membership, MembershipResolver, ResolveError};
         use forgeguard_core::{OrganizationId, UserId};
 
         struct StubResolver;
@@ -246,8 +246,9 @@ mod tests {
                 &self,
                 _user_id: &UserId,
                 _org_id: &OrganizationId,
-            ) -> Pin<Box<dyn Future<Output = Option<Membership>> + Send + '_>> {
-                Box::pin(async { None })
+            ) -> Pin<Box<dyn Future<Output = Result<Option<Membership>, ResolveError>> + Send + '_>>
+            {
+                Box::pin(async { Ok(None) })
             }
         }
 

@@ -10,14 +10,15 @@ use std::pin::Pin;
 use aws_sdk_dynamodb::error::DisplayErrorContext;
 use aws_sdk_dynamodb::types::AttributeValue;
 use forgeguard_core::{GroupName, OrganizationId, UserId};
-use forgeguard_proxy_core::{Membership, MembershipResolver};
+use forgeguard_proxy_core::{Membership, MembershipResolver, ResolveError};
 
 use crate::dynamo_store::{pk, sk, ORG_PREFIX, USER_PREFIX};
 
 /// DynamoDB-backed implementation of [`MembershipResolver`].
 ///
-/// Performs a single `GetItem` per call.  Returns `None` when no membership
-/// record exists (user is not a member of the org).
+/// Performs a single `GetItem` per call.  Returns `Ok(None)` when no
+/// membership record exists (user is not a member of the org), and
+/// `Err(ResolveError)` when the DynamoDB call fails or the item is malformed.
 pub(crate) struct DynamoMembershipResolver {
     client: aws_sdk_dynamodb::Client,
     table_name: String,
@@ -34,7 +35,7 @@ impl MembershipResolver for DynamoMembershipResolver {
         &self,
         user_id: &UserId,
         org_id: &OrganizationId,
-    ) -> Pin<Box<dyn Future<Output = Option<Membership>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Membership>, ResolveError>> + Send + '_>> {
         let pk_value = format!("{USER_PREFIX}{user_id}");
         let sk_value = format!("{ORG_PREFIX}{org_id}");
         let user_id = user_id.clone();
@@ -54,18 +55,20 @@ impl MembershipResolver for DynamoMembershipResolver {
                 Err(e) => {
                     tracing::warn!(
                         error = %DisplayErrorContext(&e),
-                        "DynamoDB GetItem failed for membership lookup; treating as not a member"
+                        "DynamoDB GetItem failed for membership lookup; returning error"
                     );
-                    return None;
+                    return Err(ResolveError::new(format!("GetItem: {e}")));
                 }
             };
 
-            let item = result.item?;
+            let Some(item) = result.item else {
+                return Ok(None);
+            };
             let Some(groups) = parse_groups(&item) else {
                 tracing::warn!(
-                    "membership item exists but `groups` attribute is missing or malformed; treating as not a member"
+                    "membership item exists but `groups` attribute is missing or malformed; returning error"
                 );
-                return None;
+                return Err(ResolveError::new("malformed groups attribute"));
             };
             tracing::info!(
                 user_id = %user_id,
@@ -73,7 +76,7 @@ impl MembershipResolver for DynamoMembershipResolver {
                 group_count = groups.len(),
                 "membership enrichment succeeded"
             );
-            Some(Membership::new(groups))
+            Ok(Some(Membership::new(groups)))
         })
     }
 }

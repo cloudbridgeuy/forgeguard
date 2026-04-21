@@ -133,7 +133,7 @@ pub async fn evaluate_pipeline(
                 // always true; the `None` arm is a no-op safety net.
                 if let Some(id) = identity.take() {
                     match resolver.resolve(id.user_id(), &org_id).await {
-                        Some(membership) => {
+                        Ok(Some(membership)) => {
                             identity = Some(Identity::new(IdentityParams {
                                 user_id: id.user_id().clone(),
                                 tenant_id: Some(org_id.into()),
@@ -144,8 +144,11 @@ pub async fn evaluate_pipeline(
                                 principal_kind: id.principal_kind(),
                             }));
                         }
-                        None => {
+                        Ok(None) => {
                             return reject_json(403, "Not a member of this organization");
+                        }
+                        Err(_) => {
+                            return reject_json(500, "Internal Server Error");
                         }
                     }
                 }

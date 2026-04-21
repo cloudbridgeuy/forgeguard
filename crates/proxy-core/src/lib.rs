@@ -10,7 +10,7 @@ pub(crate) mod source;
 pub(crate) mod tenant;
 
 pub use error::{Error, Result};
-pub use membership::{Membership, MembershipResolver};
+pub use membership::{Membership, MembershipResolver, ResolveError};
 pub use pipeline::evaluate_pipeline;
 pub use pipeline_config::{PipelineConfig, PipelineConfigParams};
 pub use pipeline_outcome::PipelineOutcome;
