@@ -429,7 +429,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::CREATED);
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        let new_key_id = json["key_id"].as_str().unwrap();
+        let new_key_id = json["key_id"].as_str().unwrap().to_string();
         assert_ne!(new_key_id, original_key_id);
         assert!(json["private_key"]
             .as_str()
@@ -500,7 +500,8 @@ mod tests {
             .header("x-api-key", TEST_API_KEY)
             .body(Body::from(body))
             .unwrap();
-        let _ = app.oneshot(request).await.unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
 
         // Generate + revoke
         let app = test_app(Arc::clone(&store));
@@ -533,7 +534,8 @@ mod tests {
             .header("x-api-key", TEST_API_KEY)
             .body(Body::empty())
             .unwrap();
-        let _ = app.oneshot(request).await.unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
 
         // Rotate the revoked key → 409
         let app = test_app(Arc::clone(&store));
@@ -562,7 +564,8 @@ mod tests {
             .header("x-api-key", TEST_API_KEY)
             .body(Body::from(body))
             .unwrap();
-        let _ = app.oneshot(request).await.unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
 
         let app = test_app(Arc::clone(&store));
         let request = Request::builder()
