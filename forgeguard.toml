@@ -69,7 +69,7 @@ allow = [
   "cp-organization-create", "cp-organization-update",
   "cp-member-invite", "cp-member-remove", "cp-member-change-role",
   "cp-config-write",
-  "cp-key-generate", "cp-key-revoke",
+  "cp-key-generate", "cp-key-revoke", "cp-key-rotate",
 ]
 
 # ---------------------------------------------------------------------------
@@ -112,7 +112,8 @@ permit(
     forgeguard::Action::"cp-config-write",
     forgeguard::Action::"cp-key-read",
     forgeguard::Action::"cp-key-generate",
-    forgeguard::Action::"cp-key-revoke"
+    forgeguard::Action::"cp-key-revoke",
+    forgeguard::Action::"cp-key-rotate"
   ],
   resource == ?resource
 );
