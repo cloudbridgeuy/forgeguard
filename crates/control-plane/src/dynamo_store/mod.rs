@@ -563,7 +563,7 @@ impl OrgStore for DynamoOrgStore {
             key_id,
             new_entry,
             chrono::Utc::now(),
-            chrono::Duration::hours(24),
+            chrono::Duration::hours(crate::signing_key::ROTATION_GRACE_HOURS),
         )?;
         self.write_signing_keys(org_id, &updated).await?;
 

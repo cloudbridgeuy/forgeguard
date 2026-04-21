@@ -11,6 +11,16 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Error, Result};
 
 // ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/// Number of hours the retiring key remains valid after a rotation is initiated.
+///
+/// During this window both the old key (status `Rotating`) and the new key
+/// (status `Active`) are accepted, giving callers time to switch over.
+pub(crate) const ROTATION_GRACE_HOURS: i64 = 24;
+
+// ---------------------------------------------------------------------------
 // SigningKeyStatus
 // ---------------------------------------------------------------------------
 

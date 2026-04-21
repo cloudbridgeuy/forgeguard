@@ -294,7 +294,7 @@ impl OrgStore for InMemoryOrgStore {
             key_id,
             new_entry,
             Utc::now(),
-            chrono::Duration::hours(24),
+            chrono::Duration::hours(crate::signing_key::ROTATION_GRACE_HOURS),
         )?;
         guard.insert(org_id.clone(), updated);
         Ok(result)

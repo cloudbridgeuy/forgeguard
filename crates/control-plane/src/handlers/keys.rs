@@ -68,7 +68,7 @@ pub(crate) async fn rotate_key_handler<S: OrgStore>(
             Json(serde_json::json!({"error": msg})),
         )
             .into_response(),
-        Err(e @ (crate::error::Error::Store(..) | crate::error::Error::Config(..))) => {
+        Err(e) => {
             tracing::error!(org_id = %raw_org_id, key_id = %key_id, error = %e, "rotate key failed");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
