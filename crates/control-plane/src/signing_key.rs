@@ -297,7 +297,6 @@ pub(crate) fn rotate_entries(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use chrono::Duration;
 
     // -- SigningKeyStatus Display/FromStr round-trip --
 
@@ -621,7 +620,7 @@ mod tests {
         .unwrap();
 
         let result = rotate_entries(
-            vec![other_rotating.clone(), active],
+            vec![other_rotating, active],
             "key-active",
             new_entry,
             now,
