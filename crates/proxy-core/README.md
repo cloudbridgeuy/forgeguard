@@ -26,10 +26,16 @@ pub trait MembershipResolver: Send + Sync {
         &self,
         user_id: &UserId,
         org_id: &OrganizationId,
-    ) -> Pin<Box<dyn Future<Output = Option<Membership>> + Send + '_>>;
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Membership>, ResolveError>> + Send + '_>>;
 }
 ```
 
-Pure trait — implementors perform the I/O (DynamoDB `GetItem` in `forgeguard_control_plane::DynamoMembershipResolver`). Returns `Some(Membership { groups })` when the user belongs to the org, or `None` otherwise. `Membership` is constructed once at resolver boundary (`Membership::new(groups)`) and carried through the rest of Phase 5b.
+Pure trait — implementors perform the I/O (DynamoDB `GetItem` in `forgeguard_control_plane::DynamoMembershipResolver`). Three outcomes:
+
+- `Ok(Some(Membership { groups }))` — user is a member; pipeline continues with enriched identity (tenant + groups set).
+- `Ok(None)` — user is not a member of this organization; pipeline returns HTTP 403.
+- `Err(ResolveError)` — lookup failed (I/O error, data corruption, etc.); pipeline returns HTTP 500. The implementor must log the full error chain before constructing `ResolveError`.
+
+`Membership` is constructed once at resolver boundary (`Membership::new(groups)`) and carried through the rest of Phase 5b. `ResolveError` is opaque — it carries a brief human-readable summary only.
 
 The resolver is plugged into `PipelineConfig::membership_resolver` and is optional — when `None`, Phase 5b is skipped entirely (the identity keeps whatever `tenant_id` its resolver supplied, if any).
