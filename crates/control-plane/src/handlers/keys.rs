@@ -511,15 +511,9 @@ mod tests {
             .header("x-api-key", TEST_API_KEY)
             .body(Body::empty())
             .unwrap();
-        let bytes = app
-            .oneshot(request)
-            .await
-            .unwrap()
-            .into_body()
-            .collect()
-            .await
-            .unwrap()
-            .to_bytes();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
         let key_id = serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()["key_id"]
             .as_str()
             .unwrap()
@@ -574,15 +568,9 @@ mod tests {
             .header("x-api-key", TEST_API_KEY)
             .body(Body::empty())
             .unwrap();
-        let bytes = app
-            .oneshot(request)
-            .await
-            .unwrap()
-            .into_body()
-            .collect()
-            .await
-            .unwrap()
-            .to_bytes();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
         let key_id = serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()["key_id"]
             .as_str()
             .unwrap()
