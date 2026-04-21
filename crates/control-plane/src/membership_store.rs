@@ -54,10 +54,12 @@ impl MembershipResolver for DynamoMembershipResolver {
                 Ok(r) => r,
                 Err(e) => {
                     tracing::warn!(
+                        user_id = %user_id,
+                        org_id = %org_id,
                         error = %DisplayErrorContext(&e),
                         "DynamoDB GetItem failed for membership lookup; returning error"
                     );
-                    return Err(ResolveError::new(format!("GetItem: {e}")));
+                    return Err(ResolveError::new("GetItem failed"));
                 }
             };
 
