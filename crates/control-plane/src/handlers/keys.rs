@@ -6,7 +6,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use forgeguard_core::OrganizationId;
 
-use crate::signing_key::SigningKeyEntry;
+use crate::signing_key::{GenerateKeyResult, SigningKeyEntry};
 use crate::store::OrgStore;
 
 pub(crate) async fn generate_key_handler<S: OrgStore>(
@@ -18,16 +18,7 @@ pub(crate) async fn generate_key_handler<S: OrgStore>(
     };
 
     match store.generate_key(&org_id).await {
-        Ok(result) => (
-            StatusCode::CREATED,
-            Json(serde_json::json!({
-                "key_id": result.key_id(),
-                "private_key": result.private_key_pem(),
-                "public_key": result.public_key_pem(),
-                "created_at": result.created_at().to_rfc3339(),
-            })),
-        )
-            .into_response(),
+        Ok(result) => key_result_response(&result),
         Err(crate::error::Error::NotFound(msg)) => (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": msg})),
@@ -66,16 +57,7 @@ pub(crate) async fn rotate_key_handler<S: OrgStore>(
     };
 
     match store.rotate_signing_key(&org_id, &key_id).await {
-        Ok(result) => (
-            StatusCode::CREATED,
-            Json(serde_json::json!({
-                "key_id": result.key_id(),
-                "private_key": result.private_key_pem(),
-                "public_key": result.public_key_pem(),
-                "created_at": result.created_at().to_rfc3339(),
-            })),
-        )
-            .into_response(),
+        Ok(result) => key_result_response(&result),
         Err(crate::error::Error::NotFound(msg)) => (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": msg})),
@@ -86,7 +68,7 @@ pub(crate) async fn rotate_key_handler<S: OrgStore>(
             Json(serde_json::json!({"error": msg})),
         )
             .into_response(),
-        Err(e) => {
+        Err(e @ (crate::error::Error::Store(..) | crate::error::Error::Config(..))) => {
             tracing::error!(org_id = %raw_org_id, key_id = %key_id, error = %e, "rotate key failed");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
@@ -122,6 +104,23 @@ pub(crate) async fn list_keys_handler<S: OrgStore>(
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
+}
+
+/// Build the 201 Created response returned when a new key is issued.
+///
+/// Used by both `generate_key_handler` and `rotate_key_handler` — the response
+/// shape is identical: key_id, private_key, public_key, created_at.
+fn key_result_response(result: &GenerateKeyResult) -> Response {
+    (
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "key_id": result.key_id(),
+            "private_key": result.private_key_pem(),
+            "public_key": result.public_key_pem(),
+            "created_at": result.created_at().to_rfc3339(),
+        })),
+    )
+        .into_response()
 }
 
 /// Serialize a `SigningKeyEntry` to its public JSON representation.
