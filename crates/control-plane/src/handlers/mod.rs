@@ -14,7 +14,9 @@ use crate::config::OrgConfig;
 use crate::etag::{self, IfNoneMatchResult, ResolvedIfMatch};
 use crate::store::{OrgRecord, OrgStore};
 
-pub(crate) use keys::{generate_key_handler, list_keys_handler, revoke_key_handler};
+pub(crate) use keys::{
+    generate_key_handler, list_keys_handler, revoke_key_handler, rotate_key_handler,
+};
 
 /// Response body emitted on every `412 Precondition Failed` from `PUT /organizations/{id}`.
 ///
@@ -536,6 +538,10 @@ pub(super) mod test_support {
             .route(
                 "/api/v1/organizations/{org_id}/keys/{key_id}",
                 axum::routing::delete(super::keys::revoke_key_handler::<InMemoryOrgStore>),
+            )
+            .route(
+                "/api/v1/organizations/{org_id}/keys/{key_id}/rotate",
+                axum::routing::post(super::keys::rotate_key_handler::<InMemoryOrgStore>),
             )
             .route("/metrics", axum::routing::get(super::metrics_handler))
             .with_state(store)

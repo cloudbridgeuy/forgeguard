@@ -57,6 +57,42 @@ pub(crate) async fn revoke_key_handler<S: OrgStore>(
     }
 }
 
+pub(crate) async fn rotate_key_handler<S: OrgStore>(
+    Path((raw_org_id, key_id)): Path<(String, String)>,
+    State(store): State<Arc<S>>,
+) -> Response {
+    let Ok(org_id) = OrganizationId::new(&raw_org_id) else {
+        return super::not_found();
+    };
+
+    match store.rotate_signing_key(&org_id, &key_id).await {
+        Ok(result) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({
+                "key_id": result.key_id(),
+                "private_key": result.private_key_pem(),
+                "public_key": result.public_key_pem(),
+                "created_at": result.created_at().to_rfc3339(),
+            })),
+        )
+            .into_response(),
+        Err(crate::error::Error::NotFound(msg)) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": msg})),
+        )
+            .into_response(),
+        Err(crate::error::Error::Conflict(msg)) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": msg})),
+        )
+            .into_response(),
+        Err(e) => {
+            tracing::error!(org_id = %raw_org_id, key_id = %key_id, error = %e, "rotate key failed");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
 pub(crate) async fn list_keys_handler<S: OrgStore>(
     Path(raw_org_id): Path<String>,
     State(store): State<Arc<S>>,

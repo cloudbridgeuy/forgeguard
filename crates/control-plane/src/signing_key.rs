@@ -182,7 +182,6 @@ impl SigningKeyEntry {
     }
 
     /// Transition this key to `Rotating { expires_at }`.
-    #[allow(dead_code)]
     pub(crate) fn begin_rotating(&mut self, expires_at: DateTime<Utc>) {
         self.status = SigningKeyStatus::Rotating { expires_at };
         self.expires_at = Some(expires_at);
@@ -256,7 +255,6 @@ impl GenerateKeyResult {
 ///
 /// - `Error::NotFound` if no entry matches `target_key_id`.
 /// - `Error::Conflict` if the target entry's status is not `Active`.
-#[allow(dead_code)]
 pub(crate) fn rotate_entries(
     mut existing: Vec<SigningKeyEntry>,
     target_key_id: &str,

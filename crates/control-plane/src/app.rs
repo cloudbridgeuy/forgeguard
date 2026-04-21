@@ -356,6 +356,10 @@ fn build_router<S: OrgStore + 'static>(store: Arc<S>, fg: Arc<ForgeGuard>) -> Ro
             "/api/v1/organizations/{org_id}/keys/{key_id}",
             axum::routing::delete(handlers::revoke_key_handler::<S>),
         )
+        .route(
+            "/api/v1/organizations/{org_id}/keys/{key_id}/rotate",
+            axum::routing::post(handlers::rotate_key_handler::<S>),
+        )
         .with_state(store)
         .layer(axum::middleware::from_fn_with_state(fg, forgeguard_layer))
         .layer(TraceLayer::new_for_http())

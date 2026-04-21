@@ -70,6 +70,12 @@ pub(crate) trait OrgStore: Send + Sync {
         org_id: &OrganizationId,
         key_id: &str,
     ) -> impl std::future::Future<Output = Result<()>> + Send;
+
+    fn rotate_signing_key(
+        &self,
+        org_id: &OrganizationId,
+        key_id: &str,
+    ) -> impl std::future::Future<Output = Result<GenerateKeyResult>> + Send;
 }
 
 /// A configured (`OrgConfig` + matching etag) pair.
@@ -262,6 +268,37 @@ impl OrgStore for InMemoryOrgStore {
         entry.revoke();
         Ok(())
     }
+
+    async fn rotate_signing_key(
+        &self,
+        org_id: &OrganizationId,
+        key_id: &str,
+    ) -> Result<GenerateKeyResult> {
+        {
+            let orgs = self.orgs.read().await;
+            if !orgs.contains_key(org_id) {
+                return Err(Error::NotFound(format!(
+                    "organization '{org_id}' not found"
+                )));
+            }
+        }
+
+        // Generate material BEFORE any .await that touches !Send RNG state.
+        let result = generate_key_material()?;
+        let new_entry = result.to_entry()?;
+
+        let mut guard = self.signing_keys.write().await;
+        let existing = guard.get(org_id).cloned().unwrap_or_default();
+        let updated = crate::signing_key::rotate_entries(
+            existing,
+            key_id,
+            new_entry,
+            Utc::now(),
+            chrono::Duration::hours(24),
+        )?;
+        guard.insert(org_id.clone(), updated);
+        Ok(result)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -422,6 +459,17 @@ impl OrgStore for AnyOrgStore {
         match self {
             Self::Memory(s) => s.revoke_key(org_id, key_id).await,
             Self::DynamoDb(s) => s.revoke_key(org_id, key_id).await,
+        }
+    }
+
+    async fn rotate_signing_key(
+        &self,
+        org_id: &OrganizationId,
+        key_id: &str,
+    ) -> Result<GenerateKeyResult> {
+        match self {
+            Self::Memory(s) => s.rotate_signing_key(org_id, key_id).await,
+            Self::DynamoDb(s) => s.rotate_signing_key(org_id, key_id).await,
         }
     }
 }

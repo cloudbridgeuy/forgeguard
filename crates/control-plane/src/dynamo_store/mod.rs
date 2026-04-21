@@ -542,6 +542,33 @@ impl OrgStore for DynamoOrgStore {
 
         self.write_signing_keys(org_id, &keys).await
     }
+
+    async fn rotate_signing_key(
+        &self,
+        org_id: &OrganizationId,
+        key_id: &str,
+    ) -> Result<GenerateKeyResult> {
+        // Generate material BEFORE any .await that touches !Send RNG state.
+        let result = generate_key_material()?;
+        let new_entry = result.to_entry()?;
+
+        let item = self
+            .get_raw_item(org_id)
+            .await?
+            .ok_or_else(|| Error::NotFound(format!("organization '{org_id}' not found")))?;
+
+        let existing = signing_keys_from_item(&item)?;
+        let updated = crate::signing_key::rotate_entries(
+            existing,
+            key_id,
+            new_entry,
+            chrono::Utc::now(),
+            chrono::Duration::hours(24),
+        )?;
+        self.write_signing_keys(org_id, &updated).await?;
+
+        Ok(result)
+    }
 }
 
 // ---------------------------------------------------------------------------
