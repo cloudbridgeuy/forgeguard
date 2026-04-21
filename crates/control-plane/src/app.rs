@@ -78,8 +78,9 @@ pub async fn dynamodb_router(
     let sdk_config = aws_config::defaults(aws_config::BehaviorVersion::latest())
         .load()
         .await;
+    let region = sdk_config.region().map_or("<unset>", |r| r.as_ref());
     tracing::info!(
-        region = ?sdk_config.region(),
+        region = %region,
         "AWS SDK configuration loaded for control plane"
     );
     let dynamo_client = aws_sdk_dynamodb::Client::new(&sdk_config);
