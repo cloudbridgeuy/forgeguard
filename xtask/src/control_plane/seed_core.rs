@@ -1,7 +1,9 @@
 //! Pure types for the `seed` command configuration.
 //!
 //! Parsed from `xtask/seed.toml` — defines organizations to seed into
-//! DynamoDB and Cognito users to create for testing.
+//! DynamoDB and Cognito users to create for testing. Also contains
+//! `DynamoTarget`, a pure ADT that parses the CLI flag selecting between
+//! prod and local DynamoDB.
 
 use serde::Deserialize;
 
