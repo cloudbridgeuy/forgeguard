@@ -107,8 +107,6 @@ impl SeedMembership {
 /// the one started by `cargo xtask control-plane dev` — with an explicit table
 /// name. Cognito is untouched by this split; users are always provisioned in
 /// real Cognito regardless of which path is chosen.
-// Task 2 will wire this into SeedArgs + seed.rs; suppress dead_code until then.
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub(crate) enum DynamoTarget {
     Prod,
@@ -119,8 +117,6 @@ impl DynamoTarget {
     /// Parse CLI flags into a `DynamoTarget`. Both flags must be provided
     /// together or not at all; the boundary is enforced here so downstream
     /// code never sees an inconsistent pair.
-    // Task 2 will call this from SeedArgs; suppress dead_code until then.
-    #[allow(dead_code)]
     pub(crate) fn from_cli_args(
         endpoint: Option<String>,
         table: Option<String>,
