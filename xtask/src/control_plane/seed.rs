@@ -6,6 +6,7 @@
 //! membership items (including `joined_at`). Accepted for a dev-only
 //! fixture; production membership writes must use conditional puts.
 
+use aws_sdk_dynamodb::config::{BehaviorVersion, Credentials, Region};
 use aws_sdk_dynamodb::types::AttributeValue;
 use clap::Args;
 use color_eyre::eyre::{self, Context, Result};
@@ -360,15 +361,13 @@ fn is_username_exists_error(
 /// Uses dummy static credentials — dynamodb-local doesn't validate them but
 /// the AWS SDK requires some provider to be configured.
 fn build_local_dynamo_client(endpoint: &str) -> aws_sdk_dynamodb::Client {
-    use aws_sdk_dynamodb::config::{BehaviorVersion, Credentials, Region};
-
     let credentials = Credentials::new("test", "test", None, None, "static");
-    let config = aws_sdk_dynamodb::config::Builder::new()
+    let dynamo_config = aws_sdk_dynamodb::config::Builder::new()
         .endpoint_url(endpoint)
         .region(Region::new("us-east-2"))
         .credentials_provider(credentials)
         .behavior_version(BehaviorVersion::latest())
         .build();
 
-    aws_sdk_dynamodb::Client::from_conf(config)
+    aws_sdk_dynamodb::Client::from_conf(dynamo_config)
 }
