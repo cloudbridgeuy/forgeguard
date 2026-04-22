@@ -144,7 +144,7 @@ mod dynamo_target_tests {
     #[test]
     fn prod_when_neither_flag_set() {
         let t = DynamoTarget::from_cli_args(None, None).unwrap();
-        assert!(matches!(t, DynamoTarget::Prod));
+        assert!(matches!(t, DynamoTarget::Prod), "expected Prod, got {t:?}");
     }
 
     #[test]
