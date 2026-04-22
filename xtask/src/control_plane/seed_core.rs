@@ -98,6 +98,86 @@ impl SeedMembership {
     }
 }
 
+/// Where the seed command should write DynamoDB records.
+///
+/// `Prod` reads the table name from 1Password (`op://<vault>/dynamodb/table-name`)
+/// and hits real AWS. `Local` targets a `dynamodb-local` instance — typically
+/// the one started by `cargo xtask control-plane dev` — with an explicit table
+/// name. Cognito is untouched by this split; users are always provisioned in
+/// real Cognito regardless of which path is chosen.
+// Task 2 will wire this into SeedArgs + seed.rs; suppress dead_code until then.
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub(crate) enum DynamoTarget {
+    Prod,
+    Local { endpoint: String, table: String },
+}
+
+impl DynamoTarget {
+    /// Parse CLI flags into a `DynamoTarget`. Both flags must be provided
+    /// together or not at all; the boundary is enforced here so downstream
+    /// code never sees an inconsistent pair.
+    // Task 2 will call this from SeedArgs; suppress dead_code until then.
+    #[allow(dead_code)]
+    pub(crate) fn from_cli_args(
+        endpoint: Option<String>,
+        table: Option<String>,
+    ) -> Result<Self, String> {
+        match (endpoint, table) {
+            (None, None) => Ok(Self::Prod),
+            (Some(endpoint), Some(table)) => Ok(Self::Local { endpoint, table }),
+            (Some(_), None) => {
+                Err("--dynamodb-endpoint requires --dynamodb-table".to_string())
+            }
+            (None, Some(_)) => {
+                Err("--dynamodb-table requires --dynamodb-endpoint (prod reads the table name from 1Password)".to_string())
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod dynamo_target_tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    #[test]
+    fn prod_when_neither_flag_set() {
+        let t = DynamoTarget::from_cli_args(None, None).unwrap();
+        assert!(matches!(t, DynamoTarget::Prod));
+    }
+
+    #[test]
+    fn local_when_both_flags_set() {
+        let t = DynamoTarget::from_cli_args(
+            Some("http://127.0.0.1:8000".into()),
+            Some("forgeguard-orgs-dev".into()),
+        )
+        .unwrap();
+        match t {
+            DynamoTarget::Local { endpoint, table } => {
+                assert_eq!(endpoint, "http://127.0.0.1:8000");
+                assert_eq!(table, "forgeguard-orgs-dev");
+            }
+            DynamoTarget::Prod => panic!("expected Local"),
+        }
+    }
+
+    #[test]
+    fn error_when_endpoint_without_table() {
+        let err =
+            DynamoTarget::from_cli_args(Some("http://127.0.0.1:8000".into()), None).unwrap_err();
+        assert!(err.contains("--dynamodb-table"), "got: {err}");
+    }
+
+    #[test]
+    fn error_when_table_without_endpoint() {
+        let err =
+            DynamoTarget::from_cli_args(None, Some("forgeguard-orgs-dev".into())).unwrap_err();
+        assert!(err.contains("--dynamodb-endpoint"), "got: {err}");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
