@@ -60,6 +60,8 @@ cargo xtask control-plane curl \
 
 The canonical payload that the server recomputes and verifies against matches exactly: the `CanonicalPayload::new(&trace_id, timestamp, &identity_headers)` constructor uses the lowercase `x-forgeguard-org-id` header to match what the `http` crate normalises on the server side.
 
+`--private-key` accepts either the PEM inline or a `@path` reference that is read from disk. The contents are `.trim()`-ed before handing to `SigningKey::from_pkcs8_pem`, so PEMs written by `jq -r .private_key > key.pem` (which appends a trailing newline that `pem-rfc7468` rejects as post-encapsulation whitespace) load cleanly.
+
 ## Shared Helpers
 
 - `op::read_op(vault, item, field, op_account)` — one-shot 1Password read, used by `seed` and `token` for bootstrapping AWS resource IDs (user pool, app client) and user passwords.

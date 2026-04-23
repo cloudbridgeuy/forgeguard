@@ -37,14 +37,16 @@ pub(crate) struct CurlArgs {
 }
 
 pub(crate) async fn run(args: &CurlArgs) -> Result<()> {
+    let pem = if let Some(path) = args.private_key.strip_prefix('@') {
+        std::fs::read_to_string(path)
+            .with_context(|| format!("failed to read private key file '{path}'"))?
+    } else {
+        args.private_key.clone()
+    };
+    // `jq -r` appends a trailing newline when writing the PEM to disk, which
+    // pem-rfc7468 rejects as invalid post-encapsulation whitespace.
     let signing_key =
-        SigningKey::from_pkcs8_pem(&if let Some(path) = args.private_key.strip_prefix('@') {
-            std::fs::read_to_string(path)
-                .with_context(|| format!("failed to read private key file '{path}'"))?
-        } else {
-            args.private_key.clone()
-        })
-        .context("failed to parse Ed25519 private key")?;
+        SigningKey::from_pkcs8_pem(pem.trim()).context("failed to parse Ed25519 private key")?;
 
     let key_id = KeyId::try_from(args.key_id.clone()).context("invalid key ID")?;
     let identity_headers = vec![("x-forgeguard-org-id".to_string(), args.org_id.clone())];
