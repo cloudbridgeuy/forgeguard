@@ -18,6 +18,21 @@ cargo xtask control-plane seed --config path/to/custom-seed.toml
 
 `xtask/seed.toml` ships with `acme-*` and `globex-*` fixtures covering `admin`, `member`, and `owner` groups.
 
+### Local DynamoDB Target
+
+For local QA against `dynamodb-local` (started by `cargo xtask control-plane dev`), pass both flags:
+
+```bash
+cargo xtask control-plane seed \
+  --dynamodb-endpoint http://127.0.0.1:<PORT> \
+  --dynamodb-table forgeguard-orgs-dev
+```
+
+- Organizations and membership rows are written to the local table.
+- Cognito users are still provisioned in real AWS (no local Cognito emulator exists). Passwords still land in 1Password.
+- Omit both flags to target prod (reads `op://forgeguard-prod/dynamodb/table-name`).
+- Passing only one flag is a validation error.
+
 ## `token` — Fetch a JWT for a seeded user
 
 Calls Cognito `AdminInitiateAuth` with the `AdminUserPasswordAuth` flow (enabled on the dashboard client via `infra/control-plane/lib/cognito-stack.ts`). Reads the user's password from 1Password.
