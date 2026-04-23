@@ -220,6 +220,7 @@ fn launch_control_plane(table: &str, listen: &str, port: u16, extra: &[String]) 
     let endpoint = format!("http://127.0.0.1:{port}");
 
     println!("Launching control plane (listen: {listen}, table: {table}, endpoint: {endpoint})...");
+    println!("Note: Verified Permissions / Cognito calls hit real AWS. Ensure AWS_PROFILE is set and you are SSO-logged-in.");
     println!("Press Ctrl-C to stop.");
 
     let mut args = vec![
@@ -245,9 +246,7 @@ fn launch_control_plane(table: &str, listen: &str, port: u16, extra: &[String]) 
 
         let result = Command::new("cargo")
             .args(&args)
-            .env("AWS_ENDPOINT_URL", &endpoint)
-            .env("AWS_ACCESS_KEY_ID", "test")
-            .env("AWS_SECRET_ACCESS_KEY", "test")
+            .env("AWS_ENDPOINT_URL_DYNAMODB", &endpoint)
             .env("AWS_REGION", "us-east-2")
             .pre_exec(|| {
                 // Restore default SIGINT in the child so Ctrl-C reaches it.
