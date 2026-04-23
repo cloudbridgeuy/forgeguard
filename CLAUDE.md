@@ -24,6 +24,7 @@
 - **Infrastructure:** `cargo xtask control-plane infra {deploy,diff,destroy,status}` — CDK + 1Password, see [infra-control-plane.md](./.claude/context/infra-control-plane.md)
 - **Cedar sync:** `cargo xtask control-plane cedar {status,diff,sync}` — VP policy management, see [verified-permissions.md](./.claude/context/verified-permissions.md)
 - **Manual QA tools:** `cargo xtask control-plane {seed,token,curl}` — seed Cognito/DynamoDB, mint JWTs, send signed requests — see [xtask-control-plane-tools.md](./.claude/context/xtask-control-plane-tools.md)
+- **Local dev stack:** `cargo xtask control-plane dev` — dynamodb-local + CP child; needs `AWS_PROFILE=admin` + fresh SSO, uses `AWS_ENDPOINT_URL_DYNAMODB` so only DynamoDB is redirected locally — see [xtask-control-plane-dev.md](./.claude/context/xtask-control-plane-dev.md)
 - **Dogfooding config:** `forgeguard.toml` is the control plane's own authorization model; `forgeguard.example.toml` is the proxy reference config
 - **DynamoDB tests:** `cargo xtask control-plane test` — auto-starts dynamodb-local via docker/podman
 - **Integration tests:** `cargo test -p forgeguard_proxy` — see [demo-app.md](./.claude/context/demo-app.md)
@@ -173,6 +174,7 @@ Each crate's `README.md` describes what it owns and its pure/I/O classification.
 | [Authn Wiring](./.claude/context/authn-wiring.md)                  | JWT + API key config, resolver construction, PrincipalKind routing, FCIS split |
 | [CLI](./.claude/context/cli.md)                                    | `check`, `routes`, `policies`, `keygen` subcommands, FCIS architecture  |
 | [xtask CP Tools](./.claude/context/xtask-control-plane-tools.md)   | `seed`, `token`, `curl` subcommands for end-to-end manual QA            |
+| [xtask CP Dev Stack](./.claude/context/xtask-control-plane-dev.md) | `dev` subcommand: dynamodb-local container, AWS env wiring, SSO prerequisite |
 | [Request Signing](./.claude/context/request-signing.md)            | Ed25519 signing: canonical payload, config, key rotation, crate layout  |
 | [Demo App](./.claude/context/demo-app.md)                          | E2E demo: Python TODO app, native proxy, demo config, running instructions |
 | [Control Plane](./.claude/context/control-plane.md)                | CP scaffold, proxy-config endpoint, OrgStore trait, auth, VP authorization (V4), ETag, Draft / `ConfiguredConfig` lifecycle, testing |

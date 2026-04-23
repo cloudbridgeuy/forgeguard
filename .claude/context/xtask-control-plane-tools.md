@@ -20,7 +20,7 @@ cargo xtask control-plane seed --config path/to/custom-seed.toml
 
 ### Local DynamoDB Target
 
-For local QA against `dynamodb-local` (started by `cargo xtask control-plane dev`), pass both flags:
+For local QA against `dynamodb-local` (started by `cargo xtask control-plane dev` — see [xtask-control-plane-dev.md](./xtask-control-plane-dev.md)), pass both flags:
 
 ```bash
 cargo xtask control-plane seed \
