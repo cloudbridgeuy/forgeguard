@@ -342,8 +342,8 @@ pub(crate) async fn apply_sync_plan(
 
     for action in &plan.actions {
         match action {
-            SyncAction::PutSchema(schema) => {
-                put_schema(client, store_id, schema).await?;
+            SyncAction::PutSchema { new, .. } => {
+                put_schema(client, store_id, new).await?;
                 result.schema_updated = true;
             }
             SyncAction::CreateTemplate(t) => {

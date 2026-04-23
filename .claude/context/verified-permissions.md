@@ -63,6 +63,19 @@ These workarounds are baked into the sync engine. Knowing them prevents re-intro
 - **Resource matching:** `[name]` prefix in description field (not VP `name` field).
 - **Partial failure recovery:** re-run sync — already-applied actions become no-ops.
 
+### Plan Output
+
+`cedar diff` (and `cedar sync --dry-run`) renders the plan as a colored terraform-style block list. Each `DiffAction::Delete` carries the current remote statement so the formatter can produce a unified diff without re-reading state, and `compute_sync_plan` emits adjacent `Delete + Create` pairs for the same named resource so the display layer can coalesce them into a single `UPDATE` block.
+
+- `~ schema (N → M bytes)` — schema change, rendered as a unified diff between old and new JSON.
+- `~ template "name"  [id]` / `~ policy "name"  [id]` — update block; old and new statements are diffed line-by-line with hunks (3 lines of context, `…` between hunks).
+- `+ template "name"` / `+ policy "name"` — standalone create; the full statement is printed indented.
+- `- template "name"  [id]` / `- policy "name"  [id]` — standalone delete; the current remote statement is printed indented.
+
+Colors use `owo-colors` with TTY auto-detection (via `if_supports_color`): added lines green, removed red, unchanged dim, hunk separators cyan. Output is plain text when the destination stream is not a TTY, so piping into `less -R` or capturing to a file still yields readable plans.
+
+Implementation: `xtask/src/control_plane/cedar_core/sync.rs` (`collapse_actions`, `try_pair_update`, `render_block`, `render_diff`). Diffing uses the `similar` crate; grouped unified ops come from `TextDiff::grouped_ops(3)`.
+
 ### Config Structure (`forgeguard.toml`)
 
 The root `forgeguard.toml` is the control plane's own dogfooding authorization model:
