@@ -11,6 +11,7 @@
 mod control_plane;
 mod lib_cmd;
 mod lint;
+mod signing;
 
 use clap::{Parser, Subcommand};
 use color_eyre::eyre::Result;

@@ -1,15 +1,33 @@
 use std::fmt::Write as _;
 
+use owo_colors::{OwoColorize, Style};
+use similar::{ChangeTag, TextDiff};
+
 use super::desired::{DesiredPolicy, DesiredTemplate};
 use super::store::StoreState;
 
 /// A planned sync action.
+///
+/// Delete variants carry the current remote statement and PutSchema carries the
+/// previous schema so `format_sync_plan` can render diffs without re-reading
+/// state.
 pub(crate) enum SyncAction {
-    PutSchema(String),
+    PutSchema {
+        new: String,
+        old: Option<String>,
+    },
     CreateTemplate(DesiredTemplate),
-    DeleteTemplate { id: String, name: Option<String> },
+    DeleteTemplate {
+        id: String,
+        name: Option<String>,
+        statement: String,
+    },
     CreatePolicy(DesiredPolicy),
-    DeletePolicy { id: String, name: Option<String> },
+    DeletePolicy {
+        id: String,
+        name: Option<String>,
+        statement: String,
+    },
 }
 
 /// The complete sync plan.
@@ -71,9 +89,10 @@ pub(crate) fn compute_sync_plan(
             None => true,
         };
         if needs_put {
-            phases
-                .schema
-                .push(SyncAction::PutSchema(desired_schema.clone()));
+            phases.schema.push(SyncAction::PutSchema {
+                new: desired_schema.clone(),
+                old: current.schema.clone(),
+            });
         }
     }
 
@@ -87,7 +106,11 @@ pub(crate) fn compute_sync_plan(
     phases.route_diffs(
         &template_diffs,
         |idx| SyncAction::CreateTemplate(desired.templates[idx].clone()),
-        |id, name| SyncAction::DeleteTemplate { id, name },
+        |id, name, statement| SyncAction::DeleteTemplate {
+            id,
+            name,
+            statement,
+        },
     );
 
     // --- Policies ---
@@ -100,7 +123,11 @@ pub(crate) fn compute_sync_plan(
     phases.route_diffs(
         &policy_diffs,
         |idx| SyncAction::CreatePolicy(desired.policies[idx].clone()),
-        |id, name| SyncAction::DeletePolicy { id, name },
+        |id, name, statement| SyncAction::DeletePolicy {
+            id,
+            name,
+            statement,
+        },
     );
 
     SyncPlan {
@@ -119,6 +146,7 @@ enum DiffAction {
     Delete {
         id: String,
         name: Option<String>,
+        statement: String,
         is_update: bool,
     },
 }
@@ -139,7 +167,7 @@ impl PhasedActions {
         &mut self,
         diffs: &[DiffAction],
         make_create: impl Fn(usize) -> SyncAction,
-        make_delete: impl Fn(String, Option<String>) -> SyncAction,
+        make_delete: impl Fn(String, Option<String>, String) -> SyncAction,
     ) {
         for diff in diffs {
             match diff {
@@ -154,6 +182,7 @@ impl PhasedActions {
                 DiffAction::Delete {
                     id,
                     name,
+                    statement,
                     is_update,
                 } => {
                     let target = if *is_update {
@@ -161,7 +190,7 @@ impl PhasedActions {
                     } else {
                         &mut self.deletes
                     };
-                    target.push(make_delete(id.clone(), name.clone()));
+                    target.push(make_delete(id.clone(), name.clone(), statement.clone()));
                 }
             }
         }
@@ -228,10 +257,11 @@ fn diff_by_name<D, C>(
             // Content differs: delete all current items with this name, then create.
             // Emit deletes before create so the pair stays in order.
             for (_, c) in current_matches {
-                let (c_name, c_id, _) = current_fields(c);
+                let (c_name, c_id, c_stmt) = current_fields(c);
                 results.push(DiffAction::Delete {
                     id: c_id.to_string(),
                     name: c_name.map(String::from),
+                    statement: c_stmt.to_string(),
                     is_update: true,
                 });
             }
@@ -252,10 +282,11 @@ fn diff_by_name<D, C>(
     for (name, items) in &current_by_name {
         if !matched_names.contains(name) {
             for (_, c) in items {
-                let (c_name, c_id, _) = current_fields(c);
+                let (c_name, c_id, c_stmt) = current_fields(c);
                 results.push(DiffAction::Delete {
                     id: c_id.to_string(),
                     name: c_name.map(String::from),
+                    statement: c_stmt.to_string(),
                     is_update: false,
                 });
             }
@@ -264,10 +295,11 @@ fn diff_by_name<D, C>(
 
     // Delete unnamed current items (we can't match them to anything desired).
     for c in &unnamed_current {
-        let (c_name, c_id, _) = current_fields(c);
+        let (c_name, c_id, c_stmt) = current_fields(c);
         results.push(DiffAction::Delete {
             id: c_id.to_string(),
             name: c_name.map(String::from),
+            statement: c_stmt.to_string(),
             is_update: false,
         });
     }
@@ -322,35 +354,311 @@ pub(crate) fn format_summary(result: &SyncResult) -> String {
     out
 }
 
+/// Kind tag for template vs policy — shared between UpdateXxx / CreateXxx /
+/// DeleteXxx display blocks.
+#[derive(Clone, Copy)]
+enum Kind {
+    Template,
+    Policy,
+}
+
+impl Kind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Kind::Template => "template",
+            Kind::Policy => "policy",
+        }
+    }
+}
+
+/// A coalesced display block — the formatter's view of the plan after
+/// pairing adjacent `Delete + Create` actions for the same resource name
+/// into a single `Update`.
+enum DisplayBlock<'a> {
+    Schema {
+        old: Option<&'a str>,
+        new: &'a str,
+    },
+    Update {
+        kind: Kind,
+        name: &'a str,
+        id: &'a str,
+        old: &'a str,
+        new: &'a str,
+    },
+    Create {
+        kind: Kind,
+        name: &'a str,
+        statement: &'a str,
+    },
+    Delete {
+        kind: Kind,
+        name: Option<&'a str>,
+        id: &'a str,
+        statement: &'a str,
+    },
+}
+
+/// Walk the action list and fold `Delete + Create` pairs that share a name
+/// into a single `Update` block. Single actions pass through as-is.
+fn collapse_actions(actions: &[SyncAction]) -> Vec<DisplayBlock<'_>> {
+    let mut blocks = Vec::new();
+    let mut i = 0;
+    while i < actions.len() {
+        let current = &actions[i];
+        let next = actions.get(i + 1);
+
+        // Try to pair a named delete with an immediately-following create of
+        // the same kind + name. `compute_sync_plan` always emits pairs
+        // adjacent and in delete-then-create order for the update case.
+        if let Some((block, consumed)) = try_pair_update(current, next) {
+            blocks.push(block);
+            i += consumed;
+            continue;
+        }
+
+        blocks.push(singleton_block(current));
+        i += 1;
+    }
+    blocks
+}
+
+/// Detect a `Delete + Create` update pair. Returns the update block and
+/// number of actions consumed (always 2) when matched, else `None`.
+fn try_pair_update<'a>(
+    current: &'a SyncAction,
+    next: Option<&'a SyncAction>,
+) -> Option<(DisplayBlock<'a>, usize)> {
+    match (current, next) {
+        (
+            SyncAction::DeleteTemplate {
+                id,
+                name: Some(dn),
+                statement: old,
+            },
+            Some(SyncAction::CreateTemplate(t)),
+        ) if dn == &t.name => Some((
+            DisplayBlock::Update {
+                kind: Kind::Template,
+                name: dn,
+                id,
+                old,
+                new: &t.statement,
+            },
+            2,
+        )),
+        (
+            SyncAction::DeletePolicy {
+                id,
+                name: Some(dn),
+                statement: old,
+            },
+            Some(SyncAction::CreatePolicy(p)),
+        ) if dn == &p.name => Some((
+            DisplayBlock::Update {
+                kind: Kind::Policy,
+                name: dn,
+                id,
+                old,
+                new: &p.statement,
+            },
+            2,
+        )),
+        _ => None,
+    }
+}
+
+fn singleton_block(action: &SyncAction) -> DisplayBlock<'_> {
+    match action {
+        SyncAction::PutSchema { new, old } => DisplayBlock::Schema {
+            new,
+            old: old.as_deref(),
+        },
+        SyncAction::CreateTemplate(t) => DisplayBlock::Create {
+            kind: Kind::Template,
+            name: &t.name,
+            statement: &t.statement,
+        },
+        SyncAction::CreatePolicy(p) => DisplayBlock::Create {
+            kind: Kind::Policy,
+            name: &p.name,
+            statement: &p.statement,
+        },
+        SyncAction::DeleteTemplate {
+            id,
+            name,
+            statement,
+        } => DisplayBlock::Delete {
+            kind: Kind::Template,
+            name: name.as_deref(),
+            id,
+            statement,
+        },
+        SyncAction::DeletePolicy {
+            id,
+            name,
+            statement,
+        } => DisplayBlock::Delete {
+            kind: Kind::Policy,
+            name: name.as_deref(),
+            id,
+            statement,
+        },
+    }
+}
+
 /// Format a sync plan for human-readable display.
 ///
-/// Each action is listed with its type and identifier. Empty plans produce
-/// `"No changes."`.
+/// Adjacent `Delete + Create` actions for the same named resource are paired
+/// into a single `UPDATE` block with a colored unified diff. Schema changes
+/// render as diffs too. Standalone creates/deletes print the full statement.
+/// Empty plans produce `"No changes."`.
 pub(crate) fn format_sync_plan(plan: &SyncPlan) -> String {
     if plan.is_empty() {
         return "No changes.".to_string();
     }
 
-    let mut out = format!("Sync plan: {} action(s)\n\n", plan.actions.len());
+    let blocks = collapse_actions(&plan.actions);
 
-    for action in &plan.actions {
-        let line = match action {
-            SyncAction::PutSchema(s) => format!("  PUT schema ({} bytes)", s.len()),
-            SyncAction::CreateTemplate(t) => format!("  CREATE template \"{}\"", t.name),
-            SyncAction::DeleteTemplate { id, name } => match name {
-                Some(n) => format!("  DELETE template \"{n}\" [{id}]"),
-                None => format!("  DELETE template [{id}]"),
-            },
-            SyncAction::CreatePolicy(p) => format!("  CREATE policy \"{}\"", p.name),
-            SyncAction::DeletePolicy { id, name } => match name {
-                Some(n) => format!("  DELETE policy \"{n}\" [{id}]"),
-                None => format!("  DELETE policy [{id}]"),
-            },
-        };
-        let _ = writeln!(out, "{line}");
+    let mut out = format!("Sync plan: {} change(s)\n", blocks.len());
+    for block in &blocks {
+        out.push('\n');
+        render_block(block, &mut out);
+    }
+    out
+}
+
+fn render_block(block: &DisplayBlock<'_>, out: &mut String) {
+    use owo_colors::Stream::Stdout;
+    let yellow_bold = Style::new().yellow().bold();
+    let green_bold = Style::new().green().bold();
+    let red_bold = Style::new().red().bold();
+    let bold = Style::new().bold();
+    let dim = Style::new().dimmed();
+    match block {
+        DisplayBlock::Schema { old, new } => {
+            let old_len = old.map(|s| s.len()).unwrap_or(0);
+            let _ = writeln!(
+                out,
+                "{} schema  ({} → {} bytes)",
+                "~".if_supports_color(Stdout, |t| t.style(yellow_bold)),
+                old_len,
+                new.len()
+            );
+            render_diff(old.unwrap_or(""), new, out);
+        }
+        DisplayBlock::Update {
+            kind,
+            name,
+            id,
+            old,
+            new,
+        } => {
+            let quoted = format!("\"{name}\"");
+            let bracketed = format!("[{id}]");
+            let _ = writeln!(
+                out,
+                "{} {} {}  {}",
+                "~".if_supports_color(Stdout, |t| t.style(yellow_bold)),
+                kind.as_str(),
+                quoted.if_supports_color(Stdout, |t| t.style(bold)),
+                bracketed.if_supports_color(Stdout, |t| t.style(dim)),
+            );
+            render_diff(old, new, out);
+        }
+        DisplayBlock::Create {
+            kind,
+            name,
+            statement,
+        } => {
+            let quoted = format!("\"{name}\"");
+            let _ = writeln!(
+                out,
+                "{} {} {}",
+                "+".if_supports_color(Stdout, |t| t.style(green_bold)),
+                kind.as_str(),
+                quoted.if_supports_color(Stdout, |t| t.style(bold)),
+            );
+            render_statement(statement, out);
+        }
+        DisplayBlock::Delete {
+            kind,
+            name,
+            id,
+            statement,
+        } => {
+            let label = match name {
+                Some(n) => format!("\"{n}\""),
+                None => "<unnamed>".to_string(),
+            };
+            let bracketed = format!("[{id}]");
+            let _ = writeln!(
+                out,
+                "{} {} {}  {}",
+                "-".if_supports_color(Stdout, |t| t.style(red_bold)),
+                kind.as_str(),
+                label.if_supports_color(Stdout, |t| t.style(bold)),
+                bracketed.if_supports_color(Stdout, |t| t.style(dim)),
+            );
+            render_statement(statement, out);
+        }
+    }
+}
+
+fn render_statement(statement: &str, out: &mut String) {
+    for line in statement.lines() {
+        let _ = writeln!(out, "    {line}");
+    }
+}
+
+/// Render a unified diff of `old` vs `new`, indented four spaces. Lines are
+/// colored red (removed) / green (added) / cyan (hunk separator) when the
+/// output stream supports color.
+fn render_diff(old: &str, new: &str, out: &mut String) {
+    use owo_colors::Stream::Stdout;
+    let red = Style::new().red();
+    let green = Style::new().green();
+    let cyan = Style::new().cyan();
+
+    let diff = TextDiff::from_lines(old, new);
+    let groups = diff.grouped_ops(3);
+    if groups.is_empty() {
+        return;
     }
 
-    out
+    for (idx, group) in groups.iter().enumerate() {
+        if idx > 0 {
+            // Visual separator between hunks of the same resource.
+            let _ = writeln!(
+                out,
+                "    {}",
+                "…".if_supports_color(Stdout, |t| t.style(cyan))
+            );
+        }
+        for op in group {
+            for change in diff.iter_changes(op) {
+                let raw = change.value().trim_end_matches('\n');
+                match change.tag() {
+                    ChangeTag::Delete => {
+                        let line = format!("    - {raw}");
+                        let _ =
+                            writeln!(out, "{}", line.if_supports_color(Stdout, |t| t.style(red)));
+                    }
+                    ChangeTag::Insert => {
+                        let line = format!("    + {raw}");
+                        let _ = writeln!(
+                            out,
+                            "{}",
+                            line.if_supports_color(Stdout, |t| t.style(green))
+                        );
+                    }
+                    ChangeTag::Equal => {
+                        let _ = writeln!(out, "      {raw}");
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Return process exit code: 0 if no changes, 1 if changes pending.
@@ -434,7 +742,7 @@ mod tests {
         let mut counts = (0, 0, 0, 0, 0);
         for action in &plan.actions {
             match action {
-                SyncAction::PutSchema(_) => counts.0 += 1,
+                SyncAction::PutSchema { .. } => counts.0 += 1,
                 SyncAction::CreateTemplate(_) => counts.1 += 1,
                 SyncAction::DeleteTemplate { .. } => counts.2 += 1,
                 SyncAction::CreatePolicy(_) => counts.3 += 1,
@@ -668,7 +976,7 @@ mod tests {
         assert_eq!((ps, ct, dt, cp, dp), (1, 1, 1, 1, 1));
 
         // Schema must be first action.
-        assert!(matches!(plan.actions[0], SyncAction::PutSchema(_)));
+        assert!(matches!(plan.actions[0], SyncAction::PutSchema { .. }));
 
         // Standalone deletes must be last.
         let last_two = &plan.actions[plan.actions.len() - 2..];
@@ -866,21 +1174,51 @@ mod tests {
         assert_eq!(format_sync_plan(&plan), "No changes.");
     }
 
+    /// Strip ANSI escape sequences so assertions aren't sensitive to TTY
+    /// detection during test runs. Handles only the `ESC [ ... m` (SGR)
+    /// sequences emitted by owo-colors.
+    fn strip_ansi(s: &str) -> String {
+        let mut out = String::with_capacity(s.len());
+        let mut chars = s.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '\u{1b}' && chars.peek() == Some(&'[') {
+                chars.next();
+                for inner in chars.by_ref() {
+                    if inner == 'm' {
+                        break;
+                    }
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    }
+
     #[test]
     fn format_sync_plan_single_action() {
         let plan = SyncPlan {
-            actions: vec![SyncAction::PutSchema("{\"Ns\":{}}".to_string())],
+            actions: vec![SyncAction::PutSchema {
+                new: "{\"Ns\":{}}".to_string(),
+                old: None,
+            }],
         };
-        let output = format_sync_plan(&plan);
-        assert!(output.contains("Sync plan: 1 action(s)"));
-        assert!(output.contains("PUT schema (9 bytes)"));
+        let output = strip_ansi(&format_sync_plan(&plan));
+        assert!(output.contains("Sync plan: 1 change(s)"));
+        assert!(output.contains("~ schema"));
+        assert!(output.contains("0 → 9 bytes"));
     }
 
     #[test]
     fn format_sync_plan_mixed_actions() {
+        // All actions here have distinct names (or are unnamed), so nothing
+        // pairs into an update — five standalone blocks.
         let plan = SyncPlan {
             actions: vec![
-                SyncAction::PutSchema("{\"Ns\":{}}".to_string()),
+                SyncAction::PutSchema {
+                    new: "{\"Ns\":{}}".to_string(),
+                    old: Some("{\"Ns\":{\"Old\":{}}}".to_string()),
+                },
                 SyncAction::CreateTemplate(DesiredTemplate {
                     name: "owner".to_string(),
                     description: None,
@@ -889,6 +1227,7 @@ mod tests {
                 SyncAction::DeletePolicy {
                     id: "ps-abc123".to_string(),
                     name: Some("old-policy".to_string()),
+                    statement: "forbid(principal, action, resource);".to_string(),
                 },
                 SyncAction::CreatePolicy(DesiredPolicy {
                     name: "machine-proxy-config-read".to_string(),
@@ -898,16 +1237,46 @@ mod tests {
                 SyncAction::DeleteTemplate {
                     id: "pt-xyz789".to_string(),
                     name: None,
+                    statement: "permit(principal == ?principal, action, resource);".to_string(),
                 },
             ],
         };
-        let output = format_sync_plan(&plan);
-        assert!(output.contains("Sync plan: 5 action(s)"));
-        assert!(output.contains("PUT schema (9 bytes)"));
-        assert!(output.contains("CREATE template \"owner\""));
-        assert!(output.contains("DELETE policy \"old-policy\" [ps-abc123]"));
-        assert!(output.contains("CREATE policy \"machine-proxy-config-read\""));
-        assert!(output.contains("DELETE template [pt-xyz789]"));
+        let output = strip_ansi(&format_sync_plan(&plan));
+        assert!(output.contains("Sync plan: 5 change(s)"));
+        assert!(output.contains("~ schema"));
+        assert!(output.contains("+ template \"owner\""));
+        assert!(output.contains("- policy \"old-policy\"  [ps-abc123]"));
+        assert!(output.contains("+ policy \"machine-proxy-config-read\""));
+        assert!(output.contains("- template <unnamed>  [pt-xyz789]"));
+    }
+
+    #[test]
+    fn format_sync_plan_pairs_update_into_single_block() {
+        // Adjacent delete+create for the same policy name collapse into a
+        // single `~ policy "..."` block with a diff — not two separate lines.
+        let plan = SyncPlan {
+            actions: vec![
+                SyncAction::DeletePolicy {
+                    id: "pol-1".to_string(),
+                    name: Some("admin".to_string()),
+                    statement: "permit(principal, action, resource)\nwhen { true };".to_string(),
+                },
+                SyncAction::CreatePolicy(DesiredPolicy {
+                    name: "admin".to_string(),
+                    description: None,
+                    statement: "permit(principal, action, resource)\nwhen { false };".to_string(),
+                }),
+            ],
+        };
+        let output = strip_ansi(&format_sync_plan(&plan));
+        assert!(output.contains("Sync plan: 1 change(s)"));
+        assert!(output.contains("~ policy \"admin\"  [pol-1]"));
+        // Diff content shows both the removed and added line.
+        assert!(output.contains("- when { true };"));
+        assert!(output.contains("+ when { false };"));
+        // And no duplicate standalone markers.
+        assert!(!output.contains("+ policy \"admin\""));
+        assert!(!output.contains("- policy \"admin\""));
     }
 
     #[test]
@@ -917,26 +1286,30 @@ mod tests {
                 SyncAction::DeletePolicy {
                     id: "pol-1".to_string(),
                     name: Some("named-policy".to_string()),
+                    statement: "permit(principal, action, resource);".to_string(),
                 },
                 SyncAction::DeletePolicy {
                     id: "pol-2".to_string(),
                     name: None,
+                    statement: "permit(principal, action, resource);".to_string(),
                 },
                 SyncAction::DeleteTemplate {
                     id: "tmpl-1".to_string(),
                     name: Some("named-template".to_string()),
+                    statement: "permit(principal == ?principal, action, resource);".to_string(),
                 },
                 SyncAction::DeleteTemplate {
                     id: "tmpl-2".to_string(),
                     name: None,
+                    statement: "permit(principal == ?principal, action, resource);".to_string(),
                 },
             ],
         };
-        let output = format_sync_plan(&plan);
-        assert!(output.contains("DELETE policy \"named-policy\" [pol-1]"));
-        assert!(output.contains("DELETE policy [pol-2]"));
-        assert!(output.contains("DELETE template \"named-template\" [tmpl-1]"));
-        assert!(output.contains("DELETE template [tmpl-2]"));
+        let output = strip_ansi(&format_sync_plan(&plan));
+        assert!(output.contains("- policy \"named-policy\"  [pol-1]"));
+        assert!(output.contains("- policy <unnamed>  [pol-2]"));
+        assert!(output.contains("- template \"named-template\"  [tmpl-1]"));
+        assert!(output.contains("- template <unnamed>  [tmpl-2]"));
     }
 
     // -- exit_code_from_plan tests --------------------------------------------
@@ -950,7 +1323,10 @@ mod tests {
     #[test]
     fn exit_code_non_empty_plan() {
         let plan = SyncPlan {
-            actions: vec![SyncAction::PutSchema("{}".to_string())],
+            actions: vec![SyncAction::PutSchema {
+                new: "{}".to_string(),
+                old: None,
+            }],
         };
         assert_eq!(exit_code_from_plan(&plan), 1);
     }

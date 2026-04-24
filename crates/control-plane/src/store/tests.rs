@@ -649,3 +649,89 @@ async fn update_draft_with_expected_etag_fails_with_empty_current() {
         other => panic!("expected PreconditionFailed with empty current, got {other:?}"),
     }
 }
+
+#[tokio::test]
+async fn rotate_signing_key_happy_path() {
+    let store = make_store_with_org("org-rotate");
+    let org_id = OrganizationId::new("org-rotate").unwrap();
+
+    let original = store.generate_key(&org_id).await.unwrap();
+    let rotated = store
+        .rotate_signing_key(&org_id, original.key_id())
+        .await
+        .unwrap();
+
+    assert_ne!(rotated.key_id(), original.key_id());
+    assert!(rotated.private_key_pem().contains("PRIVATE KEY"));
+
+    let keys = store.list_keys(&org_id).await.unwrap();
+    assert_eq!(keys.len(), 2);
+
+    let old = keys
+        .iter()
+        .find(|k| k.key_id() == original.key_id())
+        .unwrap();
+    assert!(matches!(old.status(), SigningKeyStatus::Rotating { .. }));
+
+    let new = keys
+        .iter()
+        .find(|k| k.key_id() == rotated.key_id())
+        .unwrap();
+    assert!(matches!(new.status(), SigningKeyStatus::Active));
+}
+
+#[tokio::test]
+async fn rotate_signing_key_nonexistent_org_returns_not_found() {
+    let store = InMemoryOrgStore::new(BTreeMap::new());
+    let org_id = OrganizationId::new("org-ghost").unwrap();
+    let err = store
+        .rotate_signing_key(&org_id, "key-abc")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::NotFound(_)), "got: {err:?}");
+}
+
+#[tokio::test]
+async fn rotate_signing_key_nonexistent_key_returns_not_found() {
+    let store = make_store_with_org("org-rot-miss");
+    let org_id = OrganizationId::new("org-rot-miss").unwrap();
+    let err = store
+        .rotate_signing_key(&org_id, "key-missing")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::NotFound(_)), "got: {err:?}");
+}
+
+#[tokio::test]
+async fn rotate_signing_key_revoked_target_returns_conflict() {
+    let store = make_store_with_org("org-rot-revoked");
+    let org_id = OrganizationId::new("org-rot-revoked").unwrap();
+
+    let generated = store.generate_key(&org_id).await.unwrap();
+    store.revoke_key(&org_id, generated.key_id()).await.unwrap();
+
+    let err = store
+        .rotate_signing_key(&org_id, generated.key_id())
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::Conflict(_)), "got: {err:?}");
+}
+
+#[tokio::test]
+async fn rotate_signing_key_rotating_target_returns_conflict() {
+    let store = make_store_with_org("org-rot-double");
+    let org_id = OrganizationId::new("org-rot-double").unwrap();
+
+    let generated = store.generate_key(&org_id).await.unwrap();
+    store
+        .rotate_signing_key(&org_id, generated.key_id())
+        .await
+        .unwrap();
+
+    // Second rotation of the now-Rotating key → 409
+    let err = store
+        .rotate_signing_key(&org_id, generated.key_id())
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::Conflict(_)), "got: {err:?}");
+}

@@ -5,10 +5,20 @@
 use std::fmt;
 use std::str::FromStr;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/// Number of hours the retiring key remains valid after a rotation is initiated.
+///
+/// During this window both the old key (status `Rotating`) and the new key
+/// (status `Active`) are accepted, giving callers time to switch over.
+pub(crate) const ROTATION_GRACE_HOURS: i64 = 24;
 
 // ---------------------------------------------------------------------------
 // SigningKeyStatus
@@ -180,6 +190,12 @@ impl SigningKeyEntry {
     pub(crate) fn revoke(&mut self) {
         self.status = SigningKeyStatus::Revoked;
     }
+
+    /// Transition this key to `Rotating { expires_at }`.
+    pub(crate) fn begin_rotating(&mut self, expires_at: DateTime<Utc>) {
+        self.status = SigningKeyStatus::Rotating { expires_at };
+        self.expires_at = Some(expires_at);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -239,6 +255,49 @@ impl GenerateKeyResult {
 }
 
 // ---------------------------------------------------------------------------
+// Rotation (pure)
+// ---------------------------------------------------------------------------
+
+/// Transition the target key to `Rotating` with a grace period, and append a
+/// new `Active` entry. Pure — no I/O, no clocks other than the one passed in.
+///
+/// # Errors
+///
+/// - `Error::NotFound` if no entry matches `target_key_id`.
+/// - `Error::Conflict` if the target entry's status is not `Active`.
+pub(crate) fn rotate_entries(
+    mut existing: Vec<SigningKeyEntry>,
+    target_key_id: &str,
+    new_entry: SigningKeyEntry,
+    now: DateTime<Utc>,
+    grace: Duration,
+) -> Result<Vec<SigningKeyEntry>> {
+    let idx = existing
+        .iter()
+        .position(|e| e.key_id() == target_key_id)
+        .ok_or_else(|| Error::NotFound(format!("signing key '{target_key_id}' not found")))?;
+
+    match existing[idx].status() {
+        SigningKeyStatus::Active => {}
+        SigningKeyStatus::Rotating { .. } => {
+            return Err(Error::Conflict(format!(
+                "signing key '{target_key_id}' is already rotating"
+            )));
+        }
+        SigningKeyStatus::Revoked => {
+            return Err(Error::Conflict(format!(
+                "signing key '{target_key_id}' is revoked"
+            )));
+        }
+    }
+
+    let expires_at = now + grace;
+    existing[idx].begin_rotating(expires_at);
+    existing.push(new_entry);
+    Ok(existing)
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -246,7 +305,6 @@ impl GenerateKeyResult {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use chrono::Duration;
 
     // -- SigningKeyStatus Display/FromStr round-trip --
 
@@ -421,5 +479,166 @@ mod tests {
         });
         let result: std::result::Result<SigningKeyEntry, _> = serde_json::from_value(json);
         assert!(result.is_err(), "empty key_id should fail deserialization");
+    }
+
+    // -- rotate_entries --
+
+    #[test]
+    fn rotate_entries_happy_path_transitions_active_and_appends_new() {
+        let now = Utc::now();
+        let old = SigningKeyEntry::new(
+            "key-old".into(),
+            "old-pem".into(),
+            SigningKeyStatus::Active,
+            now - Duration::hours(1),
+            None,
+        )
+        .unwrap();
+        let new_entry = SigningKeyEntry::new(
+            "key-new".into(),
+            "new-pem".into(),
+            SigningKeyStatus::Active,
+            now,
+            None,
+        )
+        .unwrap();
+
+        let result =
+            rotate_entries(vec![old], "key-old", new_entry, now, Duration::hours(24)).unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].key_id(), "key-old");
+        match result[0].status() {
+            SigningKeyStatus::Rotating { expires_at } => {
+                assert_eq!(*expires_at, now + Duration::hours(24));
+            }
+            s => panic!("expected Rotating, got {s:?}"),
+        }
+        assert_eq!(result[0].expires_at(), Some(now + Duration::hours(24)));
+        assert_eq!(result[1].key_id(), "key-new");
+        assert!(matches!(result[1].status(), SigningKeyStatus::Active));
+    }
+
+    #[test]
+    fn rotate_entries_target_not_found_returns_not_found() {
+        let now = Utc::now();
+        let new_entry = SigningKeyEntry::new(
+            "key-new".into(),
+            "pem".into(),
+            SigningKeyStatus::Active,
+            now,
+            None,
+        )
+        .unwrap();
+        let err = rotate_entries(vec![], "key-missing", new_entry, now, Duration::hours(24))
+            .expect_err("should error");
+        assert!(matches!(err, Error::NotFound(_)), "got: {err:?}");
+    }
+
+    #[test]
+    fn rotate_entries_target_rotating_returns_conflict() {
+        let now = Utc::now();
+        let rotating = SigningKeyEntry::new(
+            "key-rot".into(),
+            "pem".into(),
+            SigningKeyStatus::Rotating {
+                expires_at: now + Duration::hours(2),
+            },
+            now - Duration::hours(1),
+            Some(now + Duration::hours(2)),
+        )
+        .unwrap();
+        let new_entry = SigningKeyEntry::new(
+            "key-new".into(),
+            "pem".into(),
+            SigningKeyStatus::Active,
+            now,
+            None,
+        )
+        .unwrap();
+        let err = rotate_entries(
+            vec![rotating],
+            "key-rot",
+            new_entry,
+            now,
+            Duration::hours(24),
+        )
+        .expect_err("should error");
+        assert!(matches!(err, Error::Conflict(_)), "got: {err:?}");
+    }
+
+    #[test]
+    fn rotate_entries_target_revoked_returns_conflict() {
+        let now = Utc::now();
+        let revoked = SigningKeyEntry::new(
+            "key-rev".into(),
+            "pem".into(),
+            SigningKeyStatus::Revoked,
+            now - Duration::hours(1),
+            None,
+        )
+        .unwrap();
+        let new_entry = SigningKeyEntry::new(
+            "key-new".into(),
+            "pem".into(),
+            SigningKeyStatus::Active,
+            now,
+            None,
+        )
+        .unwrap();
+        let err = rotate_entries(
+            vec![revoked],
+            "key-rev",
+            new_entry,
+            now,
+            Duration::hours(24),
+        )
+        .expect_err("should error");
+        assert!(matches!(err, Error::Conflict(_)), "got: {err:?}");
+    }
+
+    #[test]
+    fn rotate_entries_leaves_other_entries_untouched() {
+        let now = Utc::now();
+        let other_rotating = SigningKeyEntry::new(
+            "key-other".into(),
+            "other-pem".into(),
+            SigningKeyStatus::Rotating {
+                expires_at: now + Duration::hours(6),
+            },
+            now - Duration::hours(2),
+            Some(now + Duration::hours(6)),
+        )
+        .unwrap();
+        let active = SigningKeyEntry::new(
+            "key-active".into(),
+            "active-pem".into(),
+            SigningKeyStatus::Active,
+            now - Duration::hours(1),
+            None,
+        )
+        .unwrap();
+        let new_entry = SigningKeyEntry::new(
+            "key-new".into(),
+            "new-pem".into(),
+            SigningKeyStatus::Active,
+            now,
+            None,
+        )
+        .unwrap();
+
+        let result = rotate_entries(
+            vec![other_rotating, active],
+            "key-active",
+            new_entry,
+            now,
+            Duration::hours(24),
+        )
+        .unwrap();
+
+        assert_eq!(result.len(), 3);
+        // Other rotating entry unchanged
+        assert_eq!(result[0].key_id(), "key-other");
+        assert_eq!(result[0].expires_at(), Some(now + Duration::hours(6)));
     }
 }

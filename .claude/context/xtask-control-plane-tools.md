@@ -18,6 +18,21 @@ cargo xtask control-plane seed --config path/to/custom-seed.toml
 
 `xtask/seed.toml` ships with `acme-*` and `globex-*` fixtures covering `admin`, `member`, and `owner` groups.
 
+### Local DynamoDB Target
+
+For local QA against `dynamodb-local` (started by `cargo xtask control-plane dev` — see [xtask-control-plane-dev.md](./xtask-control-plane-dev.md)), pass both flags:
+
+```bash
+cargo xtask control-plane seed \
+  --dynamodb-endpoint http://127.0.0.1:<PORT> \
+  --dynamodb-table forgeguard-orgs-dev
+```
+
+- Organizations and membership rows are written to the local table.
+- Cognito users are still provisioned in real AWS (no local Cognito emulator exists). Passwords still land in 1Password.
+- Omit both flags to target prod (reads `op://forgeguard-prod/dynamodb/table-name`).
+- Passing only one flag is a validation error.
+
 ## `token` — Fetch a JWT for a seeded user
 
 Calls Cognito `AdminInitiateAuth` with the `AdminUserPasswordAuth` flow (enabled on the dashboard client via `infra/control-plane/lib/cognito-stack.ts`). Reads the user's password from 1Password.
@@ -44,6 +59,8 @@ cargo xtask control-plane curl \
 ```
 
 The canonical payload that the server recomputes and verifies against matches exactly: the `CanonicalPayload::new(&trace_id, timestamp, &identity_headers)` constructor uses the lowercase `x-forgeguard-org-id` header to match what the `http` crate normalises on the server side.
+
+`--private-key` accepts either the PEM inline or a `@path` reference that is read from disk. The contents are `.trim()`-ed before handing to `SigningKey::from_pkcs8_pem`, so PEMs written by `jq -r .private_key > key.pem` (which appends a trailing newline that `pem-rfc7468` rejects as post-encapsulation whitespace) load cleanly.
 
 ## Shared Helpers
 

@@ -204,7 +204,7 @@ The Cedar namespace is `forgeguard` (from `ProjectId::new("forgeguard")`). The t
 
 ### Route-to-Action Mapping
 
-All 9 API routes map to QualifiedActions in the `cp` namespace:
+All 10 API routes map to QualifiedActions in the `cp` namespace:
 
 | Method | Path | Cedar Action |
 |--------|------|-------------|
@@ -217,6 +217,7 @@ All 9 API routes map to QualifiedActions in the `cp` namespace:
 | `POST` | `/api/v1/organizations/{org_id}/keys` | `cp:key:generate` |
 | `GET` | `/api/v1/organizations/{org_id}/keys` | `cp:key:read` |
 | `DELETE` | `/api/v1/organizations/{org_id}/keys/{key_id}` | `cp:key:revoke` |
+| `POST` | `/api/v1/organizations/{org_id}/keys/{key_id}/rotate` | `cp:key:rotate` |
 
 ### PrincipalKind Routing
 

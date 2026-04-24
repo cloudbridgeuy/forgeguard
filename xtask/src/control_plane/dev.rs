@@ -60,10 +60,14 @@ struct SeedFile {
 }
 
 /// One organization entry in the seed JSON.
+///
+/// `config` is optional: entries without a `config` block seed as Draft
+/// organizations (no `config`/`etag` row attributes), matching the CP store
+/// contract in `crates/control-plane/src/dynamo_store/mod.rs`.
 #[derive(Deserialize)]
 struct SeedOrg {
     name: String,
-    config: serde_json::Value,
+    config: Option<serde_json::Value>,
 }
 
 // ---------------------------------------------------------------------------
@@ -152,17 +156,10 @@ async fn seed_organizations(client: &Client, table: &str, seed_path: &str) -> Re
     for (org_id, org) in &seed.organizations {
         println!("Seeding organization '{org_id}'...");
 
-        let config_json =
-            serde_json::to_string(&org.config).context("failed to serialize org config")?;
-
-        // The store expects a quoted hex etag; for seeded dev data a stable
-        // placeholder is fine — it gets recomputed on the next update.
-        let etag = format!("\"{:016x}\"", 0u64);
-
         let pk_value = org_type.pk.replace("{org_id}", org_id);
         let sk_value = &org_type.sk;
 
-        client
+        let mut request = client
             .put_item()
             .table_name(table)
             .item(
@@ -192,12 +189,23 @@ async fn seed_organizations(client: &Client, table: &str, seed_path: &str) -> Re
             .item(
                 "updated_at",
                 aws_sdk_dynamodb::types::AttributeValue::S(now.clone()),
-            )
-            .item(
-                "config",
-                aws_sdk_dynamodb::types::AttributeValue::S(config_json),
-            )
-            .item("etag", aws_sdk_dynamodb::types::AttributeValue::S(etag))
+            );
+
+        if let Some(config) = &org.config {
+            let config_json =
+                serde_json::to_string(config).context("failed to serialize org config")?;
+            // Seeded rows use a stable placeholder etag; real etags get
+            // recomputed on the next update.
+            let etag = format!("\"{:016x}\"", 0u64);
+            request = request
+                .item(
+                    "config",
+                    aws_sdk_dynamodb::types::AttributeValue::S(config_json),
+                )
+                .item("etag", aws_sdk_dynamodb::types::AttributeValue::S(etag));
+        }
+
+        request
             .send()
             .await
             .with_context(|| format!("failed to seed organization '{org_id}'"))?;
@@ -220,6 +228,7 @@ fn launch_control_plane(table: &str, listen: &str, port: u16, extra: &[String]) 
     let endpoint = format!("http://127.0.0.1:{port}");
 
     println!("Launching control plane (listen: {listen}, table: {table}, endpoint: {endpoint})...");
+    println!("Note: Verified Permissions / Cognito calls hit real AWS. Ensure AWS_PROFILE is set and you are SSO-logged-in.");
     println!("Press Ctrl-C to stop.");
 
     let mut args = vec![
@@ -245,9 +254,7 @@ fn launch_control_plane(table: &str, listen: &str, port: u16, extra: &[String]) 
 
         let result = Command::new("cargo")
             .args(&args)
-            .env("AWS_ENDPOINT_URL", &endpoint)
-            .env("AWS_ACCESS_KEY_ID", "test")
-            .env("AWS_SECRET_ACCESS_KEY", "test")
+            .env("AWS_ENDPOINT_URL_DYNAMODB", &endpoint)
             .env("AWS_REGION", "us-east-2")
             .pre_exec(|| {
                 // Restore default SIGINT in the child so Ctrl-C reaches it.

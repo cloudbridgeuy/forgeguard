@@ -6,6 +6,7 @@
 //! membership items (including `joined_at`). Accepted for a dev-only
 //! fixture; production membership writes must use conditional puts.
 
+use aws_sdk_dynamodb::config::{BehaviorVersion, Credentials, Region};
 use aws_sdk_dynamodb::types::AttributeValue;
 use clap::Args;
 use color_eyre::eyre::{self, Context, Result};
@@ -13,7 +14,7 @@ use color_eyre::eyre::{self, Context, Result};
 use super::op::{build_aws_config, read_op, store_in_op};
 use super::op_core::{build_vault_name, ForgeguardEnv};
 use super::schema::orgs_schema;
-use super::seed_core::SeedConfig;
+use super::seed_core::{DynamoTarget, SeedConfig};
 
 /// CLI arguments for the seed subcommand.
 #[derive(Args)]
@@ -41,6 +42,17 @@ pub(crate) struct SeedArgs {
     /// AWS profile.
     #[arg(long, default_value = "admin", env = "AWS_PROFILE")]
     profile: String,
+
+    /// DynamoDB endpoint URL for local dev (e.g. `http://127.0.0.1:8000`).
+    /// When set, `--dynamodb-table` is required and the 1Password lookup
+    /// for the prod table name is skipped.
+    #[arg(long)]
+    dynamodb_endpoint: Option<String>,
+
+    /// DynamoDB table name. Required when `--dynamodb-endpoint` is set.
+    /// Ignored otherwise (prod reads the name from 1Password).
+    #[arg(long)]
+    dynamodb_table: Option<String>,
 }
 
 pub(crate) async fn run(args: &SeedArgs) -> Result<()> {
@@ -51,16 +63,35 @@ pub(crate) async fn run(args: &SeedArgs) -> Result<()> {
         .with_context(|| format!("failed to read seed config: {}", args.config))?;
     let config: SeedConfig = toml::from_str(&raw).context("failed to parse seed config")?;
 
-    let table_name = read_op(&vault, "dynamodb", "table-name", op_account)?;
+    let target =
+        DynamoTarget::from_cli_args(args.dynamodb_endpoint.clone(), args.dynamodb_table.clone())
+            .map_err(|e| eyre::eyre!(e))?;
+
     let pool_id = read_op(&vault, "cognito", "user-pool-id", op_account)?;
-
-    println!("Table: {table_name}");
-    println!("User pool: {pool_id}");
-    println!();
-
     let sdk_config = build_aws_config(&args.profile, &args.region).await?;
-    let dynamo_client = aws_sdk_dynamodb::Client::new(&sdk_config);
+
+    let (dynamo_client, table_name) = match &target {
+        DynamoTarget::Prod => {
+            let table_name = read_op(&vault, "dynamodb", "table-name", op_account)?;
+            let client = aws_sdk_dynamodb::Client::new(&sdk_config);
+            (client, table_name)
+        }
+        DynamoTarget::Local { endpoint, table } => {
+            let client = build_local_dynamo_client(endpoint);
+            (client, table.clone())
+        }
+    };
+
     let cognito_client = aws_sdk_cognitoidentityprovider::Client::new(&sdk_config);
+
+    match &target {
+        DynamoTarget::Prod => println!("DynamoDB: prod table '{table_name}'"),
+        DynamoTarget::Local { endpoint, .. } => {
+            println!("DynamoDB: local '{endpoint}' table '{table_name}'")
+        }
+    }
+    println!("Cognito user pool: {pool_id}");
+    println!();
 
     seed_organizations(&dynamo_client, &table_name, &config).await?;
     seed_users(SeedUsersParams {
@@ -323,4 +354,20 @@ fn is_username_exists_error(
         aws_sdk_cognitoidentityprovider::error::SdkError::ServiceError(e)
             if e.err().is_username_exists_exception()
     )
+}
+
+/// Build a DynamoDB client pointed at a local endpoint (dynamodb-local).
+///
+/// Uses dummy static credentials — dynamodb-local doesn't validate them but
+/// the AWS SDK requires some provider to be configured.
+fn build_local_dynamo_client(endpoint: &str) -> aws_sdk_dynamodb::Client {
+    let credentials = Credentials::new("test", "test", None, None, "static");
+    let dynamo_config = aws_sdk_dynamodb::config::Builder::new()
+        .endpoint_url(endpoint)
+        .region(Region::new("us-east-2"))
+        .credentials_provider(credentials)
+        .behavior_version(BehaviorVersion::latest())
+        .build();
+
+    aws_sdk_dynamodb::Client::from_conf(dynamo_config)
 }

@@ -38,6 +38,15 @@ Headers are sorted by name for determinism regardless of insertion order.
 
 ## Crate Placement (FCIS)
 
+### Inlined copy in xtask
+
+The `xtask` crate carries its own copy of the narrow signing surface at
+`xtask/src/signing.rs`. This keeps xtask free of a workspace path dependency on
+`forgeguard_authn_core`. `xtask/tests/signing_compat.rs` signs a payload with
+the inlined code and verifies it with `forgeguard_authn_core::signing::verify`
+as a drift-prevention check. If the canonical payload format changes, update
+both copies in the same PR.
+
 | What | Where | Why |
 |------|-------|-----|
 | `KeyId`, `Timestamp`, `SigningKey`, `VerifyingKey`, `CanonicalPayload`, `SignedPayload`, `TimestampValidator`, `sign()`, `verify()`, `parse_signature_header()` | `authn-core` (pure) | No I/O, reusable by proxy and future SDK |
