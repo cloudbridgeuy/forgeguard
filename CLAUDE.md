@@ -4,7 +4,8 @@
 
 - **Error handling:** `thiserror` (libraries), `color-eyre` (binaries)
 - **Logging:** `tracing` + `tracing-subscriber` — structured, span-based
-- **Task runner:** `xtask` only — no Makefile, justfile, or scripts/
+- **Task runner:** `xtask` only — install wrapper once with `cargo install --path xtask/cargo-xtask --locked`; no Makefile, justfile, or scripts/
+- **xtask wrapper:** `cargo-xtask` skips cargo's fingerprint on the hot path; force rebuild with `cargo xtask --rebuild <subcommand>` — see [xtask/cargo-xtask/README.md](./xtask/cargo-xtask/README.md)
 - **Dev watcher:** `bacon` — see `bacon.toml`
 - **Pre-commit hooks:** `cargo xtask lint --install-hooks`
 - **Commits:** Conventional Commits — see [commit-and-release.md](./.claude/context/commit-and-release.md)
@@ -165,6 +166,7 @@ Each crate's `README.md` describes what it owns and its pure/I/O classification.
 | [Params Struct Rule](./.claude/context/params-struct-rule.md)      | Why we ban `#[allow(clippy::too_many_arguments)]` and how the lint enforces it |
 | [Commit and Release](./.claude/context/commit-and-release.md)      | Conventional commits, version bump logic, release flow                  |
 | [xtask lint](./.claude/context/xtask-lint.md)                      | Lint pipeline checks, flags, architecture, adding new checks            |
+| [xtask Wrapper](./.claude/context/xtask-wrapper.md)                | `cargo-xtask` mtime staleness, FCIS module split, hot/cold paths, `--rebuild` |
 | [Feature Flags](./.claude/context/feature-flags.md)                | Flag types, evaluation order, overrides, debug endpoint, proxy wiring   |
 | [Verified Permissions](./.claude/context/verified-permissions.md)   | VP integration: action format, Cedar types, CLI, config, infrastructure |
 | [Container Builds](./.claude/context/container-builds.md)          | Distroless images, multi-stage builds, SSL strategy, health checks      |
