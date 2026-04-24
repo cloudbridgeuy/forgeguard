@@ -6,9 +6,9 @@
 
 use std::time::SystemTime;
 
+use crate::signing::{sign, CanonicalPayload, KeyId, SigningKey, Timestamp};
 use clap::Args;
 use color_eyre::eyre::{self, Context, Result};
-use forgeguard_authn_core::signing::{CanonicalPayload, KeyId, SigningKey, Timestamp};
 
 /// CLI arguments for the curl subcommand.
 #[derive(Args)]
@@ -53,8 +53,7 @@ pub(crate) async fn run(args: &CurlArgs) -> Result<()> {
     let trace_id = uuid::Uuid::now_v7().to_string();
     let timestamp = Timestamp::from_system_time(SystemTime::now());
     let payload = CanonicalPayload::new(&trace_id, timestamp, &identity_headers);
-    let signed =
-        forgeguard_authn_core::signing::sign(&signing_key, &key_id, &payload, timestamp, trace_id);
+    let signed = sign(&signing_key, &key_id, &payload, timestamp, trace_id);
 
     let method = reqwest::Method::from_bytes(args.method.to_uppercase().as_bytes())
         .with_context(|| format!("invalid HTTP method '{}'", args.method))?;
@@ -104,10 +103,46 @@ pub(crate) async fn run(args: &CurlArgs) -> Result<()> {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use forgeguard_authn_core::signing::{
-        parse_signature_header, sign, verify, CanonicalPayload, KeyId, SigningKey, Timestamp,
-        VerifyingKey,
-    };
+    use crate::signing::{sign, CanonicalPayload, KeyId, SigningKey, Timestamp};
+
+    // -----------------------------------------------------------------------
+    // Test-local helpers (moved from signing.rs — not part of the public API)
+    // -----------------------------------------------------------------------
+
+    struct VerifyingKey(ed25519_dalek::VerifyingKey);
+
+    impl From<&SigningKey> for VerifyingKey {
+        fn from(sk: &SigningKey) -> Self {
+            Self(sk.verifying_key())
+        }
+    }
+
+    fn verify(
+        key: &VerifyingKey,
+        payload: &CanonicalPayload,
+        signature: &ed25519_dalek::Signature,
+    ) -> Result<(), &'static str> {
+        use ed25519_dalek::Verifier as _;
+        key.0
+            .verify(payload.as_bytes(), signature)
+            .map_err(|_| "signature verification failed")
+    }
+
+    fn parse_signature_header(value: &str) -> Result<ed25519_dalek::Signature, String> {
+        use base64::Engine as _;
+        let b64 = value
+            .strip_prefix("v1:")
+            .ok_or("signature header must start with 'v1:'")?;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .map_err(|e| format!("invalid base64 in signature: {e}"))?;
+        let arr: [u8; 64] = bytes
+            .try_into()
+            .map_err(|_| "signature must be 64 bytes".to_string())?;
+        Ok(ed25519_dalek::Signature::from_bytes(&arr))
+    }
+
+    // -----------------------------------------------------------------------
 
     #[test]
     fn header_construction_produces_verifiable_signature() {

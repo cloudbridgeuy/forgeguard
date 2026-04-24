@@ -5,6 +5,10 @@ publish = false
 license = "MIT"
 edition = "2021"
 
+[lib]
+name = "xtask"
+path = "src/lib.rs"
+
 [[bin]]
 name = "xtask"
 path = "src/main.rs"
@@ -16,11 +20,12 @@ aws-sdk-cognitoidentityprovider = { workspace = true }
 aws-sdk-dynamodb = { workspace = true }
 aws-sdk-lambda = { workspace = true }
 aws-sdk-verifiedpermissions = { workspace = true }
+base64 = { workspace = true }
 clap = { workspace = true }
 color-eyre = { workspace = true }
 chrono = { workspace = true }
 duct = "1.1.0"
-forgeguard_authn_core = { workspace = true }
+ed25519-dalek = { workspace = true }
 libc = { workspace = true }
 glob = "0.3"
 owo-colors = { workspace = true }
@@ -28,8 +33,12 @@ reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 similar = "2"
+thiserror = { workspace = true }
 tokio = { workspace = true }
 toml = { workspace = true }
 toml_edit = { workspace = true }
 uuid = { workspace = true }
 zip = { workspace = true }
+
+[dev-dependencies]
+forgeguard_authn_core = { workspace = true }
