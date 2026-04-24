@@ -22,6 +22,13 @@ ignore = [
     # webpki-root-certs and do not rely on name constraints.
     "RUSTSEC-2026-0098",
     "RUSTSEC-2026-0099",
+    # rustls-webpki CRL-parsing panic: only reachable when the application
+    # parses CRLs via `*CertRevocationList::from_der`. ForgeGuard does not use
+    # CRLs — our outbound TLS uses webpki-roots / system roots with no CRL
+    # checks. The advisory lingers in the tree because aws-smithy-http-client
+    # still pulls in legacy rustls 0.21 / rustls-webpki 0.101.x alongside the
+    # patched 0.103.13 path.
+    "RUSTSEC-2026-0104",
 ]
 
 [licenses]
