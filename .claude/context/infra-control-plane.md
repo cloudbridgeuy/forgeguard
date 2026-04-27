@@ -140,6 +140,19 @@ Because the Lambda and VP stacks import pool exports (`userPoolId`, `userPoolArn
 
 The old pool is deleted per its `removalPolicy` (or orphaned on `RETAIN`). Child `UserPoolDomain`/`UserPoolClient` resources whose physical parent is already gone may land in `DELETE_FAILED`; the parent stack still reaches `UPDATE_COMPLETE` and the zombie does not block subsequent deploys.
 
+### Verified Permissions (`forgeguard-{env}-vp`)
+
+- **Policy store:** `vp.CfnPolicyStore` with `validationSettings.mode = "OFF"` (Cedar schema is managed via `cargo xtask control-plane cedar sync`, not CloudFormation).
+- **Identity source:** `vp.CfnIdentitySource` bound to the Cognito user pool + app client when both arns are passed in.
+- **Stack exports:** `policyStoreId` and `policyStoreArn` as `public readonly` properties (consumed by the Lambda stack via cross-stack references) plus matching `CfnOutput`s for human visibility.
+- **ARN format:** Verified Permissions is region-less. The stack builds the ARN with `cdk.Stack.of(this).formatArn({ service: "verifiedpermissions", region: "", resource: "policy-store", resourceName, arnFormat: SLASH_RESOURCE_NAME })` so the resulting `arn:aws:verifiedpermissions::<account>:policy-store/<id>` matches what the SDK expects.
+- **Stack ordering:** instantiated in `bin/app.ts` *before* `LambdaStack` so the policy store id and arn are available as constructor props.
+
+The Lambda stack imports those exports and:
+
+1. Sets `FORGEGUARD_CP_POLICY_STORE_ID` on the control-plane function. The CP binary requires JWT (`FORGEGUARD_CP_JWKS_URL`) and policy-store id to be configured *together* — V4 wires `VpPolicyEngine` with `DefaultPolicy::Deny` whenever JWT is on. Missing the policy-store id makes init panic and the function URL returns 502 on every request.
+2. Grants `verifiedpermissions:IsAuthorized` on the execution role, scoped to `policyStoreArn` (no wildcard).
+
 ## FCIS Split (xtask)
 
 | Module | Role | Pure? |

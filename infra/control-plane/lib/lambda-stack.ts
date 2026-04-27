@@ -23,7 +23,14 @@ export class LambdaStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: LambdaStackProps) {
     super(scope, id, props);
 
-    const { environment, table, userPoolId, appClientId, policyStoreId, policyStoreArn } = props;
+    const {
+      environment,
+      table,
+      userPoolId,
+      appClientId,
+      policyStoreId,
+      policyStoreArn,
+    } = props;
     const placeholderCode = lambda.Code.fromAsset(
       path.join(__dirname, "../assets/placeholder"),
     );
