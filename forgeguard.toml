@@ -72,6 +72,12 @@ allow = [
   "cp-key-generate", "cp-key-revoke", "cp-key-rotate",
 ]
 
+[[policies]]
+name = "owner"
+description = "Full org access including deletion and owner promotion"
+inherits = ["admin"]
+allow = ["cp-organization-delete", "cp-member-promote-owner"]
+
 # ---------------------------------------------------------------------------
 # Cedar Policies (raw Cedar — for patterns RBAC can't express)
 # ---------------------------------------------------------------------------
@@ -86,35 +92,4 @@ permit(
   action == forgeguard::Action::"cp-proxy-config-read",
   resource
 ) when { resource.org_id == principal.org_id };
-"""
-
-# ---------------------------------------------------------------------------
-# Cedar Templates (parameterized — instantiated per user/org)
-# ---------------------------------------------------------------------------
-
-[[templates]]
-type = "cedar"
-name = "owner"
-description = "Full org access including deletion and owner promotion"
-body = """
-permit(
-  principal == ?principal,
-  action in [
-    forgeguard::Action::"cp-organization-create",
-    forgeguard::Action::"cp-organization-read",
-    forgeguard::Action::"cp-organization-update",
-    forgeguard::Action::"cp-organization-delete",
-    forgeguard::Action::"cp-member-invite",
-    forgeguard::Action::"cp-member-remove",
-    forgeguard::Action::"cp-member-change-role",
-    forgeguard::Action::"cp-member-promote-owner",
-    forgeguard::Action::"cp-config-read",
-    forgeguard::Action::"cp-config-write",
-    forgeguard::Action::"cp-key-read",
-    forgeguard::Action::"cp-key-generate",
-    forgeguard::Action::"cp-key-revoke",
-    forgeguard::Action::"cp-key-rotate"
-  ],
-  resource == ?resource
-);
 """

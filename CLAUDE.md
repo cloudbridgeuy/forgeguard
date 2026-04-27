@@ -20,6 +20,7 @@
 - **Optimistic locking:** `PUT /api/v1/organizations/{org_id}` honours RFC 7232 `If-Match` / `412` on proxy-config updates — see [optimistic-locking.md](./.claude/context/optimistic-locking.md)
 - **CP auth:** optional Cognito JWT via `--jwks-url` + `--issuer`; omit for dev mode (no auth) — see [control-plane.md](./.claude/context/control-plane.md)
 - **CP authz (V4):** `VpPolicyEngine` with `DefaultPolicy::Deny` when `--jwks-url` + `--policy-store-id` are set; `cp:*` action mapping — see [control-plane.md](./.claude/context/control-plane.md)
+- **CP role model:** RBAC roles `member` → `admin` → `owner` (1:1 with `cognito:groups`), auto tenant-scoped via `principal.org_id == resource.org_id`; single machine permit `machine-proxy-config-read` for proxy config reads — see [verified-permissions.md](./.claude/context/verified-permissions.md)
 - **Principal kinds:** Cognito JWT → `PrincipalKind::User` → Cedar `User`; Ed25519 signed → `PrincipalKind::Machine` → Cedar `Machine` — see [authn-wiring.md](./.claude/context/authn-wiring.md)
 - **Membership model:** JWT is identity-only (`sub`); org + groups resolved per-request from `X-ForgeGuard-Org-Id` header + DynamoDB `PK=USER#{sub}, SK=ORG#{org_id}` lookup (pipeline Phase 5b). Inverted GSI1 lists users per org — see [authn-wiring.md](./.claude/context/authn-wiring.md) and [control-plane.md](./.claude/context/control-plane.md)
 - **Infrastructure:** `cargo xtask control-plane infra {deploy,diff,destroy,status}` — CDK + 1Password, see [infra-control-plane.md](./.claude/context/infra-control-plane.md)

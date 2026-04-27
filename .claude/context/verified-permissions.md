@@ -88,6 +88,26 @@ The root `forgeguard.toml` is the control plane's own dogfooding authorization m
 
 Actions from RBAC `allow` lists are auto-collected into the schema. Actions only in raw Cedar or templates must be listed in `[schema] actions`.
 
+## Control-plane Role Model
+
+The CP ships three RBAC roles plus a single machine permit. Each human role maps 1:1 to a Cognito group claim (`cognito:groups`); membership is data resolved per-request from DynamoDB (`PK=USER#{sub}, SK=ORG#{org_id}`), not from VP policies.
+
+| Role | Inherits | Adds |
+|---|---|---|
+| `member` | — | `cp-organization-read`, `cp-key-read`, `cp-config-read` |
+| `admin` | `member` | org create/update, member invite/remove/change-role, `cp-config-write`, key generate/revoke/rotate |
+| `owner` | `admin` | `cp-organization-delete`, `cp-member-promote-owner` |
+
+The compiler emits one `permit(principal in forgeguard::Group::"<role>", ...)` per role with `when { principal.org_id == resource.org_id }` auto-appended for tenant scoping. No per-user VP instantiation runs at invitation time — group membership alone grants the permit.
+
+The single non-RBAC permit is `machine-proxy-config-read`, a raw Cedar policy that lets `Machine` principals (Ed25519-signed) read their own org's proxy config and nothing else.
+
+### Why owner is RBAC, not a template
+
+`owner` is structurally tenant-shaped — same scoping the other two RBAC permits use, just a wider action list. Cedar templates earn their keep on per-resource scoping (e.g., "Bob is editor of *this specific* bookshelf"); `owner` has no per-resource axis to bind. Folding it into RBAC closed the only outstanding role-lifecycle gap (#42) without dragging in template-link CRUD that nothing currently consumes.
+
+The broader question — whether ForgeGuard should expose Cedar templates as a customer-facing primitive for per-resource permissions — is tracked separately as #84 and waits on a real driver.
+
 ## CLI Commands
 
 - `forgeguard policies validate` — pure local validation, no AWS calls
