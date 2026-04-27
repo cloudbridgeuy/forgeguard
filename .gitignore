@@ -41,3 +41,4 @@ __pycache__/
 .bacon-locations
 
 .envrc
+.mcptools/atlas/index.db
