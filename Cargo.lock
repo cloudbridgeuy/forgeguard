@@ -5698,6 +5698,7 @@ dependencies = [
  "duct",
  "ed25519-dalek",
  "forgeguard_authn_core",
+ "forgeguard_authz_core",
  "glob",
  "libc",
  "owo-colors",

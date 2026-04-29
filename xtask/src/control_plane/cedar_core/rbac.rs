@@ -1,169 +1,38 @@
-use std::collections::{HashMap, HashSet};
-use std::fmt::Write as _;
+//! Re-export the lifted RBAC compiler from `forgeguard_authz_core`.
+//!
+//! The pure compiler lives in `forgeguard_authz_core::rbac`. This module
+//! exposes the re-exports xtask call sites already use, plus a small
+//! adapter that maps the xtask-local `PolicyEntry` into the lifted
+//! `RbacEntry` type at the I/O edge.
 
-use super::config::{PolicyEntry, TenantConfig};
+pub(crate) use forgeguard_authz_core::{compile_rbac_to_cedar, resolve_inherits, RbacEntry};
 
-/// Validate that a string is safe to interpolate into a Cedar policy.
-/// Rejects strings containing double quotes, control characters, or newlines.
-fn validate_cedar_ident(value: &str, label: &str) -> Result<(), String> {
-    if value.is_empty() {
-        return Err(format!("{label} must not be empty"));
-    }
-    if value.contains('"')
-        || value.contains('\n')
-        || value.contains('\r')
-        || value.chars().any(|c| c.is_control())
-    {
-        return Err(format!("{label} contains invalid characters: {value:?}"));
-    }
-    Ok(())
-}
+use super::config::PolicyEntry;
 
-/// Compile an RBAC policy entry to a Cedar permit statement.
+/// Map xtask-local `PolicyEntry` values to lifted `RbacEntry` instances.
 ///
-/// The role name becomes the group name in Cedar. Each action in `allow`
-/// becomes a Cedar action in the `action in [...]` clause. Tenant scoping
-/// appends `when { principal.<attr> == resource.<attr> }` when enabled.
-pub(crate) fn compile_rbac_to_cedar(
-    name: &str,
-    allow: &[String],
-    tenant_scoped: bool,
-    tenant: &TenantConfig,
-    namespace: &str,
-) -> Result<String, String> {
-    validate_cedar_ident(name, "role name")?;
-
-    if allow.is_empty() {
-        return Err(format!(
-            "RBAC policy '{name}' has an empty allow list; cannot compile to Cedar"
-        ));
-    }
-
-    for action in allow {
-        validate_cedar_ident(action, "action")?;
-    }
-
-    if tenant_scoped && tenant.enabled {
-        validate_cedar_ident(&tenant.principal_attribute, "tenant principal_attribute")?;
-        validate_cedar_ident(&tenant.resource_attribute, "tenant resource_attribute")?;
-    }
-
-    let mut out = String::new();
-    let _ = writeln!(out, "permit(");
-    let _ = writeln!(out, "  principal in {namespace}::Group::\"{name}\",");
-
-    // Action clause: always use `action in [...]` for consistency.
-    let actions: Vec<String> = allow
+/// Filters out `PolicyEntry::Cedar` variants — only RBAC entries
+/// participate in the inheritance graph.
+pub(crate) fn policy_entries_to_rbac(entries: &[PolicyEntry]) -> Vec<RbacEntry> {
+    entries
         .iter()
-        .map(|a| format!("{namespace}::Action::\"{a}\""))
-        .collect();
-    let _ = writeln!(out, "  action in [{}],", actions.join(", "));
-
-    // Tenant scoping: append `when` clause if both per-policy and global are enabled.
-    if tenant_scoped && tenant.enabled {
-        let _ = write!(
-            out,
-            "  resource\n) when {{ principal.{} == resource.{} }};",
-            tenant.principal_attribute, tenant.resource_attribute
-        );
-    } else {
-        let _ = write!(out, "  resource\n);");
-    }
-
-    Ok(out)
-}
-
-/// Resolve role inheritance: collect all actions for a role including
-/// inherited actions from parent roles.
-///
-/// Detects cycles and returns an error. Only RBAC policies participate
-/// in inheritance (Cedar policies are ignored).
-pub(crate) fn resolve_inherits(
-    policies: &[PolicyEntry],
-    target_name: &str,
-) -> Result<Vec<String>, String> {
-    // Build lookups of RBAC policies by name (single pass).
-    let mut rbac_map: HashMap<&str, &[String]> = HashMap::new();
-    let mut inherits_map: HashMap<&str, &[String]> = HashMap::new();
-    for entry in policies {
-        if let PolicyEntry::Rbac {
-            name,
-            allow,
-            inherits,
-            ..
-        } = entry
-        {
-            rbac_map.insert(name.as_str(), allow.as_slice());
-            inherits_map.insert(name.as_str(), inherits.as_slice());
-        }
-    }
-
-    // Verify the target exists.
-    if !rbac_map.contains_key(target_name) {
-        return Err(format!("RBAC role '{target_name}' not found"));
-    }
-
-    let mut walker = InheritanceWalker {
-        rbac_map: &rbac_map,
-        inherits_map: &inherits_map,
-        collected: Vec::new(),
-        seen_actions: HashSet::new(),
-        visiting: HashSet::new(),
-        visited: HashSet::new(),
-    };
-    walker.collect(target_name)?;
-
-    Ok(walker.collected)
-}
-
-/// Mutable state for depth-first traversal of the role inheritance graph.
-struct InheritanceWalker<'a> {
-    rbac_map: &'a HashMap<&'a str, &'a [String]>,
-    inherits_map: &'a HashMap<&'a str, &'a [String]>,
-    collected: Vec<String>,
-    seen_actions: HashSet<String>,
-    visiting: HashSet<&'a str>,
-    visited: HashSet<&'a str>,
-}
-
-impl<'a> InheritanceWalker<'a> {
-    /// Recursively collect actions for a role, detecting cycles.
-    fn collect(&mut self, role: &'a str) -> Result<(), String> {
-        if self.visiting.contains(role) {
-            return Err(format!("cycle detected in role inheritance: '{role}'"));
-        }
-        if self.visited.contains(role) {
-            // Already fully processed (handles diamond inheritance).
-            return Ok(());
-        }
-
-        self.visiting.insert(role);
-
-        // Add this role's own actions.
-        let actions = self
-            .rbac_map
-            .get(role)
-            .ok_or_else(|| format!("RBAC role '{role}' not found (referenced via inherits)"))?;
-        for action in *actions {
-            if self.seen_actions.insert(action.clone()) {
-                self.collected.push(action.clone());
-            }
-        }
-
-        // Recurse into parents.
-        if let Some(parents) = self.inherits_map.get(role) {
-            // Copy parent names to avoid borrow conflict with &mut self.
-            let parents: Vec<&'a str> = parents.iter().map(String::as_str).collect();
-            for parent in parents {
-                self.collect(parent)?;
-            }
-        }
-
-        self.visiting.remove(role);
-        self.visited.insert(role);
-
-        Ok(())
-    }
+        .filter_map(|entry| match entry {
+            PolicyEntry::Rbac {
+                name,
+                description,
+                inherits,
+                allow,
+                tenant_scoped,
+            } => Some(RbacEntry {
+                name: name.clone(),
+                description: description.clone(),
+                inherits: inherits.clone(),
+                allow: allow.clone(),
+                tenant_scoped: *tenant_scoped,
+            }),
+            PolicyEntry::Cedar { .. } => None,
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -171,330 +40,63 @@ impl<'a> InheritanceWalker<'a> {
 mod tests {
     use super::*;
 
-    // -----------------------------------------------------------------------
-    // compile_rbac_to_cedar tests
-    // -----------------------------------------------------------------------
-
     #[test]
-    fn compile_basic_rbac_with_default_tenant_scoping() {
-        let tenant = TenantConfig::default();
-        let result = compile_rbac_to_cedar(
-            "editor",
-            &[
-                "todo:list:create".to_string(),
-                "todo:list:update".to_string(),
-            ],
-            true,
-            &tenant,
-            "TestNs",
-        )
-        .unwrap();
-
-        let expected = "\
-permit(
-  principal in TestNs::Group::\"editor\",
-  action in [TestNs::Action::\"todo:list:create\", TestNs::Action::\"todo:list:update\"],
-  resource
-) when { principal.tenant_id == resource.tenant_id };";
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn compile_rbac_with_custom_tenant_attributes() {
-        let tenant = TenantConfig {
-            enabled: true,
-            principal_attribute: "org_id".to_string(),
-            resource_attribute: "org_id".to_string(),
-        };
-        let result = compile_rbac_to_cedar(
-            "admin",
-            &["shopping:list:create".to_string()],
-            true,
-            &tenant,
-            "TestNs",
-        )
-        .unwrap();
-
-        assert!(result.contains("principal.org_id == resource.org_id"));
-    }
-
-    #[test]
-    fn compile_rbac_tenant_scoped_false_no_when_clause() {
-        let tenant = TenantConfig::default();
-        let result = compile_rbac_to_cedar(
-            "global-reader",
-            &["todo:list:list".to_string()],
-            false,
-            &tenant,
-            "TestNs",
-        )
-        .unwrap();
-
-        let expected = "\
-permit(
-  principal in TestNs::Group::\"global-reader\",
-  action in [TestNs::Action::\"todo:list:list\"],
-  resource
-);";
-        assert_eq!(result, expected);
-        assert!(!result.contains("when"));
-    }
-
-    #[test]
-    fn compile_rbac_tenant_globally_disabled_no_when_clause() {
-        let tenant = TenantConfig {
-            enabled: false,
-            principal_attribute: "tenant_id".to_string(),
-            resource_attribute: "tenant_id".to_string(),
-        };
-        let result = compile_rbac_to_cedar(
-            "viewer",
-            &["todo:list:read".to_string()],
-            true, // per-policy wants scoping, but global is off
-            &tenant,
-            "TestNs",
-        )
-        .unwrap();
-
-        assert!(!result.contains("when"));
-        assert!(result.ends_with(");"));
-    }
-
-    #[test]
-    fn compile_rbac_single_action_uses_in_syntax() {
-        let tenant = TenantConfig::default();
-        let result = compile_rbac_to_cedar(
-            "viewer",
-            &["todo:list:read".to_string()],
-            true,
-            &tenant,
-            "TestNs",
-        )
-        .unwrap();
-
-        assert!(result.contains("action in [TestNs::Action::\"todo:list:read\"]"));
-    }
-
-    #[test]
-    fn compile_rbac_empty_allow_list_returns_error() {
-        let tenant = TenantConfig::default();
-        let result = compile_rbac_to_cedar("empty-role", &[], true, &tenant, "TestNs");
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(err.contains("empty allow list"), "unexpected error: {err}");
-    }
-
-    #[test]
-    fn compile_rbac_many_actions() {
-        let tenant = TenantConfig::default();
-        let actions: Vec<String> = vec![
-            "todo:list:create",
-            "todo:list:update",
-            "todo:list:delete",
-            "todo:list:share",
-        ]
-        .into_iter()
-        .map(String::from)
-        .collect();
-
-        let result = compile_rbac_to_cedar("admin", &actions, true, &tenant, "TestNs").unwrap();
-
-        assert!(result.contains("TestNs::Action::\"todo:list:create\""));
-        assert!(result.contains("TestNs::Action::\"todo:list:update\""));
-        assert!(result.contains("TestNs::Action::\"todo:list:delete\""));
-        assert!(result.contains("TestNs::Action::\"todo:list:share\""));
-    }
-
-    // -----------------------------------------------------------------------
-    // resolve_inherits tests
-    // -----------------------------------------------------------------------
-
-    fn rbac(name: &str, allow: &[&str], inherits: &[&str]) -> PolicyEntry {
-        PolicyEntry::Rbac {
-            name: name.to_string(),
-            description: None,
-            inherits: inherits.iter().map(|s| s.to_string()).collect(),
-            allow: allow.iter().map(|s| s.to_string()).collect(),
-            tenant_scoped: true,
-        }
-    }
-
-    fn cedar(name: &str) -> PolicyEntry {
-        PolicyEntry::Cedar {
-            name: name.to_string(),
-            description: None,
-            body: "forbid(principal, action, resource);".to_string(),
-        }
-    }
-
-    #[test]
-    fn resolve_no_inheritance() {
-        let policies = vec![rbac("viewer", &["read"], &[])];
-        let actions = resolve_inherits(&policies, "viewer").unwrap();
-        assert_eq!(actions, vec!["read"]);
-    }
-
-    #[test]
-    fn resolve_simple_inheritance() {
-        let policies = vec![
-            rbac("viewer", &["read"], &[]),
-            rbac("editor", &["write"], &["viewer"]),
+    fn policy_entries_to_rbac_maps_rbac_only() {
+        let entries = vec![
+            PolicyEntry::Rbac {
+                name: "viewer".to_string(),
+                description: Some("Read-only.".to_string()),
+                inherits: vec![],
+                allow: vec!["read".to_string()],
+                tenant_scoped: true,
+            },
+            PolicyEntry::Cedar {
+                name: "raw-cedar".to_string(),
+                description: None,
+                body: "permit(principal, action, resource);".to_string(),
+            },
+            PolicyEntry::Rbac {
+                name: "admin".to_string(),
+                description: None,
+                inherits: vec!["viewer".to_string()],
+                allow: vec!["write".to_string(), "delete".to_string()],
+                tenant_scoped: false,
+            },
         ];
-        let actions = resolve_inherits(&policies, "editor").unwrap();
-        assert_eq!(actions, vec!["write", "read"]);
-    }
 
-    #[test]
-    fn resolve_transitive_inheritance() {
-        let policies = vec![
-            rbac("viewer", &["read"], &[]),
-            rbac("editor", &["write"], &["viewer"]),
-            rbac("admin", &["delete"], &["editor"]),
-        ];
-        let actions = resolve_inherits(&policies, "admin").unwrap();
-        assert_eq!(actions, vec!["delete", "write", "read"]);
-    }
+        let rbac = policy_entries_to_rbac(&entries);
+        assert_eq!(rbac.len(), 2);
 
-    #[test]
-    fn resolve_cycle_detection() {
-        let policies = vec![rbac("a", &["x"], &["b"]), rbac("b", &["y"], &["a"])];
-        let result = resolve_inherits(&policies, "a");
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(err.contains("cycle"), "unexpected error: {err}");
-    }
+        assert_eq!(rbac[0].name, "viewer");
+        assert_eq!(rbac[0].description.as_deref(), Some("Read-only."));
+        assert!(rbac[0].inherits.is_empty());
+        assert_eq!(rbac[0].allow, vec!["read".to_string()]);
+        assert!(rbac[0].tenant_scoped);
 
-    #[test]
-    fn resolve_self_reference() {
-        let policies = vec![rbac("a", &["x"], &["a"])];
-        let result = resolve_inherits(&policies, "a");
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(err.contains("cycle"), "unexpected error: {err}");
-    }
-
-    #[test]
-    fn resolve_inherits_from_nonexistent_role() {
-        let policies = vec![rbac("a", &["x"], &["nonexistent"])];
-        let result = resolve_inherits(&policies, "a");
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(err.contains("not found"), "unexpected error: {err}");
-    }
-
-    #[test]
-    fn resolve_diamond_inheritance_dedup() {
-        // A inherits B and C, both inherit D
-        let policies = vec![
-            rbac("d", &["read"], &[]),
-            rbac("b", &["write"], &["d"]),
-            rbac("c", &["exec"], &["d"]),
-            rbac("a", &["admin"], &["b", "c"]),
-        ];
-        let actions = resolve_inherits(&policies, "a").unwrap();
-
-        // "read" from D should appear only once
-        let read_count = actions.iter().filter(|a| *a == "read").count();
-        assert_eq!(read_count, 1, "diamond should deduplicate actions");
-
-        // All actions should be present
-        assert!(actions.contains(&"admin".to_string()));
-        assert!(actions.contains(&"write".to_string()));
-        assert!(actions.contains(&"exec".to_string()));
-        assert!(actions.contains(&"read".to_string()));
-    }
-
-    #[test]
-    fn resolve_target_not_found() {
-        let policies = vec![rbac("viewer", &["read"], &[])];
-        let result = resolve_inherits(&policies, "nonexistent");
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(err.contains("not found"), "unexpected error: {err}");
-    }
-
-    #[test]
-    fn resolve_ignores_cedar_policies() {
-        let policies = vec![
-            rbac("viewer", &["read"], &[]),
-            cedar("some-cedar-policy"),
-            rbac("editor", &["write"], &["viewer"]),
-        ];
-        let actions = resolve_inherits(&policies, "editor").unwrap();
-        assert_eq!(actions, vec!["write", "read"]);
-    }
-
-    #[test]
-    fn resolve_multi_parent_inherits() {
-        let policies = vec![
-            rbac("viewer", &["todo:list:list", "todo:list:read"], &[]),
-            rbac(
-                "shopper",
-                &["shopping:list:list", "shopping:list:read"],
-                &[],
-            ),
-            rbac("admin", &["todo:list:delete"], &["viewer", "shopper"]),
-        ];
-        let actions = resolve_inherits(&policies, "admin").unwrap();
+        assert_eq!(rbac[1].name, "admin");
+        assert!(rbac[1].description.is_none());
+        assert_eq!(rbac[1].inherits, vec!["viewer".to_string()]);
         assert_eq!(
-            actions,
-            vec![
-                "todo:list:delete",
-                "todo:list:list",
-                "todo:list:read",
-                "shopping:list:list",
-                "shopping:list:read",
-            ]
+            rbac[1].allow,
+            vec!["write".to_string(), "delete".to_string()]
         );
-    }
-
-    // -----------------------------------------------------------------------
-    // validate_cedar_ident tests
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn compile_rbac_role_name_with_quotes_returns_error() {
-        let tenant = TenantConfig::default();
-        let result = compile_rbac_to_cedar(
-            "role\"injection",
-            &["todo:list:read".to_string()],
-            true,
-            &tenant,
-            "TestNs",
-        );
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(
-            err.contains("invalid characters"),
-            "unexpected error: {err}"
-        );
+        assert!(!rbac[1].tenant_scoped);
     }
 
     #[test]
-    fn compile_rbac_action_with_newline_returns_error() {
-        let tenant = TenantConfig::default();
-        let result = compile_rbac_to_cedar(
-            "viewer",
-            &["todo:list\n:read".to_string()],
-            true,
-            &tenant,
-            "TestNs",
-        );
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(
-            err.contains("invalid characters"),
-            "unexpected error: {err}"
-        );
+    fn policy_entries_to_rbac_empty_input() {
+        let rbac = policy_entries_to_rbac(&[]);
+        assert!(rbac.is_empty());
     }
 
     #[test]
-    fn compile_rbac_empty_name_returns_error() {
-        let tenant = TenantConfig::default();
-        let result =
-            compile_rbac_to_cedar("", &["todo:list:read".to_string()], true, &tenant, "TestNs");
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(err.contains("must not be empty"), "unexpected error: {err}");
+    fn policy_entries_to_rbac_only_cedar_returns_empty() {
+        let entries = vec![PolicyEntry::Cedar {
+            name: "raw".to_string(),
+            description: None,
+            body: "permit(principal, action, resource);".to_string(),
+        }];
+        let rbac = policy_entries_to_rbac(&entries);
+        assert!(rbac.is_empty());
     }
 }

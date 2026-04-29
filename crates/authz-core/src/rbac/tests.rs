@@ -337,10 +337,10 @@ fn compile_rbac_empty_name_returns_error() {
 // Golden test: forgeguard.toml canonical roles
 // -----------------------------------------------------------------------
 
-/// Byte-identical parity guard: compile each of the three canonical
-/// ForgeGuard RBAC roles and assert the output matches the expected Cedar
-/// policy string char-for-char. This guards against silent regressions in
-/// the compiler logic.
+/// Byte-identical formatter parity for the canonical `forgeguard.toml` RBAC
+/// roles. Compiles each role's own (non-resolved) allow list and asserts exact
+/// output. The full `resolve_inherits → compile_rbac_to_cedar` pipeline parity
+/// check is deferred to V6 per the plan.
 #[test]
 fn compile_forgeguard_rbac_golden_byte_identical() {
     let tenant = TenantConfig {

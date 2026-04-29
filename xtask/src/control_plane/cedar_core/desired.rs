@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use color_eyre::eyre::{self, Result};
 
 use super::config::{CedarSyncConfig, PolicyEntry, TemplateEntry};
-use super::rbac::{compile_rbac_to_cedar, resolve_inherits};
+use super::rbac::{compile_rbac_to_cedar, policy_entries_to_rbac, resolve_inherits, RbacEntry};
 use super::schema::generate_schema_json;
 
 /// Desired state to sync to VP (compiled from config).
@@ -49,6 +49,8 @@ pub(crate) fn build_desired_state(config: &CedarSyncConfig) -> Result<DesiredSta
         .map(|s| s.namespace.as_str())
         .unwrap_or("default");
 
+    let rbac_entries = policy_entries_to_rbac(&config.policies);
+
     let mut policies: Vec<DesiredPolicy> = Vec::new();
     for entry in &config.policies {
         match entry {
@@ -70,15 +72,16 @@ pub(crate) fn build_desired_state(config: &CedarSyncConfig) -> Result<DesiredSta
                 ..
             } => {
                 let resolved_actions =
-                    resolve_inherits(&config.policies, name).map_err(|e| eyre::eyre!("{e}"))?;
-                let statement = compile_rbac_to_cedar(
-                    name,
-                    &resolved_actions,
-                    *tenant_scoped,
-                    &tenant,
-                    namespace,
-                )
-                .map_err(|e| eyre::eyre!("{e}"))?;
+                    resolve_inherits(&rbac_entries, name).map_err(|e| eyre::eyre!("{e}"))?;
+                let entry_for_compile = RbacEntry {
+                    name: name.clone(),
+                    description: None,
+                    inherits: vec![],
+                    allow: resolved_actions,
+                    tenant_scoped: *tenant_scoped,
+                };
+                let statement = compile_rbac_to_cedar(&entry_for_compile, &tenant, namespace)
+                    .map_err(|e| eyre::eyre!("{e}"))?;
                 policies.push(DesiredPolicy {
                     name: name.clone(),
                     description: description.clone(),
@@ -93,7 +96,7 @@ pub(crate) fn build_desired_state(config: &CedarSyncConfig) -> Result<DesiredSta
         .schema
         .as_ref()
         .map(|schema_config| -> Result<String> {
-            let rbac_actions = collect_rbac_actions(&config.policies)?;
+            let rbac_actions = collect_rbac_actions(&rbac_entries)?;
             Ok(generate_schema_json(schema_config, &rbac_actions))
         })
         .transpose()?;
@@ -116,17 +119,17 @@ pub(crate) fn build_desired_state(config: &CedarSyncConfig) -> Result<DesiredSta
         .collect();
 
     // Validate uniqueness of policy names.
-    let mut seen = HashSet::new();
+    let mut seen_policies = HashSet::new();
     for p in &policies {
-        if !seen.insert(&p.name) {
+        if !seen_policies.insert(&p.name) {
             eyre::bail!("duplicate policy name: '{}'", p.name);
         }
     }
 
     // Validate uniqueness of template names.
-    seen.clear();
+    let mut seen_templates = HashSet::new();
     for t in &templates {
-        if !seen.insert(&t.name) {
+        if !seen_templates.insert(&t.name) {
             eyre::bail!("duplicate template name: '{}'", t.name);
         }
     }
@@ -138,23 +141,22 @@ pub(crate) fn build_desired_state(config: &CedarSyncConfig) -> Result<DesiredSta
     })
 }
 
-/// Collect all RBAC actions from policies, including inherited actions.
+/// Collect all RBAC actions from entries, including inherited actions.
 ///
-/// For each RBAC policy, resolves the full set of actions (own + inherited)
+/// For each RBAC entry, resolves the full set of actions (own + inherited)
 /// and collects them into a single deduplicated list.
 ///
-/// Returns an error if any RBAC policy has an unresolvable inheritance chain.
-fn collect_rbac_actions(policies: &[PolicyEntry]) -> Result<Vec<String>> {
+/// Returns an error if any RBAC entry has an unresolvable inheritance chain.
+fn collect_rbac_actions(rbac_entries: &[RbacEntry]) -> Result<Vec<String>> {
     let mut all_actions = Vec::new();
     let mut seen = HashSet::new();
 
-    for entry in policies {
-        if let PolicyEntry::Rbac { name, .. } = entry {
-            let resolved = resolve_inherits(policies, name).map_err(|e| eyre::eyre!("{e}"))?;
-            for action in resolved {
-                if seen.insert(action.clone()) {
-                    all_actions.push(action);
-                }
+    for entry in rbac_entries {
+        let resolved =
+            resolve_inherits(rbac_entries, &entry.name).map_err(|e| eyre::eyre!("{e}"))?;
+        for action in resolved {
+            if seen.insert(action.clone()) {
+                all_actions.push(action);
             }
         }
     }

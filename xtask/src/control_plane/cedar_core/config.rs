@@ -4,12 +4,10 @@ use std::fmt;
 use serde::de::{self, MapAccess, Visitor};
 use serde::Deserialize;
 
+pub(crate) use forgeguard_authz_core::TenantConfig;
+
 fn default_true() -> bool {
     true
-}
-
-fn default_tenant_id() -> String {
-    "tenant_id".to_string()
 }
 
 /// Top-level Cedar sync config (subset of forgeguard.toml relevant to sync).
@@ -60,27 +58,6 @@ impl AttributeType {
             Self::String => "String",
             Self::Long => "Long",
             Self::Boolean => "Boolean",
-        }
-    }
-}
-
-/// Tenant scoping configuration for RBAC policies.
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct TenantConfig {
-    #[serde(default = "default_true")]
-    pub(crate) enabled: bool,
-    #[serde(default = "default_tenant_id")]
-    pub(crate) principal_attribute: String,
-    #[serde(default = "default_tenant_id")]
-    pub(crate) resource_attribute: String,
-}
-
-impl Default for TenantConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            principal_attribute: default_tenant_id(),
-            resource_attribute: default_tenant_id(),
         }
     }
 }
