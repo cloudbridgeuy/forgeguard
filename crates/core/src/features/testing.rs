@@ -7,11 +7,15 @@
 //! These are pure builders (Functional Core). They wrap the public
 //! `new()` constructors and exist solely to keep test-site syntax close
 //! to the legacy struct-literal style.
+//!
+//! `make_flag_config` will be added in V3. For `FlagDefinition`, call
+//! `FlagDefinition::new(FlagDefinitionParams { ... })` directly — no wrapper
+//! is needed.
 
 use crate::{FlagOverride, FlagValue, GroupName, TenantId, UserId};
 
 /// Build a `FlagOverride` from individual scope parts. Equivalent to `FlagOverride::new`,
-/// kept here so test-site syntax is uniform with `make_flag_config`.
+/// kept here so test-site syntax will be uniform with `make_flag_config` (V3).
 pub fn make_flag_override(
     tenant: Option<TenantId>,
     user: Option<UserId>,

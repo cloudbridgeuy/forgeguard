@@ -205,7 +205,7 @@ pub struct FlagDefinition {
 }
 
 impl FlagDefinition {
-    /// Construct a new flag definition from named parameters.
+    /// Construct a flag definition from a `FlagDefinitionParams` bag of constructor parameters.
     pub fn new(params: FlagDefinitionParams) -> Self {
         Self {
             flag_type: params.flag_type,

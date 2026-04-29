@@ -799,6 +799,8 @@ mod flag_definition_construction {
         assert!(def.enabled());
         assert!(def.overrides().is_empty());
         assert!(def.rollout_percentage().is_none());
+        assert!(matches!(def.flag_type(), FlagType::Boolean));
+        assert_eq!(*def.default_value(), FlagValue::Bool(false));
     }
 
     #[test]
@@ -814,7 +816,9 @@ mod flag_definition_construction {
         });
         assert_eq!(def.overrides().len(), 1);
         assert_eq!(def.rollout_percentage(), Some(50));
-        assert!(def.rollout_variant().is_some());
+        assert!(matches!(def.flag_type(), FlagType::Boolean));
+        assert_eq!(*def.default_value(), FlagValue::Bool(false));
+        assert_eq!(def.rollout_variant(), Some(&FlagValue::Bool(true)));
     }
 }
 
