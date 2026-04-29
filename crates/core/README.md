@@ -68,12 +68,12 @@ Actions follow the format `namespace:entity:action` (not `namespace:action:entit
 | --------- | ------- |
 | `testing` | Test-only constructors for feature-flag types. |
 
-The `testing` feature exposes `forgeguard_core::features::testing`, which provides two builders:
+The `testing` feature exposes `forgeguard_core::features::testing`, which provides two constructor functions:
 
 - `make_flag_override(tenant, user, group, value) -> FlagOverride`
 - `make_flag_config(pairs) -> FlagConfig`
 
-`FlagDefinition` has no builder here. Use `FlagDefinition::new(FlagDefinitionParams { ... })` directly — `FlagDefinitionParams` is a named-field Params struct designed for exactly this purpose.
+`FlagDefinition` has no constructor helper here. Use `FlagDefinition::new(FlagDefinitionParams { ... })` directly. `FlagDefinitionParams` is a named-field Params struct designed for exactly this purpose.
 
 The module is gated behind `cfg(any(test, feature = "testing"))`, so in-crate tests get it automatically. Other crates opt in with:
 
@@ -84,4 +84,4 @@ forgeguard_core = { workspace = true, features = ["testing"] }
 
 ## Visibility Conventions
 
-`FlagOverride`, `FlagDefinition`, and `FlagConfig` all have private fields. Construct instances via `Type::new(...)` (or the `testing` builders for `FlagOverride` and `FlagConfig`) and read state via accessor methods. Fields are private to keep the encapsulation boundary in place for when validation invariants are added later.
+`FlagOverride`, `FlagDefinition`, and `FlagConfig` all have private fields. Construct instances via `Type::new(...)` and read state via accessor methods. Fields are private to keep the encapsulation boundary in place for when validation invariants are added later.
