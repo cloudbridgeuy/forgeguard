@@ -138,7 +138,8 @@ impl EntitySchema {
 // ---------------------------------------------------------------------------
 
 /// The expected outcome of a policy test.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum PolicyTestExpect {
     /// The request should be allowed.
     Allow,

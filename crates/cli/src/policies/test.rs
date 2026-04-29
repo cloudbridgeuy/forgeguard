@@ -31,11 +31,13 @@ pub(crate) struct CliTestFlags<'a> {
 // ---------------------------------------------------------------------------
 
 /// A single test scenario to execute against VP.
+#[derive(serde::Deserialize)]
 struct TestScenario {
     name: String,
-    principal: String,
+    principal: UserId,
+    #[serde(default)]
     groups: Vec<GroupName>,
-    tenant: String,
+    tenant: TenantId,
     action: QualifiedAction,
     resource: Option<CedarEntityRef>,
     expect: PolicyTestExpect,
@@ -45,9 +47,10 @@ impl TestScenario {
     fn from_policy_test(test: &PolicyTest) -> Result<Self> {
         Ok(Self {
             name: test.name().to_owned(),
-            principal: test.principal().to_owned(),
+            principal: UserId::new(test.principal())
+                .wrap_err("invalid principal in policy test")?,
             groups: test.groups().to_vec(),
-            tenant: test.tenant().to_owned(),
+            tenant: TenantId::new(test.tenant()).wrap_err("invalid tenant in policy test")?,
             action: test.action().clone(),
             resource: test.resource().cloned(),
             expect: test.expect(),
@@ -179,18 +182,18 @@ fn build_scenario_from_flags(flags: &CliTestFlags<'_>) -> Result<Option<TestScen
         None => Vec::new(),
     };
 
-    let tenant = flags.tenant.unwrap_or("default").to_owned();
+    let principal =
+        UserId::new(principal).wrap_err_with(|| format!("invalid --principal '{principal}'"))?;
+    let tenant = TenantId::new(flags.tenant.unwrap_or("default")).wrap_err("invalid --tenant")?;
 
-    let resource = match flags.resource {
-        Some(r) => {
-            Some(CedarEntityRef::parse(r).wrap_err_with(|| format!("invalid --resource '{r}'"))?)
-        }
-        None => None,
-    };
+    let resource = flags
+        .resource
+        .map(|r| CedarEntityRef::parse(r).wrap_err_with(|| format!("invalid --resource '{r}'")))
+        .transpose()?;
 
     Ok(Some(TestScenario {
         name: format!("cli: {principal} {action_str} -> {expect_str}"),
-        principal: principal.to_owned(),
+        principal,
         groups,
         tenant,
         action,
@@ -211,13 +214,10 @@ async fn execute_scenario(
     project: &ProjectId,
     scenario: &TestScenario,
 ) -> Result<bool> {
-    let tenant = TenantId::new(&scenario.tenant).wrap_err("invalid tenant in test scenario")?;
-    let user_id =
-        UserId::new(&scenario.principal).wrap_err("invalid principal in test scenario")?;
-    let principal_ref = PrincipalRef::new(user_id);
+    let principal_ref = PrincipalRef::new(scenario.principal.clone());
 
     // Build principal entity identifier.
-    let principal_fgrn = principal_ref.to_fgrn(project, &tenant);
+    let principal_fgrn = principal_ref.to_fgrn(project, &scenario.tenant);
     let principal_entity = EntityIdentifier::builder()
         .entity_type(principal_ref.vp_entity_type(project))
         .entity_id(principal_fgrn.as_vp_entity_id())
@@ -232,7 +232,8 @@ async fn execute_scenario(
         .wrap_err("failed to build action identifier")?;
 
     // Build inline entities (user + groups).
-    let entities = build_inline_entities(&principal_ref, &scenario.groups, project, &tenant)?;
+    let entities =
+        build_inline_entities(&principal_ref, &scenario.groups, project, &scenario.tenant)?;
 
     // Build the request.
     let mut req = client
@@ -345,4 +346,45 @@ fn build_inline_entities(
     }
 
     Ok(EntitiesDefinition::EntityList(entities))
+}
+
+// ---------------------------------------------------------------------------
+// Unit tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::TestScenario;
+
+    #[test]
+    fn rejects_invalid_principal_at_deserialize() {
+        let toml = r#"
+            name = "bad principal"
+            principal = ""
+            tenant = "tenant-a"
+            action = "todo:list:read"
+            expect = "allow"
+        "#;
+        let result: Result<TestScenario, _> = toml::from_str(toml);
+        assert!(
+            result.is_err(),
+            "empty principal should fail at deserialize"
+        );
+    }
+
+    #[test]
+    fn accepts_valid_scenario() {
+        let toml = r#"
+            name = "good scenario"
+            principal = "user-1"
+            tenant = "tenant-a"
+            action = "todo:list:read"
+            expect = "allow"
+        "#;
+        let scenario: TestScenario =
+            toml::from_str(toml).expect("valid scenario should deserialize");
+        assert_eq!(scenario.principal.as_str(), "user-1");
+        assert_eq!(scenario.tenant.as_str(), "tenant-a");
+    }
 }
