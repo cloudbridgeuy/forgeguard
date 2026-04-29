@@ -9,6 +9,9 @@ interface VerifiedPermissionsStackProps extends cdk.StackProps {
 }
 
 export class VerifiedPermissionsStack extends cdk.Stack {
+  public readonly policyStoreId: string;
+  public readonly policyStoreArn: string;
+
   constructor(
     scope: Construct,
     id: string,
@@ -19,6 +22,9 @@ export class VerifiedPermissionsStack extends cdk.Stack {
     const policyStore = new vp.CfnPolicyStore(this, "PolicyStore", {
       validationSettings: { mode: "OFF" },
     });
+
+    this.policyStoreId = policyStore.attrPolicyStoreId;
+    this.policyStoreArn = policyStore.attrArn;
 
     if (props.userPoolArn && props.appClientId) {
       new vp.CfnIdentitySource(this, "CognitoIdentitySource", {

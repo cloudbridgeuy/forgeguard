@@ -15,13 +15,15 @@ interface LambdaStackProps extends cdk.StackProps {
   table: dynamodb.ITableV2;
   userPoolId: string;
   appClientId: string;
+  policyStoreId: string;
+  policyStoreArn: string;
 }
 
 export class LambdaStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: LambdaStackProps) {
     super(scope, id, props);
 
-    const { environment, table, userPoolId, appClientId } = props;
+    const { environment, table, userPoolId, appClientId, policyStoreId, policyStoreArn } = props;
     const placeholderCode = lambda.Code.fromAsset(
       path.join(__dirname, "../assets/placeholder"),
     );
@@ -41,6 +43,7 @@ export class LambdaStack extends cdk.Stack {
         FORGEGUARD_CP_JWKS_URL: `https://cognito-idp.${this.region}.amazonaws.com/${userPoolId}/.well-known/jwks.json`,
         FORGEGUARD_CP_ISSUER: `https://cognito-idp.${this.region}.amazonaws.com/${userPoolId}`,
         FORGEGUARD_CP_AUDIENCE: appClientId,
+        FORGEGUARD_CP_POLICY_STORE_ID: policyStoreId,
       },
     });
 
@@ -49,6 +52,13 @@ export class LambdaStack extends cdk.Stack {
     });
 
     table.grantReadWriteData(controlPlane);
+
+    controlPlane.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["verifiedpermissions:IsAuthorized"],
+        resources: [policyStoreArn],
+      }),
+    );
 
     // --- Dead-letter queue ---
 
