@@ -61,3 +61,13 @@ Actions follow the format `namespace:entity:action` (not `namespace:action:entit
 ### Schema generation
 
 `generate_cedar_schema()` produces a Cedar JSON schema from the route configuration and entity schema configs. This is used by the CLI `policies validate` and `policies sync` commands.
+
+## Optional Features
+
+| Feature   | Purpose                                                                                                                |
+| --------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `testing` | Exposes `forgeguard_core::features::testing` with `make_flag_override` and `make_flag_config` builders. Gated behind `cfg(any(test, feature = "testing"))` so internal tests get them automatically. For `FlagDefinition`, use `FlagDefinition::new(FlagDefinitionParams { ... })` directly — no builder is provided because `FlagDefinitionParams` already gives comfortable named-field construction. Other crates opt in via `[dev-dependencies] forgeguard_core = { ..., features = ["testing"] }`. |
+
+## Visibility Conventions
+
+The three feature-flag types — `FlagOverride`, `FlagDefinition`, `FlagConfig` — have private fields. Construct via `Type::new(...)` (or the `testing` builders for `FlagOverride` and `FlagConfig`); read via accessor methods. Encapsulation was chosen over a Parse-Don't-Validate split because no validation logic exists today — if invariants are added later, the private-field boundary is already in place.
