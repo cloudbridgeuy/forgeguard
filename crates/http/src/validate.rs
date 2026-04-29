@@ -44,7 +44,7 @@ fn check_duplicate_routes(config: &ProxyConfig, errors: &mut Vec<ValidationError
 fn check_feature_gates(config: &ProxyConfig, errors: &mut Vec<ValidationError>) {
     for (i, route) in config.routes().iter().enumerate() {
         if let Some(gate) = route.feature_gate() {
-            if !config.features().flags.contains_key(gate) {
+            if !config.features().flags().contains_key(gate) {
                 errors.push(ValidationError::new(
                     ValidationErrorKind::UndefinedFeatureGate,
                     format!("flag '{}' is not defined in features", gate),

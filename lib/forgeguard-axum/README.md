@@ -51,6 +51,7 @@ let pipeline_config = PipelineConfig::new(PipelineConfigParams {
     default_policy: DefaultPolicy::Deny, // reject unmatched routes
     debug_mode: false,
     auth_providers: vec!["api-key".to_string()],
+    membership_resolver: None,
 });
 
 // 4. Build the identity chain (who is the caller?)
@@ -145,31 +146,24 @@ Pass a `FlagConfig` when building `PipelineConfig`. Use `FlagConfig::default()`
 for no flags, or build one with flag definitions:
 
 ```rust,no_run
-# use std::collections::HashMap;
-# use forgeguard_core::{FlagConfig, FlagValue, FlagType, FlagName};
-# use forgeguard_core::features::{FlagDefinition, FlagOverride};
-# use forgeguard_core::TenantId;
-let mut flags = HashMap::new();
-
+# use forgeguard_core::{FlagConfig, FlagDefinition, FlagDefinitionParams, FlagOverride, FlagValue, FlagType, FlagName, TenantId};
 // Boolean flag -- off by default, on for a specific tenant
-flags.insert(
-    FlagName::parse("myapp:dark-mode").unwrap(),
-    FlagDefinition {
-        flag_type: FlagType::Boolean,
-        default: FlagValue::Bool(false),
-        enabled: true,
-        overrides: vec![FlagOverride {
-            tenant: Some(TenantId::new("acme").unwrap()),
-            user: None,
-            group: None,
-            value: FlagValue::Bool(true),
-        }],
-        rollout_percentage: None,
-        rollout_variant: None,
-    },
-);
+let name = FlagName::parse("myapp:dark-mode").unwrap();
+let def = FlagDefinition::new(FlagDefinitionParams {
+    flag_type: FlagType::Boolean,
+    default: FlagValue::Bool(false),
+    enabled: true,
+    overrides: vec![FlagOverride::new(
+        Some(TenantId::new("acme").unwrap()),
+        None,
+        None,
+        FlagValue::Bool(true),
+    )],
+    rollout_percentage: None,
+    rollout_variant: None,
+});
 
-let flag_config = FlagConfig { flags };
+let flag_config = FlagConfig::new([(name, def)].into_iter().collect());
 // Pass flag_config to PipelineConfig::new(...)
 ```
 

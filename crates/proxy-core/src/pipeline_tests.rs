@@ -12,8 +12,8 @@ use forgeguard_authz_core::{
     CacheStats, DenyReason, PolicyDecision, PolicyEngine, PolicyQuery, StaticPolicyEngine,
 };
 use forgeguard_core::{
-    FlagConfig, FlagDefinition, FlagDefinitionParams, FlagName, FlagType, FlagValue, GroupName,
-    ProjectId, QualifiedAction, TenantId, UserId,
+    features::testing::make_flag_config, FlagConfig, FlagDefinition, FlagDefinitionParams,
+    FlagName, FlagType, FlagValue, GroupName, ProjectId, QualifiedAction, TenantId, UserId,
 };
 
 use crate::membership::MembershipResolver;
@@ -588,8 +588,7 @@ async fn feature_gate_enabled_forwards() {
         Some(FlagName::parse("beta-feature").unwrap()),
     )];
 
-    let mut flag_config = FlagConfig::default();
-    flag_config.flags.insert(
+    let flag_config = make_flag_config([(
         FlagName::parse("beta-feature").unwrap(),
         FlagDefinition::new(FlagDefinitionParams {
             flag_type: FlagType::Boolean,
@@ -599,7 +598,7 @@ async fn feature_gate_enabled_forwards() {
             rollout_percentage: None,
             rollout_variant: None,
         }),
-    );
+    )]);
 
     let config = make_config_with_flags(&routes, &[], DefaultPolicy::Deny, flag_config);
     let chain = make_chain_succeeding();

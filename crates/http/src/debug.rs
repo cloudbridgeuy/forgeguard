@@ -148,7 +148,7 @@ mod tests {
         };
 
         let mut config = FlagConfig::default();
-        config.flags.insert(
+        config.insert(
             FlagName::parse("test-flag").unwrap(),
             FlagDefinition::new(FlagDefinitionParams {
                 flag_type: FlagType::Boolean,

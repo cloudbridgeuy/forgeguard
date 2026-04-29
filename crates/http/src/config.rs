@@ -583,7 +583,7 @@ impl TryFrom<RawProxyConfig> for ProxyConfig {
         let groups = raw.groups;
         let features = raw
             .features
-            .map(|f| FlagConfig { flags: f.flags })
+            .map(|f| FlagConfig::new(f.flags))
             .unwrap_or_default();
 
         let aws = raw

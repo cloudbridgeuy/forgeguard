@@ -81,9 +81,8 @@ fn is_in_namespace_scoped_wrong_namespace() {
 // -- Override hierarchy --------------------------------------------------
 
 fn make_config(name: &str, def: FlagDefinition) -> FlagConfig {
-    let mut config = FlagConfig::default();
-    config.flags.insert(FlagName::parse(name).unwrap(), def);
-    config
+    use crate::features::testing::make_flag_config;
+    make_flag_config([(FlagName::parse(name).unwrap(), def)])
 }
 
 /// Build a Boolean `FlagDefinition` for test sites that only care about
@@ -309,9 +308,9 @@ fn rollout_is_deterministic() {
 
 #[test]
 fn rollout_distribution_approximately_correct() {
+    use crate::features::testing::make_flag_config;
     let flag_name = FlagName::parse("test-rollout").unwrap();
-    let mut config = FlagConfig::default();
-    config.flags.insert(
+    let config = make_flag_config([(
         flag_name,
         FlagDefinition::new(FlagDefinitionParams {
             flag_type: FlagType::Boolean,
@@ -321,7 +320,7 @@ fn rollout_distribution_approximately_correct() {
             rollout_percentage: Some(25),
             rollout_variant: None,
         }),
-    );
+    )]);
     let tenant = TenantId::new("test-tenant").unwrap();
     let mut in_rollout = 0u32;
     for i in 0..10_000 {
@@ -819,6 +818,72 @@ mod flag_definition_construction {
         assert!(matches!(def.flag_type(), FlagType::Boolean));
         assert_eq!(*def.default_value(), FlagValue::Bool(false));
         assert_eq!(def.rollout_variant(), Some(&FlagValue::Bool(true)));
+    }
+}
+
+// -- FlagConfig construction (V3) ----------------------------------------
+
+mod flag_config_construction {
+    use crate::features::testing::make_flag_config;
+    use crate::{FlagConfig, FlagDefinition, FlagDefinitionParams, FlagName, FlagType, FlagValue};
+    use std::collections::HashMap;
+
+    #[test]
+    fn default_is_empty() {
+        let cfg = FlagConfig::default();
+        assert!(cfg.is_empty());
+        assert!(cfg.flags().is_empty());
+    }
+
+    #[test]
+    fn new_from_hashmap_round_trips() {
+        let mut map = HashMap::new();
+        let name = FlagName::parse("foo").unwrap();
+        let def = FlagDefinition::new(FlagDefinitionParams {
+            flag_type: FlagType::Boolean,
+            default: FlagValue::Bool(true),
+            enabled: true,
+            overrides: vec![],
+            rollout_percentage: None,
+            rollout_variant: None,
+        });
+        map.insert(name.clone(), def);
+        let cfg = FlagConfig::new(map);
+        assert!(!cfg.is_empty());
+        assert!(cfg.flags().contains_key(&name));
+    }
+
+    #[test]
+    fn make_flag_config_collects_pairs() {
+        let name = FlagName::parse("bar").unwrap();
+        let def = FlagDefinition::new(FlagDefinitionParams {
+            flag_type: FlagType::Boolean,
+            default: FlagValue::Bool(false),
+            enabled: true,
+            overrides: vec![],
+            rollout_percentage: None,
+            rollout_variant: None,
+        });
+        let cfg = make_flag_config([(name.clone(), def)]);
+        assert!(cfg.flags().contains_key(&name));
+    }
+
+    #[test]
+    fn insert_mutator_adds_entry() {
+        let mut cfg = FlagConfig::default();
+        let name = FlagName::parse("baz").unwrap();
+        let def = FlagDefinition::new(FlagDefinitionParams {
+            flag_type: FlagType::Boolean,
+            default: FlagValue::Bool(false),
+            enabled: true,
+            overrides: vec![],
+            rollout_percentage: None,
+            rollout_variant: None,
+        });
+        let prev = cfg.insert(name.clone(), def);
+        assert!(prev.is_none());
+        assert!(cfg.flags().contains_key(&name));
+        assert!(!cfg.is_empty());
     }
 }
 

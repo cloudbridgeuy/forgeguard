@@ -228,7 +228,7 @@ fn health_response(config: &PipelineConfig, policy_engine: &dyn PolicyEngine) ->
     let mut body = serde_json::json!({
         "status": "ok",
         "providers": config.auth_providers(),
-        "flags": config.flag_config().flags.len(),
+        "flags": config.flag_config().flags().len(),
     });
     if let Some(stats) = policy_engine.cache_stats() {
         body["cache_hits"] = stats.hits().into();

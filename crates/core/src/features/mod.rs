@@ -256,7 +256,29 @@ impl FlagDefinition {
 /// A collection of feature flag definitions.
 #[derive(Debug, Clone, Default)]
 pub struct FlagConfig {
-    pub flags: HashMap<FlagName, FlagDefinition>,
+    flags: HashMap<FlagName, FlagDefinition>,
+}
+
+impl FlagConfig {
+    /// Construct a `FlagConfig` from a pre-built map of flag definitions.
+    pub fn new(flags: HashMap<FlagName, FlagDefinition>) -> Self {
+        Self { flags }
+    }
+
+    /// Returns a reference to the underlying flag map.
+    pub fn flags(&self) -> &HashMap<FlagName, FlagDefinition> {
+        &self.flags
+    }
+
+    /// Returns `true` if no flags are defined.
+    pub fn is_empty(&self) -> bool {
+        self.flags.is_empty()
+    }
+
+    /// Insert a flag definition, returning the previous value if one existed.
+    pub fn insert(&mut self, name: FlagName, def: FlagDefinition) -> Option<FlagDefinition> {
+        self.flags.insert(name, def)
+    }
 }
 
 // ---------------------------------------------------------------------------

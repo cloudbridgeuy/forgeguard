@@ -12,10 +12,12 @@
 //! `FlagDefinition::new(FlagDefinitionParams { ... })` directly — no wrapper
 //! is needed.
 
-use crate::{FlagOverride, FlagValue, GroupName, TenantId, UserId};
+use crate::{
+    FlagConfig, FlagDefinition, FlagName, FlagOverride, FlagValue, GroupName, TenantId, UserId,
+};
 
 /// Build a `FlagOverride` from individual scope parts. Equivalent to `FlagOverride::new`,
-/// kept here so test-site syntax will be uniform with `make_flag_config` (V3).
+/// kept here so test-site syntax will be uniform with `make_flag_config`.
 pub fn make_flag_override(
     tenant: Option<TenantId>,
     user: Option<UserId>,
@@ -23,4 +25,9 @@ pub fn make_flag_override(
     value: FlagValue,
 ) -> FlagOverride {
     FlagOverride::new(tenant, user, group, value)
+}
+
+/// Build a `FlagConfig` from an iterable of `(FlagName, FlagDefinition)` pairs.
+pub fn make_flag_config(pairs: impl IntoIterator<Item = (FlagName, FlagDefinition)>) -> FlagConfig {
+    FlagConfig::new(pairs.into_iter().collect())
 }

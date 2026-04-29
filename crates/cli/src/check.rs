@@ -20,7 +20,7 @@ pub(crate) fn run(config_path: &Path) -> Result<()> {
         config.project_id(),
         config.routes().len(),
         config.public_routes().len(),
-        config.features().flags.len(),
+        config.features().flags().len(),
     );
     Ok(())
 }
