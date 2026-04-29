@@ -340,23 +340,20 @@ fn resolve_single_flag_detailed(
 
     // 1. Override scan (first match wins)
     for ov in &flag.overrides {
-        let user_matches = ov.user.as_ref().is_none_or(|u| u == user_id);
-        let tenant_matches = match (&ov.tenant, tenant_id) {
+        let user_matches = ov.user().is_none_or(|u| u == user_id);
+        let tenant_matches = match (ov.tenant(), tenant_id) {
             (Some(t), Some(tid)) => t == tid,
             (Some(_), None) => false,
             (None, _) => true,
         };
-        let group_matches = ov
-            .group
-            .as_ref()
-            .is_none_or(|g| groups.iter().any(|ug| ug == g));
+        let group_matches = ov.group().is_none_or(|g| groups.iter().any(|ug| ug == g));
         if user_matches && tenant_matches && group_matches {
             return ResolvedFlag {
-                value: ov.value.clone(),
+                value: ov.value().clone(),
                 reason: ResolutionReason::Override {
-                    tenant: ov.tenant.as_ref().map(|t| t.as_str().to_string()),
-                    user: ov.user.as_ref().map(|u| u.as_str().to_string()),
-                    group: ov.group.as_ref().map(|g| g.as_str().to_string()),
+                    tenant: ov.tenant().map(|t| t.as_str().to_string()),
+                    user: ov.user().map(|u| u.as_str().to_string()),
+                    group: ov.group().map(|g| g.as_str().to_string()),
                 },
             };
         }
@@ -408,18 +405,15 @@ fn resolve_single_flag(
 
     // 1. Override scan (first match wins — config author controls order)
     for ov in &flag.overrides {
-        let user_matches = ov.user.as_ref().is_none_or(|u| u == user_id);
-        let tenant_matches = match (&ov.tenant, tenant_id) {
+        let user_matches = ov.user().is_none_or(|u| u == user_id);
+        let tenant_matches = match (ov.tenant(), tenant_id) {
             (Some(t), Some(tid)) => t == tid,
             (Some(_), None) => false,
             (None, _) => true,
         };
-        let group_matches = ov
-            .group
-            .as_ref()
-            .is_none_or(|g| groups.iter().any(|ug| ug == g));
+        let group_matches = ov.group().is_none_or(|g| groups.iter().any(|ug| ug == g));
         if user_matches && tenant_matches && group_matches {
-            return ov.value.clone();
+            return ov.value().clone();
         }
     }
 

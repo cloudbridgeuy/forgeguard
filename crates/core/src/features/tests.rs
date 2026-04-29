@@ -851,7 +851,7 @@ mod flag_override_construction {
         assert_eq!(ov.tenant(), Some(&tenant));
         assert_eq!(ov.user(), Some(&user));
         assert_eq!(ov.group(), Some(&group));
-        assert!(matches!(ov.value(), FlagValue::Bool(true)));
+        assert_eq!(*ov.value(), FlagValue::Bool(true));
     }
 
     #[test]
