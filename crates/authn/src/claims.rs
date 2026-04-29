@@ -90,7 +90,6 @@ mod tests {
             iat: 1_699_996_400,
             token_use: "access".to_string(),
             scope: Some("openid".to_string()),
-            cognito_groups: None,
             custom_claims: {
                 let mut m = HashMap::new();
                 m.insert("custom:org_id".to_string(), json!("acme-corp"));
@@ -116,22 +115,6 @@ mod tests {
         assert!(identity.expiry().is_some());
         assert_eq!(identity.resolver(), "cognito_jwt");
         assert_eq!(identity.principal_kind(), PrincipalKind::User);
-    }
-
-    #[test]
-    fn jwt_identity_has_no_org_context_even_when_token_contains_tenant_and_groups() {
-        // Prove the invariant: even a token that carries cognito:groups and a
-        // custom:org_id claim produces an identity with no tenant or groups.
-        // Org context is resolved from DynamoDB membership items, never from JWT.
-        let mut claims = base_claims();
-        claims.cognito_groups = Some(vec!["admins".to_string(), "users".to_string()]);
-        claims
-            .custom_claims
-            .insert("custom:org_id".to_string(), json!("acme-corp"));
-        let config = base_config();
-        let identity = map_claims(&claims, &config).unwrap();
-        assert!(identity.tenant_id().is_none());
-        assert!(identity.groups().is_empty());
     }
 
     // -- User ID extraction ---------------------------------------------------

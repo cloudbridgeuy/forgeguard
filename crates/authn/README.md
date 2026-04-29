@@ -16,8 +16,7 @@ Authentication I/O crate — Cognito JWT and Ed25519 signed-request identity res
 ## JWT identity is sub-only
 
 `CognitoJwtResolver` returns an `Identity` carrying only `user_id` (the `sub`
-claim) and `PrincipalKind::User`. It does **not** read `custom:org_id` or
-`cognito:groups`. Org selection and group roles are resolved per-request by
+claim) and `PrincipalKind::User`. Org selection and group roles are resolved per-request by
 the proxy pipeline's Phase 5b from the `X-ForgeGuard-Org-Id` header plus a
 `MembershipResolver` lookup (see `forgeguard_proxy_core`).
 

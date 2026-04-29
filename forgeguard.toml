@@ -52,7 +52,7 @@ resource_attribute = "org_id"
 # ---------------------------------------------------------------------------
 # Roles (RBAC policies — compiled to Cedar)
 # ---------------------------------------------------------------------------
-# Each role maps 1:1 to a JWT cognito:groups claim. Roles inherit
+# Each role maps 1:1 to a membership group. Roles inherit
 # permissions from parent roles via `inherits`. The RBAC compiler
 # auto-appends tenant scoping: when { principal.org_id == resource.org_id }
 

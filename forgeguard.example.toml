@@ -297,13 +297,13 @@ auth_mode = "anonymous"
 #
 #   type = "rbac" (default if omitted)
 #     ForgeGuard's multi-tenant RBAC DSL. Role-centric: the policy `name` maps
-#     directly to a JWT group claim (e.g., name = "admin" matches users with
-#     cognito:groups containing "admin"). Additive only — use `allow` to list
+#     directly to a group name (e.g., name = "admin" matches users with
+#     memberships containing "admin"). Additive only — use `allow` to list
 #     permitted actions. Use `inherits` for role hierarchy. All RBAC policies
 #     are automatically tenant-scoped unless `tenant_scoped = false`.
 #
 #     Fields:
-#       name          - Role name (= group name from JWT cognito:groups claim)
+#       name          - Role name (= group name)
 #       description   - (optional) Human-readable description
 #       inherits      - (optional) List of roles this role inherits from
 #       allow         - List of permitted actions (namespace:entity:verb format)

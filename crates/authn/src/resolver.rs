@@ -149,7 +149,6 @@ mod tests {
             iat: chrono::Utc::now().timestamp() as u64,
             token_use: "access".to_string(),
             scope: Some("openid".to_string()),
-            cognito_groups: Some(vec!["admins".to_string()]),
             custom_claims: {
                 let mut m = HashMap::new();
                 m.insert("custom:org_id".to_string(), json!("acme-corp"));

@@ -23,9 +23,6 @@ pub struct JwtClaims {
     pub token_use: String,
     /// OAuth scopes (space-separated in the original token).
     pub scope: Option<String>,
-    /// Cognito group membership.
-    #[serde(rename = "cognito:groups")]
-    pub cognito_groups: Option<Vec<String>>,
     /// Any additional claims not captured above.
     #[serde(flatten)]
     pub custom_claims: HashMap<String, serde_json::Value>,
@@ -45,7 +42,6 @@ mod tests {
             iat: 1_699_996_400,
             token_use: "access".to_string(),
             scope: Some("openid profile".to_string()),
-            cognito_groups: Some(vec!["admins".to_string(), "users".to_string()]),
             custom_claims: HashMap::new(),
         }
     }
@@ -56,34 +52,6 @@ mod tests {
         let json = serde_json::to_string(&claims).unwrap();
         let deserialized: JwtClaims = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, claims);
-    }
-
-    #[test]
-    fn deserialize_with_cognito_groups() {
-        let json = r#"{
-            "sub": "user-456",
-            "iss": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_xyz",
-            "aud": "client-id",
-            "exp": 1700000000,
-            "iat": 1699996400,
-            "token_use": "id",
-            "cognito:groups": ["editors", "viewers"],
-            "custom:tenant_id": "tenant-abc"
-        }"#;
-
-        let claims: JwtClaims = serde_json::from_str(json).unwrap();
-
-        assert_eq!(claims.sub, "user-456");
-        assert_eq!(claims.token_use, "id");
-        assert_eq!(
-            claims.cognito_groups,
-            Some(vec!["editors".to_string(), "viewers".to_string()])
-        );
-        assert_eq!(claims.scope, None);
-        assert_eq!(
-            claims.custom_claims.get("custom:tenant_id"),
-            Some(&serde_json::Value::String("tenant-abc".to_string()))
-        );
     }
 
     #[test]
@@ -101,16 +69,6 @@ mod tests {
         assert_eq!(claims.sub, "user-789");
         assert_eq!(claims.aud, None);
         assert_eq!(claims.scope, None);
-        assert_eq!(claims.cognito_groups, None);
         assert!(claims.custom_claims.is_empty());
-    }
-
-    #[test]
-    fn serialize_uses_cognito_colon_groups_key() {
-        let claims = sample_claims();
-        let value: serde_json::Value = serde_json::to_value(&claims).unwrap();
-
-        assert!(value.get("cognito:groups").is_some());
-        assert!(value.get("cognito_groups").is_none());
     }
 }
