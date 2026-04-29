@@ -64,13 +64,13 @@ static POLICY_DECISIONS: LazyLock<prometheus::IntCounterVec> = LazyLock::new(|| 
 
 /// Configuration consumed by [`ForgeGuardProxy`] at construction time.
 pub(crate) struct ProxyParams {
-    pub pipeline_config: PipelineConfig,
-    pub identity_chain: IdentityChain,
-    pub policy_engine: Arc<dyn PolicyEngine>,
-    pub upstream: UpstreamTarget,
-    pub client_ip_source: ClientIpSource,
-    pub cors: Option<CorsConfig>,
-    pub signing: Option<(SigningKey, KeyId)>,
+    pub(crate) pipeline_config: PipelineConfig,
+    pub(crate) identity_chain: IdentityChain,
+    pub(crate) policy_engine: Arc<dyn PolicyEngine>,
+    pub(crate) upstream: UpstreamTarget,
+    pub(crate) client_ip_source: ClientIpSource,
+    pub(crate) cors: Option<CorsConfig>,
+    pub(crate) signing: Option<(SigningKey, KeyId)>,
 }
 
 /// The Pingora `ProxyHttp` implementation.

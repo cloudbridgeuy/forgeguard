@@ -27,6 +27,10 @@ use forgeguard_core::ResolvedFlags;
 ///     }
 /// }
 /// ```
+/// PDV exception: tuple-struct field is intentionally `pub` so handlers can
+/// destructure the extractor in parameter position. Changing to a private
+/// field with `into_inner()` would break the canonical Axum extractor shape.
+/// See `.claude/designs/issue-69-shaping.md` for context.
 #[derive(Debug, Clone)]
 pub struct ForgeGuardIdentity(pub Option<Identity>);
 
@@ -50,6 +54,10 @@ pub struct ForgeGuardIdentity(pub Option<Identity>);
 ///     format!("dark-mode: {enabled}")
 /// }
 /// ```
+/// PDV exception: tuple-struct field is intentionally `pub` so handlers can
+/// destructure the extractor in parameter position. Changing to a private
+/// field with `into_inner()` would break the canonical Axum extractor shape.
+/// See `.claude/designs/issue-69-shaping.md` for context.
 #[derive(Debug, Clone)]
 pub struct ForgeGuardFlags(pub Option<ResolvedFlags>);
 
