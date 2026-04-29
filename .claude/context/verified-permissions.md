@@ -104,4 +104,6 @@ Actions from RBAC `allow` lists are auto-collected into the schema. Actions only
 ## Infrastructure
 
 - CDK stack `verified-permissions-stack.ts` creates policy store (OFF validation mode) + Cognito identity source.
+- The stack exposes `policyStoreId` and `policyStoreArn` as `public readonly` fields, populated from CFN attribute getters (`attrPolicyStoreId`, `attrArn`) — never from `cdk.Stack.formatArn`. See [aws-arn-formats.md](./aws-arn-formats.md).
+- The Lambda stack consumes both via constructor props: the ID becomes the `FORGEGUARD_CP_POLICY_STORE_ID` env var on the control-plane function, and the ARN scopes a `verifiedpermissions:IsAuthorized` IAM statement on its execution role. Full env/IAM contract: [infra-control-plane.md](./infra-control-plane.md#control-plane-lambda-runtime-contract).
 - Control-plane infrastructure is managed via `cargo xtask control-plane infra` subcommands (deploy, diff, destroy, status).

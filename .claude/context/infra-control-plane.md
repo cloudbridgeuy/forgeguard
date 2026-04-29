@@ -96,6 +96,34 @@ All flags use clap's `env` attribute — precedence is: CLI flag > env var > def
 
 The Lambda stack reads Cognito outputs as cross-stack references and injects them as env vars (`FORGEGUARD_CP_JWKS_URL`, `FORGEGUARD_CP_ISSUER`, `FORGEGUARD_CP_AUDIENCE`) into the control-plane function.
 
+### Verified Permissions (`forgeguard-{env}-vp`)
+
+- **Policy store:** validation mode `OFF` (we author Cedar directly; relying on CDK-side schema validation is left to the `cedar sync` engine).
+- **Identity source:** Cognito user pool wired in when `userPoolArn` and `appClientId` props are passed (currently always present from `bin/app.ts`). Used by VP for `IsAuthorizedWithToken` flows; the CP doesn't call that today.
+- **Outputs:** `PolicyStoreId` (CFN output for operator visibility).
+- **Public stack properties:** `policyStoreId` and `policyStoreArn` are exposed as `public readonly` fields on `VerifiedPermissionsStack`. Both are sourced from CFN attribute getters (`attrPolicyStoreId`, `attrArn`) — never from `cdk.Stack.formatArn`. See [aws-arn-formats.md](./aws-arn-formats.md) for the empty-region-segment trap.
+
+These properties feed the Lambda stack via constructor props in `bin/app.ts`. Deploy order: VP stack must be constructed (and exist in CFN) before LambdaStack, because the cross-stack reference becomes an `Fn::ImportValue` that requires the export to already be resolved. CDK's `cdk deploy --all` handles this automatically; selective `cdk deploy forgeguard-{env}-lambda` against a fresh account fails until the VP stack lands first.
+
+### Control-plane Lambda runtime contract
+
+The control-plane Lambda's startup behavior depends on a coupled env-var-plus-IAM contract. The Rust binary's parse-time invariant ([authn-wiring.md](./authn-wiring.md)) panics at cold start if the env says "JWT auth is on" without a backing VP store, so the CDK stack must inject both halves together.
+
+| Env var | Source | Required |
+| ------- | ------ | -------- |
+| `TABLE_NAME` | DynamoDB stack | Always |
+| `FORGEGUARD_CP_JWKS_URL` | Cognito stack | When auth is enabled (always in deployed envs) |
+| `FORGEGUARD_CP_ISSUER` | Cognito stack | When auth is enabled |
+| `FORGEGUARD_CP_AUDIENCE` | Cognito stack (app client id) | When auth is enabled |
+| `FORGEGUARD_CP_POLICY_STORE_ID` | VP stack (`policyStoreId`) | When auth is enabled (parse-time invariant: JWT ⇒ VP) |
+
+| IAM grant | Resource | Why |
+| --------- | -------- | --- |
+| `dynamodb:*` (read+write) | `TABLE_NAME` ARN | `table.grantReadWriteData(controlPlane)` |
+| `verifiedpermissions:IsAuthorized` | Policy store ARN (`policyStoreArn`) | CP authorization decisions; scoped — never `*` |
+
+`IsAuthorizedWithToken` is **not** granted because the CP parses JWTs itself and submits a fully-formed `IsAuthorized` request. If a future slice adopts token-mode VP calls, expand the action list there.
+
 #### Schema changes that require pool replacement
 
 Cognito does not support removing or modifying custom schema attributes or Cognito groups on a live user pool (`AddCustomAttributes` exists; no delete/modify counterpart). A CDK change that removes such an attribute will deploy as `UPDATE_FAILED` with `Existing schema attributes cannot be modified or deleted`.
