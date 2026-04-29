@@ -104,6 +104,9 @@ forgeguard_http = { version = "0.0.0", path = "crates/http" }
 forgeguard_proxy_core = { version = "0.0.0", path = "crates/proxy-core" }
 forgeguard_sdk = { version = "0.0.0", path = "crates/sdk" }
 
+# HTTP types
+http = "1"
+
 # HTTP body utilities (testing)
 http-body-util = "0.1"
 

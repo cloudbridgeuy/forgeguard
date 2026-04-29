@@ -16,6 +16,9 @@ pub(crate) enum Error {
     /// Draft with no config attached yet — any `If-Match` fails closed).
     #[error("precondition failed (current etag: {current_etag:?})")]
     PreconditionFailed { current_etag: String },
+    /// An etag value was empty or otherwise malformed.
+    #[error("invalid etag: {raw}")]
+    InvalidEtag { raw: String },
     /// Storage backend error (DynamoDB SDK, serialization, etc.).
     #[error("store error: {0}")]
     Store(String),

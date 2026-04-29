@@ -16,6 +16,15 @@ pub enum Error {
     /// An unknown feature flag type.
     #[error("unknown feature flag type: {0}")]
     InvalidFlagType(String),
+    /// A percentage value outside the valid 0..=100 range.
+    #[error("invalid percentage: {value} (expected 0..=100)")]
+    InvalidPercentage { value: u8 },
+    /// A config version string that is not a valid YYYY-MM-DD date.
+    #[error("invalid config version: {raw} (expected YYYY-MM-DD)")]
+    InvalidConfigVersion { raw: String },
+    /// A saga id string that is empty or otherwise malformed.
+    #[error("invalid saga id: {raw}")]
+    InvalidSagaId { raw: String },
 }
 
 /// Convenience alias used throughout this crate.
