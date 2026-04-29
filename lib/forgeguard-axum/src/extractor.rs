@@ -12,6 +12,10 @@ use forgeguard_core::ResolvedFlags;
 /// Returns `None` if the request was unauthenticated (e.g., public route
 /// with `Anonymous` auth mode) or if the middleware has not run.
 ///
+/// PDV exception: the inner field is intentionally `pub` so handlers can
+/// destructure the extractor in parameter position. A private field with
+/// `into_inner()` would break the canonical Axum extractor shape.
+///
 /// # Example
 ///
 /// ```rust,no_run
@@ -27,10 +31,6 @@ use forgeguard_core::ResolvedFlags;
 ///     }
 /// }
 /// ```
-/// PDV exception: tuple-struct field is intentionally `pub` so handlers can
-/// destructure the extractor in parameter position. Changing to a private
-/// field with `into_inner()` would break the canonical Axum extractor shape.
-/// See `.claude/designs/issue-69-shaping.md` for context.
 #[derive(Debug, Clone)]
 pub struct ForgeGuardIdentity(pub Option<Identity>);
 
@@ -38,6 +38,10 @@ pub struct ForgeGuardIdentity(pub Option<Identity>);
 ///
 /// Returns `None` if no flag configuration was present or if the
 /// middleware has not run.
+///
+/// PDV exception: the inner field is intentionally `pub` so handlers can
+/// destructure the extractor in parameter position. A private field with
+/// `into_inner()` would break the canonical Axum extractor shape.
 ///
 /// # Example
 ///
@@ -54,10 +58,6 @@ pub struct ForgeGuardIdentity(pub Option<Identity>);
 ///     format!("dark-mode: {enabled}")
 /// }
 /// ```
-/// PDV exception: tuple-struct field is intentionally `pub` so handlers can
-/// destructure the extractor in parameter position. Changing to a private
-/// field with `into_inner()` would break the canonical Axum extractor shape.
-/// See `.claude/designs/issue-69-shaping.md` for context.
 #[derive(Debug, Clone)]
 pub struct ForgeGuardFlags(pub Option<ResolvedFlags>);
 
