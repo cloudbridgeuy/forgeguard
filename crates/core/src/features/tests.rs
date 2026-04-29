@@ -80,7 +80,7 @@ fn is_in_namespace_scoped_wrong_namespace() {
 
 // -- Override hierarchy --------------------------------------------------
 
-fn make_config(name: &str, def: FlagDefinition) -> FlagConfig {
+fn single_flag_config(name: &str, def: FlagDefinition) -> FlagConfig {
     make_flag_config([(FlagName::parse(name).unwrap(), def)])
 }
 
@@ -101,7 +101,7 @@ fn boolean_flag(default: FlagValue, enabled: bool, overrides: Vec<FlagOverride>)
 
 #[test]
 fn user_tenant_override_wins_over_tenant_only() {
-    let config = make_config(
+    let config = single_flag_config(
         "test-flag",
         boolean_flag(
             FlagValue::Bool(false),
@@ -132,7 +132,7 @@ fn user_tenant_override_wins_over_tenant_only() {
     // so we get false. The spec says "pre-sorted by specificity" — callers must sort.
     // But in this test the tenant-only wildcard matches first.
     // Let's reorder to show user+tenant wins when listed first.
-    let config2 = make_config(
+    let config2 = single_flag_config(
         "test-flag",
         boolean_flag(
             FlagValue::Bool(false),
@@ -169,7 +169,7 @@ fn user_tenant_override_wins_over_tenant_only() {
 
 #[test]
 fn user_override_wins_over_rollout() {
-    let config = make_config(
+    let config = single_flag_config(
         "test-flag",
         FlagDefinition::new(FlagDefinitionParams {
             flag_type: FlagType::Boolean,
@@ -193,7 +193,7 @@ fn user_override_wins_over_rollout() {
 
 #[test]
 fn tenant_override_wins_over_rollout_and_default() {
-    let config = make_config(
+    let config = single_flag_config(
         "test-flag",
         FlagDefinition::new(FlagDefinitionParams {
             flag_type: FlagType::Boolean,
@@ -218,7 +218,7 @@ fn tenant_override_wins_over_rollout_and_default() {
 
 #[test]
 fn kill_switch_ignores_everything() {
-    let config = make_config(
+    let config = single_flag_config(
         "test-flag",
         FlagDefinition::new(FlagDefinitionParams {
             flag_type: FlagType::Boolean,
@@ -242,7 +242,7 @@ fn kill_switch_ignores_everything() {
 
 #[test]
 fn string_variant_tenant_override() {
-    let config = make_config(
+    let config = single_flag_config(
         "test-flag",
         FlagDefinition::new(FlagDefinitionParams {
             flag_type: FlagType::String,
@@ -270,7 +270,7 @@ fn string_variant_tenant_override() {
 
 #[test]
 fn numeric_flag_tenant_override() {
-    let config = make_config(
+    let config = single_flag_config(
         "test-flag",
         FlagDefinition::new(FlagDefinitionParams {
             flag_type: FlagType::Number,
@@ -362,7 +362,7 @@ fn rollout_different_flags_produce_different_buckets() {
 
 #[test]
 fn boolean_rollout_no_variant_defaults_to_true() {
-    let config = make_config(
+    let config = single_flag_config(
         "test-flag",
         FlagDefinition::new(FlagDefinitionParams {
             flag_type: FlagType::Boolean,
@@ -381,7 +381,7 @@ fn boolean_rollout_no_variant_defaults_to_true() {
 
 #[test]
 fn string_rollout_with_variant() {
-    let config = make_config(
+    let config = single_flag_config(
         "test-flag",
         FlagDefinition::new(FlagDefinitionParams {
             flag_type: FlagType::String,
@@ -403,7 +403,7 @@ fn string_rollout_with_variant() {
 
 #[test]
 fn rollout_zero_percent_nobody() {
-    let config = make_config(
+    let config = single_flag_config(
         "test-flag",
         FlagDefinition::new(FlagDefinitionParams {
             flag_type: FlagType::Boolean,
@@ -428,7 +428,7 @@ fn rollout_zero_percent_nobody() {
 
 #[test]
 fn rollout_hundred_percent_everyone() {
-    let config = make_config(
+    let config = single_flag_config(
         "test-flag",
         FlagDefinition::new(FlagDefinitionParams {
             flag_type: FlagType::Boolean,
@@ -455,7 +455,7 @@ fn rollout_hundred_percent_everyone() {
 
 #[test]
 fn no_overrides_no_rollout_returns_default() {
-    let config = make_config(
+    let config = single_flag_config(
         "test-flag",
         boolean_flag(FlagValue::Bool(true), true, vec![]),
     );
@@ -467,7 +467,7 @@ fn no_overrides_no_rollout_returns_default() {
 
 #[test]
 fn resolved_flags_json_round_trip() {
-    let config = make_config(
+    let config = single_flag_config(
         "test-flag",
         boolean_flag(FlagValue::Bool(true), true, vec![]),
     );
@@ -489,7 +489,7 @@ fn resolved_flags_is_empty() {
 
 #[test]
 fn group_override_matches_when_user_in_group() {
-    let config = make_config(
+    let config = single_flag_config(
         "test-flag",
         boolean_flag(
             FlagValue::Bool(false),
@@ -511,7 +511,7 @@ fn group_override_matches_when_user_in_group() {
 
 #[test]
 fn group_override_skipped_when_user_not_in_group() {
-    let config = make_config(
+    let config = single_flag_config(
         "test-flag",
         boolean_flag(
             FlagValue::Bool(false),
@@ -533,7 +533,7 @@ fn group_override_skipped_when_user_not_in_group() {
 
 #[test]
 fn group_override_matches_any_of_users_groups() {
-    let config = make_config(
+    let config = single_flag_config(
         "test-flag",
         boolean_flag(
             FlagValue::Bool(false),
@@ -558,7 +558,7 @@ fn group_override_matches_any_of_users_groups() {
 
 #[test]
 fn tenant_and_group_override_both_must_match() {
-    let config = make_config(
+    let config = single_flag_config(
         "test-flag",
         boolean_flag(
             FlagValue::Bool(false),
@@ -593,7 +593,7 @@ fn tenant_and_group_override_both_must_match() {
 
 #[test]
 fn no_group_override_field_matches_any_groups() {
-    let config = make_config(
+    let config = single_flag_config(
         "test-flag",
         boolean_flag(
             FlagValue::Bool(false),
@@ -611,7 +611,7 @@ fn no_group_override_field_matches_any_groups() {
 
 #[test]
 fn detailed_kill_switch_reason() {
-    let config = make_config(
+    let config = single_flag_config(
         "test-flag",
         boolean_flag(FlagValue::Bool(false), false, vec![]),
     );
@@ -625,7 +625,7 @@ fn detailed_kill_switch_reason() {
 
 #[test]
 fn detailed_override_reason_with_tenant() {
-    let config = make_config(
+    let config = single_flag_config(
         "test-flag",
         boolean_flag(
             FlagValue::Bool(false),
@@ -656,7 +656,7 @@ fn detailed_override_reason_with_tenant() {
 
 #[test]
 fn detailed_override_reason_with_group() {
-    let config = make_config(
+    let config = single_flag_config(
         "test-flag",
         boolean_flag(
             FlagValue::Bool(false),
@@ -687,7 +687,7 @@ fn detailed_override_reason_with_group() {
 
 #[test]
 fn detailed_rollout_included_reason() {
-    let config = make_config(
+    let config = single_flag_config(
         "test-flag",
         FlagDefinition::new(FlagDefinitionParams {
             flag_type: FlagType::Boolean,
@@ -713,7 +713,7 @@ fn detailed_rollout_included_reason() {
 
 #[test]
 fn detailed_rollout_excluded_reason() {
-    let config = make_config(
+    let config = single_flag_config(
         "test-flag",
         FlagDefinition::new(FlagDefinitionParams {
             flag_type: FlagType::Boolean,
@@ -739,7 +739,7 @@ fn detailed_rollout_excluded_reason() {
 
 #[test]
 fn detailed_default_reason() {
-    let config = make_config(
+    let config = single_flag_config(
         "test-flag",
         boolean_flag(FlagValue::Bool(true), true, vec![]),
     );
@@ -753,7 +753,7 @@ fn detailed_default_reason() {
 
 #[test]
 fn detailed_json_serialization() {
-    let config = make_config(
+    let config = single_flag_config(
         "test-flag",
         boolean_flag(FlagValue::Bool(false), true, vec![]),
     );
