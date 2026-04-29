@@ -64,10 +64,24 @@ Actions follow the format `namespace:entity:action` (not `namespace:action:entit
 
 ## Optional Features
 
-| Feature   | Purpose                                                                                                                |
-| --------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `testing` | Exposes `forgeguard_core::features::testing` with `make_flag_override` and `make_flag_config` builders. Gated behind `cfg(any(test, feature = "testing"))` so internal tests get them automatically. For `FlagDefinition`, use `FlagDefinition::new(FlagDefinitionParams { ... })` directly — no builder is provided because `FlagDefinitionParams` already gives comfortable named-field construction. Other crates opt in via `[dev-dependencies] forgeguard_core = { ..., features = ["testing"] }`. |
+| Feature   | Purpose |
+| --------- | ------- |
+| `testing` | Test-only constructors for feature-flag types. |
+
+The `testing` feature exposes `forgeguard_core::features::testing`, which provides two builders:
+
+- `make_flag_override(tenant, user, group, value) -> FlagOverride`
+- `make_flag_config(pairs) -> FlagConfig`
+
+`FlagDefinition` has no builder here. Use `FlagDefinition::new(FlagDefinitionParams { ... })` directly — `FlagDefinitionParams` is a named-field Params struct designed for exactly this purpose.
+
+The module is gated behind `cfg(any(test, feature = "testing"))`, so in-crate tests get it automatically. Other crates opt in with:
+
+```toml
+[dev-dependencies]
+forgeguard_core = { workspace = true, features = ["testing"] }
+```
 
 ## Visibility Conventions
 
-The three feature-flag types — `FlagOverride`, `FlagDefinition`, `FlagConfig` — have private fields. Construct via `Type::new(...)` (or the `testing` builders for `FlagOverride` and `FlagConfig`); read via accessor methods. Encapsulation was chosen over a Parse-Don't-Validate split because no validation logic exists today — if invariants are added later, the private-field boundary is already in place.
+`FlagOverride`, `FlagDefinition`, and `FlagConfig` all have private fields. Construct instances via `Type::new(...)` (or the `testing` builders for `FlagOverride` and `FlagConfig`) and read state via accessor methods. Fields are private to keep the encapsulation boundary in place for when validation invariants are added later.
