@@ -860,6 +860,7 @@ mod flag_override_construction {
         assert!(ov.tenant().is_none());
         assert!(ov.user().is_none());
         assert!(ov.group().is_none());
+        assert_eq!(*ov.value(), FlagValue::Bool(true));
     }
 
     #[test]
