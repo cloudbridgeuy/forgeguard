@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::features::testing::{make_flag_config, make_flag_override};
+use crate::Percentage;
 
 // -- FlagName parsing ----------------------------------------------------
 
@@ -181,7 +182,7 @@ fn user_override_wins_over_rollout() {
                 None,
                 FlagValue::Bool(true),
             )],
-            rollout_percentage: Some(0), // 0% rollout — nobody gets it
+            rollout_percentage: Some(Percentage::try_new(0).unwrap()), // 0% rollout — nobody gets it
             rollout_variant: None,
         }),
     );
@@ -205,7 +206,7 @@ fn tenant_override_wins_over_rollout_and_default() {
                 None,
                 FlagValue::Bool(true),
             )],
-            rollout_percentage: Some(0),
+            rollout_percentage: Some(Percentage::try_new(0).unwrap()),
             rollout_variant: None,
         }),
     );
@@ -230,7 +231,7 @@ fn kill_switch_ignores_everything() {
                 None,
                 FlagValue::Bool(true),
             )],
-            rollout_percentage: Some(100),
+            rollout_percentage: Some(Percentage::try_new(100).unwrap()),
             rollout_variant: None,
         }),
     );
@@ -315,7 +316,7 @@ fn rollout_distribution_approximately_correct() {
             default: FlagValue::Bool(false),
             enabled: true,
             overrides: vec![],
-            rollout_percentage: Some(25),
+            rollout_percentage: Some(Percentage::try_new(25).unwrap()),
             rollout_variant: None,
         }),
     )]);
@@ -369,7 +370,7 @@ fn boolean_rollout_no_variant_defaults_to_true() {
             default: FlagValue::Bool(false),
             enabled: true,
             overrides: vec![],
-            rollout_percentage: Some(100),
+            rollout_percentage: Some(Percentage::try_new(100).unwrap()),
             rollout_variant: None,
         }),
     );
@@ -388,7 +389,7 @@ fn string_rollout_with_variant() {
             default: FlagValue::String("classic".to_string()),
             enabled: true,
             overrides: vec![],
-            rollout_percentage: Some(100),
+            rollout_percentage: Some(Percentage::try_new(100).unwrap()),
             rollout_variant: Some(FlagValue::String("streamlined".to_string())),
         }),
     );
@@ -410,7 +411,7 @@ fn rollout_zero_percent_nobody() {
             default: FlagValue::Bool(false),
             enabled: true,
             overrides: vec![],
-            rollout_percentage: Some(0),
+            rollout_percentage: Some(Percentage::try_new(0).unwrap()),
             rollout_variant: None,
         }),
     );
@@ -435,7 +436,7 @@ fn rollout_hundred_percent_everyone() {
             default: FlagValue::Bool(false),
             enabled: true,
             overrides: vec![],
-            rollout_percentage: Some(100),
+            rollout_percentage: Some(Percentage::try_new(100).unwrap()),
             rollout_variant: None,
         }),
     );
@@ -694,7 +695,7 @@ fn detailed_rollout_included_reason() {
             default: FlagValue::Bool(false),
             enabled: true,
             overrides: vec![],
-            rollout_percentage: Some(100),
+            rollout_percentage: Some(Percentage::try_new(100).unwrap()),
             rollout_variant: None,
         }),
     );
@@ -720,7 +721,7 @@ fn detailed_rollout_excluded_reason() {
             default: FlagValue::Bool(false),
             enabled: true,
             overrides: vec![],
-            rollout_percentage: Some(0),
+            rollout_percentage: Some(Percentage::try_new(0).unwrap()),
             rollout_variant: None,
         }),
     );
@@ -781,7 +782,7 @@ fn detailed_json_serialization() {
 
 mod flag_definition_construction {
     use crate::features::testing::make_flag_override;
-    use crate::{FlagDefinition, FlagDefinitionParams, FlagType, FlagValue};
+    use crate::{FlagDefinition, FlagDefinitionParams, FlagType, FlagValue, Percentage};
 
     #[test]
     fn new_minimal_definition() {
@@ -808,11 +809,14 @@ mod flag_definition_construction {
             default: FlagValue::Bool(false),
             enabled: true,
             overrides: vec![ov],
-            rollout_percentage: Some(50),
+            rollout_percentage: Some(Percentage::try_new(50).unwrap()),
             rollout_variant: Some(FlagValue::Bool(true)),
         });
         assert_eq!(def.overrides().len(), 1);
-        assert_eq!(def.rollout_percentage(), Some(50));
+        assert_eq!(
+            def.rollout_percentage(),
+            Some(Percentage::try_new(50).unwrap())
+        );
         assert!(matches!(def.flag_type(), FlagType::Boolean));
         assert_eq!(*def.default_value(), FlagValue::Bool(false));
         assert_eq!(def.rollout_variant(), Some(&FlagValue::Bool(true)));

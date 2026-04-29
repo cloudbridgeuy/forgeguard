@@ -8,6 +8,7 @@ pub mod error;
 pub mod features;
 pub mod fgrn;
 pub mod org;
+pub mod percentage;
 pub mod permission;
 pub mod segment;
 
@@ -29,6 +30,7 @@ pub use features::{
 };
 pub use fgrn::{Fgrn, FgrnSegment};
 pub use org::{OrgStatus, Organization};
+pub use percentage::Percentage;
 pub use permission::{
     ActionPattern, CedarEntityRef, Effect, GroupDefinition, PatternSegment, Policy,
     PolicyStatement, ResourceConstraint,

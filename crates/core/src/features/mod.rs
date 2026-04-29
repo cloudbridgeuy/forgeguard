@@ -8,7 +8,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Error, GroupName, Namespace, Result, Segment, TenantId, UserId};
+use crate::{Error, GroupName, Namespace, Percentage, Result, Segment, TenantId, UserId};
 
 // ---------------------------------------------------------------------------
 // FlagName
@@ -184,7 +184,7 @@ pub struct FlagDefinitionParams {
     /// Targeted overrides. First match wins; callers are responsible for ordering.
     pub overrides: Vec<FlagOverride>,
     /// Rollout percentage (0–100). `None` disables rollout evaluation.
-    pub rollout_percentage: Option<u8>,
+    pub rollout_percentage: Option<Percentage>,
     /// Value returned when a user falls within the rollout. Defaults to
     /// `FlagValue::Bool(true)` when `None`.
     pub rollout_variant: Option<FlagValue>,
@@ -200,7 +200,7 @@ pub struct FlagDefinition {
     enabled: bool,
     #[serde(default)]
     overrides: Vec<FlagOverride>,
-    rollout_percentage: Option<u8>,
+    rollout_percentage: Option<Percentage>,
     rollout_variant: Option<FlagValue>,
 }
 
@@ -238,8 +238,12 @@ impl FlagDefinition {
         &self.overrides
     }
 
-    /// The rollout percentage (0–100), if set.
-    pub fn rollout_percentage(&self) -> Option<u8> {
+    /// The rollout percentage, if set.
+    ///
+    /// A value of `100` puts every user in rollout; `0` excludes all users.
+    /// `None` disables rollout evaluation entirely and the default value is
+    /// returned for any user not matched by an override.
+    pub fn rollout_percentage(&self) -> Option<Percentage> {
         self.rollout_percentage
     }
 
@@ -451,7 +455,7 @@ fn resolve_single_flag_detailed(
     if let Some(pct) = flag.rollout_percentage() {
         let name_str = name.to_string();
         let bucket = deterministic_bucket(&name_str, tenant_id, user_id);
-        if bucket < pct {
+        if bucket < pct.value() {
             return ResolvedFlag {
                 value: flag
                     .rollout_variant()
@@ -459,7 +463,7 @@ fn resolve_single_flag_detailed(
                     .unwrap_or(FlagValue::Bool(true)),
                 reason: ResolutionReason::Rollout {
                     bucket: bucket as u64,
-                    threshold: pct as u64,
+                    threshold: pct.value() as u64,
                 },
             };
         }
@@ -467,7 +471,7 @@ fn resolve_single_flag_detailed(
             value: flag.default_value().clone(),
             reason: ResolutionReason::RolloutExcluded {
                 bucket: bucket as u64,
-                threshold: pct as u64,
+                threshold: pct.value() as u64,
             },
         };
     }
@@ -509,7 +513,7 @@ fn resolve_single_flag(
     if let Some(pct) = flag.rollout_percentage() {
         let name_str = name.to_string();
         let bucket = deterministic_bucket(&name_str, tenant_id, user_id);
-        if bucket < pct {
+        if bucket < pct.value() {
             return flag
                 .rollout_variant()
                 .cloned()
