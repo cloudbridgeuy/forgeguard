@@ -54,7 +54,9 @@ Crate boundaries enforce the Functional Core / Imperative Shell split.
 
 - `pub(crate)` default for internal functions and types
 - `pub` only for public API surface
-- No `pub` struct fields — use constructor functions (Parse Don't Validate)
+- No `pub` struct fields on domain types — use `Type::new(...)` + `&self` accessors (Parse Don't Validate). Params structs are the carve-out, see [params-struct-rule.md](./.claude/context/params-struct-rule.md).
+- Cross-crate test fixtures ship behind a `testing` Cargo feature on the producing crate, gated with `cfg(any(test, feature = "testing"))`. See [visibility-conventions.md](./.claude/context/visibility-conventions.md).
+- Axum tuple-struct extractors (e.g. `ForgeGuardIdentity(pub Identity)`) keep public fields with a documented PDV exception so handler destructuring compiles.
 
 ### Error Types (MUST)
 
@@ -167,6 +169,7 @@ Each crate's `README.md` describes what it owns and its pure/I/O classification.
 | ------------------------------------------------------------------ | ----------------------------------------------------------------------- |
 | [Linting and Clippy](./.claude/context/linting-and-clippy.md)      | Clippy thresholds, workspace lints, and how they map to design patterns |
 | [Params Struct Rule](./.claude/context/params-struct-rule.md)      | Why we ban `#[allow(clippy::too_many_arguments)]` and how the lint enforces it |
+| [Visibility Conventions](./.claude/context/visibility-conventions.md) | `pub(crate)` default, constructor + accessor shape, `testing` Cargo feature for cross-crate fixtures, Axum tuple-struct PDV exception |
 | [Commit and Release](./.claude/context/commit-and-release.md)      | Conventional commits, version bump logic, release flow                  |
 | [xtask lint](./.claude/context/xtask-lint.md)                      | Lint pipeline checks, flags, architecture, adding new checks            |
 | [xtask Wrapper](./.claude/context/xtask-wrapper.md)                | `cargo-xtask` mtime staleness, FCIS module split, hot/cold paths, `--rebuild` |
