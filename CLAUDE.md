@@ -31,6 +31,7 @@
 - **Integration tests:** `cargo test -p forgeguard_proxy` — see [demo-app.md](./.claude/context/demo-app.md)
 - **Demo app:** native or Docker Compose — see [demo-app.md](./.claude/context/demo-app.md)
 - **AWS defaults:** region `us-east-2`, profile `admin` — e.g. `--region us-east-2 --profile admin`
+- **AWS ARN formats:** prefer CDK CFN attribute getters (`construct.attrArn`) over `cdk.Stack.formatArn`; some services (e.g. Verified Permissions) use empty region segments — see [aws-arn-formats.md](./.claude/context/aws-arn-formats.md)
 - **Environment:** only `prod` exists — do NOT use `--env dev` or `FORGEGUARD_ENV=dev`
 - **GitHub CLI:** always use `gh auth switch --user cloudbridgeuy` before any `gh` command
 
@@ -182,6 +183,7 @@ Each crate's `README.md` describes what it owns and its pure/I/O classification.
 | [Control Plane](./.claude/context/control-plane.md)                | CP scaffold, proxy-config endpoint, OrgStore trait, auth, VP authorization (V4), ETag, Draft / `ConfiguredConfig` lifecycle, testing |
 | [Optimistic Locking](./.claude/context/optimistic-locking.md)      | `If-Match` / 412 on `PUT /organizations/{id}`: semantics, pure `etag.rs` core, error variant, V3 memory + Dynamo parity, V4 wildcard + POST ETag + 412 metrics, V5 conditional GET + typed 412 |
 | [Infra: Control Plane](./.claude/context/infra-control-plane.md)   | CDK project, 1Password integration, DynamoDB Global Table, xtask infra  |
+| [AWS ARN Formats](./.claude/context/aws-arn-formats.md)            | Per-service ARN gotchas (VP empty region, etc.) and the rule to prefer `attrArn` over `formatArn` |
 | [Cluster Mode](./.claude/context/cluster.md)                       | TieredCache, Redis wiring, config, health stats, future slices          |
 | [Dependency Constraints](./.claude/context/dependency-constraints.md) | Pingora version pins (rand, prometheus), jsonwebtoken crypto, reqwest TLS |
 | [CI](./.claude/context/ci.md)                                      | GH Actions jobs, toolchain pinning rules, typos / cargo-deny / cargo-rail allowlists |
