@@ -63,6 +63,18 @@ These workarounds are baked into the sync engine. Knowing them prevents re-intro
 - **Resource matching:** `[name]` prefix in description field (not VP `name` field).
 - **Partial failure recovery:** re-run sync — already-applied actions become no-ops.
 
+### Where the Compiler Lives
+
+The pure RBAC → Cedar compiler (`compile_rbac_to_cedar`, `resolve_inherits`,
+`validate_cedar_ident`, `RbacEntry`, `TenantConfig`) lives in
+`forgeguard_authz_core::rbac`. `xtask/src/control_plane/cedar_core/rbac.rs`
+contains two pieces: a thin re-export of the compiler from `authz-core`, and an
+I/O-edge adapter (`policy_entries_to_rbac`) that maps the xtask-local TOML
+`PolicyEntry` shape onto `RbacEntry`. Readers tracing `compile_rbac_to_cedar`
+in xtask will find both in that file. The control-plane Groups handlers (V2+)
+call the compiler directly when materializing per-org Groups into the org's VP
+store.
+
 ### Plan Output
 
 `cedar diff` (and `cedar sync --dry-run`) renders the plan as a colored terraform-style block list. Each `DiffAction::Delete` carries the current remote statement so the formatter can produce a unified diff without re-reading state, and `compute_sync_plan` emits adjacent `Delete + Create` pairs for the same named resource so the display layer can coalesce them into a single `UPDATE` block.

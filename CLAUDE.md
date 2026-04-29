@@ -50,6 +50,7 @@ Crate boundaries enforce the Functional Core / Imperative Shell split.
 - **I/O crates** — consume pure crate types, add side effects. Depend downward only.
 - **Why** — SDK must compile to `wasm32-unknown-unknown`. This is a compiler requirement.
 - **Naming** — pure: `forgeguard{domain}_core`. I/O: `forgeguard{domain}` (no `_core` suffix).
+- **xtask deps** — `xtask` is a binary that intentionally minimizes workspace path deps to keep the cached binary fresh. **Exception:** pure leaf crates (currently `crates/authz-core`) may be consumed by `xtask` to share canonical types and pure functions across consumers (e.g. the RBAC compiler used by both `cargo xtask cedar sync` and the V2+ control-plane Groups handlers). Keep this list small and pure-only.
 
 ### Visibility (MUST)
 

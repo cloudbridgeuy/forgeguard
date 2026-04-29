@@ -2,7 +2,7 @@
 
 ## Overview
 
-ForgeGate enforces code quality through three layers:
+ForgeGuard enforces code quality through three layers:
 
 1. **`clippy.toml`** — threshold configuration
 2. **`[workspace.lints.clippy]`** in `Cargo.toml` — lint levels
@@ -53,3 +53,11 @@ These live in source (not workspace config) so test code can still use `.unwrap(
 - **Thresholds** in `clippy.toml` — these are numeric values, not lint on/off switches
 - **Lint levels** in `Cargo.toml` — workspace-wide, inherited by all crates via `[lints] workspace = true`
 - **Source denials** — per-crate, scoped to production code (not tests)
+
+## FCIS Carve-outs
+
+`xtask` may depend on pure leaf crates that have no I/O deps — currently
+`crates/authz-core`. This lets `cargo xtask control-plane cedar sync` and
+the control-plane Groups handler share the canonical RBAC compiler without
+duplicating the implementation. See `xtask/README.md` for the dep policy
+and `crates/authz-core/README.md` for the exposed module.

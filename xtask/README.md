@@ -15,10 +15,20 @@ The wrapper skips cargo's fingerprint when the cached xtask binary is fresh.
 
 ## Dependencies
 
-xtask intentionally carries **no workspace path dependencies**. It inlines the
-narrow Ed25519 signing surface it needs in `src/signing.rs`. The integration
-test at `tests/signing_compat.rs` verifies this copy stays byte-compatible with
-`forgeguard_authn_core::signing`, which sits as a dev-dep only.
+xtask minimizes workspace path dependencies to keep its cached binary fresh
+(see `xtask/cargo-xtask/README.md` for the wrapper's mtime-based staleness
+check). Exceptions:
+
+- `forgeguard_authz_core` (pure leaf crate, no I/O deps) — provides the
+  shared RBAC compiler used by `cargo xtask control-plane cedar sync` and
+  by the V2+ control-plane Groups handlers. See
+  `crates/authz-core/README.md`.
+
+xtask still inlines the narrow Ed25519 signing surface it needs in
+`src/signing.rs` rather than depending on `forgeguard_authn_core`. The
+integration test at `tests/signing_compat.rs` verifies this copy stays
+byte-compatible with `forgeguard_authn_core::signing`, which sits as a
+dev-dep only.
 
 If you edit either the inlined code or the upstream, run:
 
