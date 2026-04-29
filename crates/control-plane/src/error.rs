@@ -18,6 +18,7 @@ pub(crate) enum Error {
     PreconditionFailed { current_etag: String },
     /// An etag value was empty or otherwise malformed.
     #[error("invalid etag: {raw}")]
+    #[allow(dead_code)] // TODO(stream-7): remove once Etag wiring consumes this variant.
     InvalidEtag { raw: String },
     /// Storage backend error (DynamoDB SDK, serialization, etc.).
     #[error("store error: {0}")]

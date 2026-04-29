@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use forgeguard_core::{DefaultPolicy, ProjectId};
+use forgeguard_core::{ConfigVersion, DefaultPolicy, ProjectId};
 use forgeguard_http::{HttpMethod, PublicAuthMode};
 use serde::{Deserialize, Serialize};
 
@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 /// Version follows AWS-style date format (e.g. "2026-04-07").
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct OrgConfig {
-    version: String,
+    version: ConfigVersion,
     project_id: ProjectId,
     upstream_url: String,
     default_policy: DefaultPolicy,
@@ -27,7 +27,7 @@ pub(crate) struct OrgConfig {
 
 impl OrgConfig {
     #[cfg(test)]
-    pub(crate) fn version(&self) -> &str {
+    pub(crate) fn version(&self) -> &ConfigVersion {
         &self.version
     }
 
@@ -81,7 +81,7 @@ mod tests {
     #[test]
     fn deserialize_minimal() {
         let config = sample_config();
-        assert_eq!(config.version(), "2026-04-07");
+        assert_eq!(config.version().as_str(), "2026-04-07");
         assert_eq!(config.upstream_url(), "https://api.acme.com");
         assert_eq!(config.default_policy(), DefaultPolicy::Deny);
     }

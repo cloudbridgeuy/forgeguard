@@ -3,6 +3,7 @@
 pub mod action;
 pub mod cedar;
 pub mod cedar_ident;
+pub mod config_version;
 pub mod default_policy;
 pub mod error;
 pub mod features;
@@ -21,6 +22,7 @@ pub use cedar::{
     EntitySchemaConfig,
 };
 pub use cedar_ident::{CedarEntityType, CedarIdent, CedarNamespace};
+pub use config_version::ConfigVersion;
 pub use default_policy::DefaultPolicy;
 pub use error::{Error, Result};
 pub use features::{
