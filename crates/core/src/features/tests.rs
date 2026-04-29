@@ -90,7 +90,7 @@ fn make_config(name: &str, def: FlagDefinition) -> FlagConfig {
 fn user_tenant_override_wins_over_tenant_only() {
     let config = make_config(
         "test-flag",
-        FlagDefinition {
+        FlagDefinition::new(FlagDefinitionParams {
             flag_type: FlagType::Boolean,
             default: FlagValue::Bool(false),
             enabled: true,
@@ -112,7 +112,7 @@ fn user_tenant_override_wins_over_tenant_only() {
             ],
             rollout_percentage: None,
             rollout_variant: None,
-        },
+        }),
     );
 
     let tenant = TenantId::new("acme").unwrap();
@@ -124,7 +124,7 @@ fn user_tenant_override_wins_over_tenant_only() {
     // Let's reorder to show user+tenant wins when listed first.
     let config2 = make_config(
         "test-flag",
-        FlagDefinition {
+        FlagDefinition::new(FlagDefinitionParams {
             flag_type: FlagType::Boolean,
             default: FlagValue::Bool(false),
             enabled: true,
@@ -146,7 +146,7 @@ fn user_tenant_override_wins_over_tenant_only() {
             ],
             rollout_percentage: None,
             rollout_variant: None,
-        },
+        }),
     );
     let flags2 = evaluate_flags(&config2, Some(&tenant), &user, &[]);
     assert!(flags2.enabled("test-flag"));
@@ -164,7 +164,7 @@ fn user_tenant_override_wins_over_tenant_only() {
 fn user_override_wins_over_rollout() {
     let config = make_config(
         "test-flag",
-        FlagDefinition {
+        FlagDefinition::new(FlagDefinitionParams {
             flag_type: FlagType::Boolean,
             default: FlagValue::Bool(false),
             enabled: true,
@@ -176,7 +176,7 @@ fn user_override_wins_over_rollout() {
             )],
             rollout_percentage: Some(0), // 0% rollout — nobody gets it
             rollout_variant: None,
-        },
+        }),
     );
 
     let user = UserId::new("alice").unwrap();
@@ -188,7 +188,7 @@ fn user_override_wins_over_rollout() {
 fn tenant_override_wins_over_rollout_and_default() {
     let config = make_config(
         "test-flag",
-        FlagDefinition {
+        FlagDefinition::new(FlagDefinitionParams {
             flag_type: FlagType::Boolean,
             default: FlagValue::Bool(false),
             enabled: true,
@@ -200,7 +200,7 @@ fn tenant_override_wins_over_rollout_and_default() {
             )],
             rollout_percentage: Some(0),
             rollout_variant: None,
-        },
+        }),
     );
 
     let tenant = TenantId::new("acme").unwrap();
@@ -213,7 +213,7 @@ fn tenant_override_wins_over_rollout_and_default() {
 fn kill_switch_ignores_everything() {
     let config = make_config(
         "test-flag",
-        FlagDefinition {
+        FlagDefinition::new(FlagDefinitionParams {
             flag_type: FlagType::Boolean,
             default: FlagValue::Bool(false),
             enabled: false, // kill switch
@@ -225,7 +225,7 @@ fn kill_switch_ignores_everything() {
             )],
             rollout_percentage: Some(100),
             rollout_variant: None,
-        },
+        }),
     );
 
     let user = UserId::new("alice").unwrap();
@@ -237,7 +237,7 @@ fn kill_switch_ignores_everything() {
 fn string_variant_tenant_override() {
     let config = make_config(
         "test-flag",
-        FlagDefinition {
+        FlagDefinition::new(FlagDefinitionParams {
             flag_type: FlagType::String,
             default: FlagValue::String("classic".to_string()),
             enabled: true,
@@ -249,7 +249,7 @@ fn string_variant_tenant_override() {
             )],
             rollout_percentage: None,
             rollout_variant: None,
-        },
+        }),
     );
 
     let tenant = TenantId::new("acme").unwrap();
@@ -265,7 +265,7 @@ fn string_variant_tenant_override() {
 fn numeric_flag_tenant_override() {
     let config = make_config(
         "test-flag",
-        FlagDefinition {
+        FlagDefinition::new(FlagDefinitionParams {
             flag_type: FlagType::Number,
             default: FlagValue::Number(10.0),
             enabled: true,
@@ -277,7 +277,7 @@ fn numeric_flag_tenant_override() {
             )],
             rollout_percentage: None,
             rollout_variant: None,
-        },
+        }),
     );
 
     let tenant = TenantId::new("acme").unwrap();
@@ -304,14 +304,14 @@ fn rollout_distribution_approximately_correct() {
     let mut config = FlagConfig::default();
     config.flags.insert(
         flag_name,
-        FlagDefinition {
+        FlagDefinition::new(FlagDefinitionParams {
             flag_type: FlagType::Boolean,
             default: FlagValue::Bool(false),
             enabled: true,
             overrides: vec![],
             rollout_percentage: Some(25),
             rollout_variant: None,
-        },
+        }),
     );
     let tenant = TenantId::new("test-tenant").unwrap();
     let mut in_rollout = 0u32;
@@ -358,14 +358,14 @@ fn rollout_different_flags_produce_different_buckets() {
 fn boolean_rollout_no_variant_defaults_to_true() {
     let config = make_config(
         "test-flag",
-        FlagDefinition {
+        FlagDefinition::new(FlagDefinitionParams {
             flag_type: FlagType::Boolean,
             default: FlagValue::Bool(false),
             enabled: true,
             overrides: vec![],
             rollout_percentage: Some(100),
             rollout_variant: None,
-        },
+        }),
     );
 
     let user = UserId::new("alice").unwrap();
@@ -377,14 +377,14 @@ fn boolean_rollout_no_variant_defaults_to_true() {
 fn string_rollout_with_variant() {
     let config = make_config(
         "test-flag",
-        FlagDefinition {
+        FlagDefinition::new(FlagDefinitionParams {
             flag_type: FlagType::String,
             default: FlagValue::String("classic".to_string()),
             enabled: true,
             overrides: vec![],
             rollout_percentage: Some(100),
             rollout_variant: Some(FlagValue::String("streamlined".to_string())),
-        },
+        }),
     );
 
     let user = UserId::new("alice").unwrap();
@@ -399,14 +399,14 @@ fn string_rollout_with_variant() {
 fn rollout_zero_percent_nobody() {
     let config = make_config(
         "test-flag",
-        FlagDefinition {
+        FlagDefinition::new(FlagDefinitionParams {
             flag_type: FlagType::Boolean,
             default: FlagValue::Bool(false),
             enabled: true,
             overrides: vec![],
             rollout_percentage: Some(0),
             rollout_variant: None,
-        },
+        }),
     );
 
     let tenant = TenantId::new("acme").unwrap();
@@ -424,14 +424,14 @@ fn rollout_zero_percent_nobody() {
 fn rollout_hundred_percent_everyone() {
     let config = make_config(
         "test-flag",
-        FlagDefinition {
+        FlagDefinition::new(FlagDefinitionParams {
             flag_type: FlagType::Boolean,
             default: FlagValue::Bool(false),
             enabled: true,
             overrides: vec![],
             rollout_percentage: Some(100),
             rollout_variant: None,
-        },
+        }),
     );
 
     let tenant = TenantId::new("acme").unwrap();
@@ -451,14 +451,14 @@ fn rollout_hundred_percent_everyone() {
 fn no_overrides_no_rollout_returns_default() {
     let config = make_config(
         "test-flag",
-        FlagDefinition {
+        FlagDefinition::new(FlagDefinitionParams {
             flag_type: FlagType::Boolean,
             default: FlagValue::Bool(true),
             enabled: true,
             overrides: vec![],
             rollout_percentage: None,
             rollout_variant: None,
-        },
+        }),
     );
 
     let user = UserId::new("alice").unwrap();
@@ -470,14 +470,14 @@ fn no_overrides_no_rollout_returns_default() {
 fn resolved_flags_json_round_trip() {
     let config = make_config(
         "test-flag",
-        FlagDefinition {
+        FlagDefinition::new(FlagDefinitionParams {
             flag_type: FlagType::Boolean,
             default: FlagValue::Bool(true),
             enabled: true,
             overrides: vec![],
             rollout_percentage: None,
             rollout_variant: None,
-        },
+        }),
     );
 
     let user = UserId::new("alice").unwrap();
@@ -499,7 +499,7 @@ fn resolved_flags_is_empty() {
 fn group_override_matches_when_user_in_group() {
     let config = make_config(
         "test-flag",
-        FlagDefinition {
+        FlagDefinition::new(FlagDefinitionParams {
             flag_type: FlagType::Boolean,
             default: FlagValue::Bool(false),
             enabled: true,
@@ -511,7 +511,7 @@ fn group_override_matches_when_user_in_group() {
             )],
             rollout_percentage: None,
             rollout_variant: None,
-        },
+        }),
     );
 
     let user = UserId::new("alice").unwrap();
@@ -524,7 +524,7 @@ fn group_override_matches_when_user_in_group() {
 fn group_override_skipped_when_user_not_in_group() {
     let config = make_config(
         "test-flag",
-        FlagDefinition {
+        FlagDefinition::new(FlagDefinitionParams {
             flag_type: FlagType::Boolean,
             default: FlagValue::Bool(false),
             enabled: true,
@@ -536,7 +536,7 @@ fn group_override_skipped_when_user_not_in_group() {
             )],
             rollout_percentage: None,
             rollout_variant: None,
-        },
+        }),
     );
 
     let user = UserId::new("alice").unwrap();
@@ -549,7 +549,7 @@ fn group_override_skipped_when_user_not_in_group() {
 fn group_override_matches_any_of_users_groups() {
     let config = make_config(
         "test-flag",
-        FlagDefinition {
+        FlagDefinition::new(FlagDefinitionParams {
             flag_type: FlagType::Boolean,
             default: FlagValue::Bool(false),
             enabled: true,
@@ -561,7 +561,7 @@ fn group_override_matches_any_of_users_groups() {
             )],
             rollout_percentage: None,
             rollout_variant: None,
-        },
+        }),
     );
 
     let user = UserId::new("alice").unwrap();
@@ -577,7 +577,7 @@ fn group_override_matches_any_of_users_groups() {
 fn tenant_and_group_override_both_must_match() {
     let config = make_config(
         "test-flag",
-        FlagDefinition {
+        FlagDefinition::new(FlagDefinitionParams {
             flag_type: FlagType::Boolean,
             default: FlagValue::Bool(false),
             enabled: true,
@@ -589,7 +589,7 @@ fn tenant_and_group_override_both_must_match() {
             )],
             rollout_percentage: None,
             rollout_variant: None,
-        },
+        }),
     );
 
     let user = UserId::new("alice").unwrap();
@@ -615,14 +615,14 @@ fn tenant_and_group_override_both_must_match() {
 fn no_group_override_field_matches_any_groups() {
     let config = make_config(
         "test-flag",
-        FlagDefinition {
+        FlagDefinition::new(FlagDefinitionParams {
             flag_type: FlagType::Boolean,
             default: FlagValue::Bool(false),
             enabled: true,
             overrides: vec![make_flag_override(None, None, None, FlagValue::Bool(true))],
             rollout_percentage: None,
             rollout_variant: None,
-        },
+        }),
     );
 
     let user = UserId::new("alice").unwrap();
@@ -636,14 +636,14 @@ fn no_group_override_field_matches_any_groups() {
 fn detailed_kill_switch_reason() {
     let config = make_config(
         "test-flag",
-        FlagDefinition {
+        FlagDefinition::new(FlagDefinitionParams {
             flag_type: FlagType::Boolean,
             default: FlagValue::Bool(false),
             enabled: false,
             overrides: vec![],
             rollout_percentage: None,
             rollout_variant: None,
-        },
+        }),
     );
 
     let user = UserId::new("alice").unwrap();
@@ -657,7 +657,7 @@ fn detailed_kill_switch_reason() {
 fn detailed_override_reason_with_tenant() {
     let config = make_config(
         "test-flag",
-        FlagDefinition {
+        FlagDefinition::new(FlagDefinitionParams {
             flag_type: FlagType::Boolean,
             default: FlagValue::Bool(false),
             enabled: true,
@@ -669,7 +669,7 @@ fn detailed_override_reason_with_tenant() {
             )],
             rollout_percentage: None,
             rollout_variant: None,
-        },
+        }),
     );
 
     let tenant = TenantId::new("acme").unwrap();
@@ -691,7 +691,7 @@ fn detailed_override_reason_with_tenant() {
 fn detailed_override_reason_with_group() {
     let config = make_config(
         "test-flag",
-        FlagDefinition {
+        FlagDefinition::new(FlagDefinitionParams {
             flag_type: FlagType::Boolean,
             default: FlagValue::Bool(false),
             enabled: true,
@@ -703,7 +703,7 @@ fn detailed_override_reason_with_group() {
             )],
             rollout_percentage: None,
             rollout_variant: None,
-        },
+        }),
     );
 
     let user = UserId::new("alice").unwrap();
@@ -725,14 +725,14 @@ fn detailed_override_reason_with_group() {
 fn detailed_rollout_included_reason() {
     let config = make_config(
         "test-flag",
-        FlagDefinition {
+        FlagDefinition::new(FlagDefinitionParams {
             flag_type: FlagType::Boolean,
             default: FlagValue::Bool(false),
             enabled: true,
             overrides: vec![],
             rollout_percentage: Some(100),
             rollout_variant: None,
-        },
+        }),
     );
 
     let user = UserId::new("alice").unwrap();
@@ -751,14 +751,14 @@ fn detailed_rollout_included_reason() {
 fn detailed_rollout_excluded_reason() {
     let config = make_config(
         "test-flag",
-        FlagDefinition {
+        FlagDefinition::new(FlagDefinitionParams {
             flag_type: FlagType::Boolean,
             default: FlagValue::Bool(false),
             enabled: true,
             overrides: vec![],
             rollout_percentage: Some(0),
             rollout_variant: None,
-        },
+        }),
     );
 
     let user = UserId::new("alice").unwrap();
@@ -777,14 +777,14 @@ fn detailed_rollout_excluded_reason() {
 fn detailed_default_reason() {
     let config = make_config(
         "test-flag",
-        FlagDefinition {
+        FlagDefinition::new(FlagDefinitionParams {
             flag_type: FlagType::Boolean,
             default: FlagValue::Bool(true),
             enabled: true,
             overrides: vec![],
             rollout_percentage: None,
             rollout_variant: None,
-        },
+        }),
     );
 
     let user = UserId::new("alice").unwrap();
@@ -798,14 +798,14 @@ fn detailed_default_reason() {
 fn detailed_json_serialization() {
     let config = make_config(
         "test-flag",
-        FlagDefinition {
+        FlagDefinition::new(FlagDefinitionParams {
             flag_type: FlagType::Boolean,
             default: FlagValue::Bool(false),
             enabled: true,
             overrides: vec![],
             rollout_percentage: None,
             rollout_variant: None,
-        },
+        }),
     );
 
     let user = UserId::new("alice").unwrap();
@@ -825,6 +825,44 @@ fn detailed_json_serialization() {
         Some("default"),
         "reason.kind should be 'default'"
     );
+}
+
+// -- FlagDefinition construction (V2) ------------------------------------
+
+mod flag_definition_construction {
+    use crate::features::testing::make_flag_override;
+    use crate::{FlagDefinition, FlagDefinitionParams, FlagType, FlagValue};
+
+    #[test]
+    fn new_minimal_definition() {
+        let def = FlagDefinition::new(FlagDefinitionParams {
+            flag_type: FlagType::Boolean,
+            default: FlagValue::Bool(false),
+            enabled: true,
+            overrides: vec![],
+            rollout_percentage: None,
+            rollout_variant: None,
+        });
+        assert!(def.enabled());
+        assert!(def.overrides().is_empty());
+        assert!(def.rollout_percentage().is_none());
+    }
+
+    #[test]
+    fn new_with_overrides_and_rollout() {
+        let ov = make_flag_override(None, None, None, FlagValue::Bool(true));
+        let def = FlagDefinition::new(FlagDefinitionParams {
+            flag_type: FlagType::Boolean,
+            default: FlagValue::Bool(false),
+            enabled: true,
+            overrides: vec![ov],
+            rollout_percentage: Some(50),
+            rollout_variant: Some(FlagValue::Bool(true)),
+        });
+        assert_eq!(def.overrides().len(), 1);
+        assert_eq!(def.rollout_percentage(), Some(50));
+        assert!(def.rollout_variant().is_some());
+    }
 }
 
 // -- FlagOverride construction (V1) --------------------------------------

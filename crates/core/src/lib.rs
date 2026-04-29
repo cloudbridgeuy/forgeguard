@@ -24,7 +24,8 @@ pub use default_policy::DefaultPolicy;
 pub use error::{Error, Result};
 pub use features::{
     evaluate_flags, evaluate_flags_detailed, DetailedResolvedFlags, FlagConfig, FlagDefinition,
-    FlagName, FlagOverride, FlagType, FlagValue, ResolutionReason, ResolvedFlag, ResolvedFlags,
+    FlagDefinitionParams, FlagName, FlagOverride, FlagType, FlagValue, ResolutionReason,
+    ResolvedFlag, ResolvedFlags,
 };
 pub use fgrn::{Fgrn, FgrnSegment};
 pub use org::{OrgStatus, Organization};

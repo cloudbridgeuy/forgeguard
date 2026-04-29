@@ -11,7 +11,7 @@
 use crate::{FlagOverride, FlagValue, GroupName, TenantId, UserId};
 
 /// Build a `FlagOverride` from individual scope parts. Equivalent to `FlagOverride::new`,
-/// kept here so test-site syntax is uniform with `make_flag_definition` / `make_flag_config`.
+/// kept here so test-site syntax is uniform with `make_flag_config`.
 pub fn make_flag_override(
     tenant: Option<TenantId>,
     user: Option<UserId>,

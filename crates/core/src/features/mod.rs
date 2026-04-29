@@ -169,18 +169,84 @@ fn default_true() -> bool {
     true
 }
 
+/// Named constructor arguments for [`FlagDefinition::new`].
+///
+/// This is a Params struct (the one carve-out from the no-public-fields rule)
+/// because `FlagDefinition::new` takes six arguments — above the workspace
+/// `too-many-arguments-threshold = 5`.
+pub struct FlagDefinitionParams {
+    /// The declared type of the flag.
+    pub flag_type: FlagType,
+    /// The default value returned when no override or rollout applies.
+    pub default: FlagValue,
+    /// Whether the flag is enabled. `false` acts as a kill switch.
+    pub enabled: bool,
+    /// Targeted overrides. First match wins; callers are responsible for ordering.
+    pub overrides: Vec<FlagOverride>,
+    /// Rollout percentage (0–100). `None` disables rollout evaluation.
+    pub rollout_percentage: Option<u8>,
+    /// Value returned when a user falls within the rollout. Defaults to
+    /// `FlagValue::Bool(true)` when `None`.
+    pub rollout_variant: Option<FlagValue>,
+}
+
 /// A complete feature flag definition including overrides and rollout config.
 #[derive(Debug, Clone, Deserialize)]
 pub struct FlagDefinition {
     #[serde(rename = "type")]
-    pub flag_type: FlagType,
-    pub default: FlagValue,
+    flag_type: FlagType,
+    default: FlagValue,
     #[serde(default = "default_true")]
-    pub enabled: bool,
+    enabled: bool,
     #[serde(default)]
-    pub overrides: Vec<FlagOverride>,
-    pub rollout_percentage: Option<u8>,
-    pub rollout_variant: Option<FlagValue>,
+    overrides: Vec<FlagOverride>,
+    rollout_percentage: Option<u8>,
+    rollout_variant: Option<FlagValue>,
+}
+
+impl FlagDefinition {
+    /// Construct a new flag definition from named parameters.
+    pub fn new(params: FlagDefinitionParams) -> Self {
+        Self {
+            flag_type: params.flag_type,
+            default: params.default,
+            enabled: params.enabled,
+            overrides: params.overrides,
+            rollout_percentage: params.rollout_percentage,
+            rollout_variant: params.rollout_variant,
+        }
+    }
+
+    /// The declared type of this flag.
+    pub fn flag_type(&self) -> &FlagType {
+        &self.flag_type
+    }
+
+    /// The default value returned when no override or rollout applies.
+    pub fn default_value(&self) -> &FlagValue {
+        &self.default
+    }
+
+    /// Whether the flag is enabled. When `false`, acts as a kill switch and
+    /// returns the default value regardless of overrides or rollout.
+    pub fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// The list of targeted overrides for this flag.
+    pub fn overrides(&self) -> &[FlagOverride] {
+        &self.overrides
+    }
+
+    /// The rollout percentage (0–100), if set.
+    pub fn rollout_percentage(&self) -> Option<u8> {
+        self.rollout_percentage
+    }
+
+    /// The value to return when a user falls within the rollout, if set.
+    pub fn rollout_variant(&self) -> Option<&FlagValue> {
+        self.rollout_variant.as_ref()
+    }
 }
 
 // ---------------------------------------------------------------------------

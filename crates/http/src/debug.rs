@@ -143,19 +143,21 @@ mod tests {
 
     #[test]
     fn evaluate_debug_returns_detailed_flags() {
-        use forgeguard_core::{FlagConfig, FlagDefinition, FlagName, FlagType, FlagValue};
+        use forgeguard_core::{
+            FlagConfig, FlagDefinition, FlagDefinitionParams, FlagName, FlagType, FlagValue,
+        };
 
         let mut config = FlagConfig::default();
         config.flags.insert(
             FlagName::parse("test-flag").unwrap(),
-            FlagDefinition {
+            FlagDefinition::new(FlagDefinitionParams {
                 flag_type: FlagType::Boolean,
                 default: FlagValue::Bool(true),
                 enabled: true,
                 overrides: vec![],
                 rollout_percentage: None,
                 rollout_variant: None,
-            },
+            }),
         );
 
         let query = FlagDebugQuery::parse("user_id=alice").unwrap();
