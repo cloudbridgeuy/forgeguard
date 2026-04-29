@@ -13,8 +13,9 @@ use forgeguard_core::ResolvedFlags;
 /// with `Anonymous` auth mode) or if the middleware has not run.
 ///
 /// PDV exception: the inner field is intentionally `pub` so handlers can
-/// destructure the extractor in parameter position. A private field with
-/// `into_inner()` would break the canonical Axum extractor shape.
+/// destructure the extractor in parameter position. A private field would
+/// prevent destructuring in handler parameter position, which is the idiomatic
+/// Axum extractor usage.
 ///
 /// # Example
 ///
@@ -40,8 +41,9 @@ pub struct ForgeGuardIdentity(pub Option<Identity>);
 /// middleware has not run.
 ///
 /// PDV exception: the inner field is intentionally `pub` so handlers can
-/// destructure the extractor in parameter position. A private field with
-/// `into_inner()` would break the canonical Axum extractor shape.
+/// destructure the extractor in parameter position. A private field would
+/// prevent destructuring in handler parameter position, which is the idiomatic
+/// Axum extractor usage.
 ///
 /// # Example
 ///
