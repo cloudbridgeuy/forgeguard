@@ -6,6 +6,7 @@ use color_eyre::eyre::{bail, Result};
 use ed25519_dalek::pkcs8::spki::der::pem::LineEnding;
 use ed25519_dalek::pkcs8::EncodePrivateKey as _;
 use ed25519_dalek::pkcs8::EncodePublicKey as _;
+use forgeguard_authn_core::signing::KeyId;
 
 const PRIVATE_KEY_FILENAME: &str = "forgeguard.private.pem";
 const PUBLIC_KEY_FILENAME: &str = "forgeguard.public.pem";
@@ -34,8 +35,8 @@ pub(crate) fn run(out_dir: &Path, key_id: Option<&str>, force: bool) -> Result<(
     }
 
     let key_id = match key_id {
-        Some(id) => id.to_string(),
-        None => generate_key_id(),
+        Some(id) => KeyId::try_from(id.to_string())?,
+        None => generate_key_id()?,
     };
 
     let mut rng = rand::thread_rng();
@@ -72,10 +73,32 @@ pub(crate) fn run(out_dir: &Path, key_id: Option<&str>, force: bool) -> Result<(
     Ok(())
 }
 
-fn generate_key_id() -> String {
-    let date = chrono::Utc::now().format("%Y%m%d");
+/// Format a key id string from its parts. Pure — no clock, no rng.
+fn format_key_id(date: &str, hex_entropy: &str) -> String {
+    format!("fg-{date}-{hex_entropy}")
+}
+
+fn generate_key_id() -> Result<KeyId> {
+    let date = chrono::Utc::now().format("%Y%m%d").to_string();
     let hex: String = (0..6)
         .map(|_| format!("{:x}", rand::random::<u8>() % 16))
         .collect();
-    format!("fg-{date}-{hex}")
+    let raw = format_key_id(&date, &hex);
+    KeyId::try_from(raw).map_err(Into::into)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_key_id_combines_parts() {
+        assert_eq!(format_key_id("20260429", "a1b2c3"), "fg-20260429-a1b2c3");
+    }
+
+    #[test]
+    fn format_key_id_empty_parts() {
+        assert_eq!(format_key_id("", ""), "fg--");
+    }
 }
