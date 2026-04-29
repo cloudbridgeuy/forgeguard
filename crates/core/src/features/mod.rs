@@ -1,5 +1,8 @@
 //! Feature flag types and pure evaluation logic.
 
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
+
 use std::collections::HashMap;
 use std::fmt;
 
@@ -114,11 +117,48 @@ pub enum FlagType {
 /// A targeted override for a feature flag.
 #[derive(Debug, Clone, Deserialize)]
 pub struct FlagOverride {
-    pub tenant: Option<TenantId>,
-    pub user: Option<UserId>,
+    tenant: Option<TenantId>,
+    user: Option<UserId>,
     #[serde(default)]
-    pub group: Option<GroupName>,
-    pub value: FlagValue,
+    group: Option<GroupName>,
+    value: FlagValue,
+}
+
+impl FlagOverride {
+    /// Construct a new override targeting the given (optional) tenant/user/group with the given value.
+    pub fn new(
+        tenant: Option<TenantId>,
+        user: Option<UserId>,
+        group: Option<GroupName>,
+        value: FlagValue,
+    ) -> Self {
+        Self {
+            tenant,
+            user,
+            group,
+            value,
+        }
+    }
+
+    /// Tenant scope of this override, if any.
+    pub fn tenant(&self) -> Option<&TenantId> {
+        self.tenant.as_ref()
+    }
+
+    /// User scope of this override, if any.
+    pub fn user(&self) -> Option<&UserId> {
+        self.user.as_ref()
+    }
+
+    /// Group scope of this override, if any.
+    pub fn group(&self) -> Option<&GroupName> {
+        self.group.as_ref()
+    }
+
+    /// Value to return when this override matches.
+    pub fn value(&self) -> &FlagValue {
+        &self.value
+    }
 }
 
 // ---------------------------------------------------------------------------

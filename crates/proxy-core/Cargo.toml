@@ -24,6 +24,7 @@ thiserror = { workspace = true }
 [dev-dependencies]
 forgeguard_authn_core = { workspace = true } #unified
 forgeguard_authz_core = { workspace = true } #unified
+forgeguard_core = { workspace = true, features = ["testing"] }
 tokio = { workspace = true, features = ["macros", "rt"] }
 
 [lints]

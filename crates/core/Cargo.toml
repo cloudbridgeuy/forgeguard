@@ -24,5 +24,8 @@ xxhash-rust = { workspace = true }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 uuid = { workspace = true, features = ["js"] }
 
+[features]
+testing = []
+
 [lints]
 workspace = true

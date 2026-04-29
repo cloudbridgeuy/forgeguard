@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use super::*;
+use crate::features::testing::make_flag_override;
 
 // -- FlagName parsing ----------------------------------------------------
 
@@ -95,19 +96,19 @@ fn user_tenant_override_wins_over_tenant_only() {
             enabled: true,
             overrides: vec![
                 // Tenant-only override (less specific)
-                FlagOverride {
-                    tenant: Some(TenantId::new("acme").unwrap()),
-                    user: None,
-                    group: None,
-                    value: FlagValue::Bool(false),
-                },
+                make_flag_override(
+                    Some(TenantId::new("acme").unwrap()),
+                    None,
+                    None,
+                    FlagValue::Bool(false),
+                ),
                 // User+tenant override (more specific, listed second but scanned first by design)
-                FlagOverride {
-                    tenant: Some(TenantId::new("acme").unwrap()),
-                    user: Some(UserId::new("alice").unwrap()),
-                    group: None,
-                    value: FlagValue::Bool(true),
-                },
+                make_flag_override(
+                    Some(TenantId::new("acme").unwrap()),
+                    Some(UserId::new("alice").unwrap()),
+                    None,
+                    FlagValue::Bool(true),
+                ),
             ],
             rollout_percentage: None,
             rollout_variant: None,
@@ -129,19 +130,19 @@ fn user_tenant_override_wins_over_tenant_only() {
             enabled: true,
             overrides: vec![
                 // User+tenant override (more specific, listed first)
-                FlagOverride {
-                    tenant: Some(TenantId::new("acme").unwrap()),
-                    user: Some(UserId::new("alice").unwrap()),
-                    group: None,
-                    value: FlagValue::Bool(true),
-                },
+                make_flag_override(
+                    Some(TenantId::new("acme").unwrap()),
+                    Some(UserId::new("alice").unwrap()),
+                    None,
+                    FlagValue::Bool(true),
+                ),
                 // Tenant-only override (less specific)
-                FlagOverride {
-                    tenant: Some(TenantId::new("acme").unwrap()),
-                    user: None,
-                    group: None,
-                    value: FlagValue::Bool(false),
-                },
+                make_flag_override(
+                    Some(TenantId::new("acme").unwrap()),
+                    None,
+                    None,
+                    FlagValue::Bool(false),
+                ),
             ],
             rollout_percentage: None,
             rollout_variant: None,
@@ -167,12 +168,12 @@ fn user_override_wins_over_rollout() {
             flag_type: FlagType::Boolean,
             default: FlagValue::Bool(false),
             enabled: true,
-            overrides: vec![FlagOverride {
-                tenant: None,
-                user: Some(UserId::new("alice").unwrap()),
-                group: None,
-                value: FlagValue::Bool(true),
-            }],
+            overrides: vec![make_flag_override(
+                None,
+                Some(UserId::new("alice").unwrap()),
+                None,
+                FlagValue::Bool(true),
+            )],
             rollout_percentage: Some(0), // 0% rollout — nobody gets it
             rollout_variant: None,
         },
@@ -191,12 +192,12 @@ fn tenant_override_wins_over_rollout_and_default() {
             flag_type: FlagType::Boolean,
             default: FlagValue::Bool(false),
             enabled: true,
-            overrides: vec![FlagOverride {
-                tenant: Some(TenantId::new("acme").unwrap()),
-                user: None,
-                group: None,
-                value: FlagValue::Bool(true),
-            }],
+            overrides: vec![make_flag_override(
+                Some(TenantId::new("acme").unwrap()),
+                None,
+                None,
+                FlagValue::Bool(true),
+            )],
             rollout_percentage: Some(0),
             rollout_variant: None,
         },
@@ -216,12 +217,12 @@ fn kill_switch_ignores_everything() {
             flag_type: FlagType::Boolean,
             default: FlagValue::Bool(false),
             enabled: false, // kill switch
-            overrides: vec![FlagOverride {
-                tenant: None,
-                user: Some(UserId::new("alice").unwrap()),
-                group: None,
-                value: FlagValue::Bool(true),
-            }],
+            overrides: vec![make_flag_override(
+                None,
+                Some(UserId::new("alice").unwrap()),
+                None,
+                FlagValue::Bool(true),
+            )],
             rollout_percentage: Some(100),
             rollout_variant: None,
         },
@@ -240,12 +241,12 @@ fn string_variant_tenant_override() {
             flag_type: FlagType::String,
             default: FlagValue::String("classic".to_string()),
             enabled: true,
-            overrides: vec![FlagOverride {
-                tenant: Some(TenantId::new("acme").unwrap()),
-                user: None,
-                group: None,
-                value: FlagValue::String("modern".to_string()),
-            }],
+            overrides: vec![make_flag_override(
+                Some(TenantId::new("acme").unwrap()),
+                None,
+                None,
+                FlagValue::String("modern".to_string()),
+            )],
             rollout_percentage: None,
             rollout_variant: None,
         },
@@ -268,12 +269,12 @@ fn numeric_flag_tenant_override() {
             flag_type: FlagType::Number,
             default: FlagValue::Number(10.0),
             enabled: true,
-            overrides: vec![FlagOverride {
-                tenant: Some(TenantId::new("acme").unwrap()),
-                user: None,
-                group: None,
-                value: FlagValue::Number(50.0),
-            }],
+            overrides: vec![make_flag_override(
+                Some(TenantId::new("acme").unwrap()),
+                None,
+                None,
+                FlagValue::Number(50.0),
+            )],
             rollout_percentage: None,
             rollout_variant: None,
         },
@@ -502,12 +503,12 @@ fn group_override_matches_when_user_in_group() {
             flag_type: FlagType::Boolean,
             default: FlagValue::Bool(false),
             enabled: true,
-            overrides: vec![FlagOverride {
-                tenant: None,
-                user: None,
-                group: Some(GroupName::new("admin").unwrap()),
-                value: FlagValue::Bool(true),
-            }],
+            overrides: vec![make_flag_override(
+                None,
+                None,
+                Some(GroupName::new("admin").unwrap()),
+                FlagValue::Bool(true),
+            )],
             rollout_percentage: None,
             rollout_variant: None,
         },
@@ -527,12 +528,12 @@ fn group_override_skipped_when_user_not_in_group() {
             flag_type: FlagType::Boolean,
             default: FlagValue::Bool(false),
             enabled: true,
-            overrides: vec![FlagOverride {
-                tenant: None,
-                user: None,
-                group: Some(GroupName::new("admin").unwrap()),
-                value: FlagValue::Bool(true),
-            }],
+            overrides: vec![make_flag_override(
+                None,
+                None,
+                Some(GroupName::new("admin").unwrap()),
+                FlagValue::Bool(true),
+            )],
             rollout_percentage: None,
             rollout_variant: None,
         },
@@ -552,12 +553,12 @@ fn group_override_matches_any_of_users_groups() {
             flag_type: FlagType::Boolean,
             default: FlagValue::Bool(false),
             enabled: true,
-            overrides: vec![FlagOverride {
-                tenant: None,
-                user: None,
-                group: Some(GroupName::new("ops").unwrap()),
-                value: FlagValue::Bool(true),
-            }],
+            overrides: vec![make_flag_override(
+                None,
+                None,
+                Some(GroupName::new("ops").unwrap()),
+                FlagValue::Bool(true),
+            )],
             rollout_percentage: None,
             rollout_variant: None,
         },
@@ -580,12 +581,12 @@ fn tenant_and_group_override_both_must_match() {
             flag_type: FlagType::Boolean,
             default: FlagValue::Bool(false),
             enabled: true,
-            overrides: vec![FlagOverride {
-                tenant: Some(TenantId::new("acme").unwrap()),
-                user: None,
-                group: Some(GroupName::new("admin").unwrap()),
-                value: FlagValue::Bool(true),
-            }],
+            overrides: vec![make_flag_override(
+                Some(TenantId::new("acme").unwrap()),
+                None,
+                Some(GroupName::new("admin").unwrap()),
+                FlagValue::Bool(true),
+            )],
             rollout_percentage: None,
             rollout_variant: None,
         },
@@ -618,12 +619,7 @@ fn no_group_override_field_matches_any_groups() {
             flag_type: FlagType::Boolean,
             default: FlagValue::Bool(false),
             enabled: true,
-            overrides: vec![FlagOverride {
-                tenant: None,
-                user: None,
-                group: None,
-                value: FlagValue::Bool(true),
-            }],
+            overrides: vec![make_flag_override(None, None, None, FlagValue::Bool(true))],
             rollout_percentage: None,
             rollout_variant: None,
         },
@@ -665,12 +661,12 @@ fn detailed_override_reason_with_tenant() {
             flag_type: FlagType::Boolean,
             default: FlagValue::Bool(false),
             enabled: true,
-            overrides: vec![FlagOverride {
-                tenant: Some(TenantId::new("acme").unwrap()),
-                user: None,
-                group: None,
-                value: FlagValue::Bool(true),
-            }],
+            overrides: vec![make_flag_override(
+                Some(TenantId::new("acme").unwrap()),
+                None,
+                None,
+                FlagValue::Bool(true),
+            )],
             rollout_percentage: None,
             rollout_variant: None,
         },
@@ -699,12 +695,12 @@ fn detailed_override_reason_with_group() {
             flag_type: FlagType::Boolean,
             default: FlagValue::Bool(false),
             enabled: true,
-            overrides: vec![FlagOverride {
-                tenant: None,
-                user: None,
-                group: Some(GroupName::new("admin").unwrap()),
-                value: FlagValue::Bool(true),
-            }],
+            overrides: vec![make_flag_override(
+                None,
+                None,
+                Some(GroupName::new("admin").unwrap()),
+                FlagValue::Bool(true),
+            )],
             rollout_percentage: None,
             rollout_variant: None,
         },
@@ -829,4 +825,47 @@ fn detailed_json_serialization() {
         Some("default"),
         "reason.kind should be 'default'"
     );
+}
+
+// -- FlagOverride construction (V1) --------------------------------------
+
+mod flag_override_construction {
+    use crate::features::testing::make_flag_override;
+    use crate::{FlagOverride, FlagValue, GroupName, TenantId, UserId};
+
+    fn sample_value() -> FlagValue {
+        FlagValue::Bool(true)
+    }
+
+    #[test]
+    fn new_with_all_scopes_populated() {
+        let tenant = TenantId::new("tenant-a").unwrap();
+        let user = UserId::new("user-1").unwrap();
+        let group = GroupName::new("admins").unwrap();
+        let ov = FlagOverride::new(
+            Some(tenant.clone()),
+            Some(user.clone()),
+            Some(group.clone()),
+            sample_value(),
+        );
+        assert_eq!(ov.tenant(), Some(&tenant));
+        assert_eq!(ov.user(), Some(&user));
+        assert_eq!(ov.group(), Some(&group));
+        assert!(matches!(ov.value(), FlagValue::Bool(true)));
+    }
+
+    #[test]
+    fn new_with_no_scopes_is_unconditional() {
+        let ov = FlagOverride::new(None, None, None, sample_value());
+        assert!(ov.tenant().is_none());
+        assert!(ov.user().is_none());
+        assert!(ov.group().is_none());
+    }
+
+    #[test]
+    fn make_flag_override_roundtrips_through_new() {
+        let user = UserId::new("user-1").unwrap();
+        let ov = make_flag_override(None, Some(user.clone()), None, sample_value());
+        assert_eq!(ov.user(), Some(&user));
+    }
 }
