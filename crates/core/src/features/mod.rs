@@ -397,15 +397,15 @@ fn resolve_single_flag_detailed(
     groups: &[GroupName],
 ) -> ResolvedFlag {
     // 0. Kill switch
-    if !flag.enabled {
+    if !flag.enabled() {
         return ResolvedFlag {
-            value: flag.default.clone(),
+            value: flag.default_value().clone(),
             reason: ResolutionReason::KillSwitch,
         };
     }
 
     // 1. Override scan (first match wins)
-    for ov in &flag.overrides {
+    for ov in flag.overrides() {
         let user_matches = ov.user().is_none_or(|u| u == user_id);
         let tenant_matches = match (ov.tenant(), tenant_id) {
             (Some(t), Some(tid)) => t == tid,
@@ -426,14 +426,14 @@ fn resolve_single_flag_detailed(
     }
 
     // 2. Rollout bucket
-    if let Some(pct) = flag.rollout_percentage {
+    if let Some(pct) = flag.rollout_percentage() {
         let name_str = name.to_string();
         let bucket = deterministic_bucket(&name_str, tenant_id, user_id);
         if bucket < pct {
             return ResolvedFlag {
                 value: flag
-                    .rollout_variant
-                    .clone()
+                    .rollout_variant()
+                    .cloned()
                     .unwrap_or(FlagValue::Bool(true)),
                 reason: ResolutionReason::Rollout {
                     bucket: bucket as u64,
@@ -442,7 +442,7 @@ fn resolve_single_flag_detailed(
             };
         }
         return ResolvedFlag {
-            value: flag.default.clone(),
+            value: flag.default_value().clone(),
             reason: ResolutionReason::RolloutExcluded {
                 bucket: bucket as u64,
                 threshold: pct as u64,
@@ -452,7 +452,7 @@ fn resolve_single_flag_detailed(
 
     // 3. Default
     ResolvedFlag {
-        value: flag.default.clone(),
+        value: flag.default_value().clone(),
         reason: ResolutionReason::Default,
     }
 }
@@ -465,12 +465,12 @@ fn resolve_single_flag(
     groups: &[GroupName],
 ) -> FlagValue {
     // 0. Kill switch
-    if !flag.enabled {
-        return flag.default.clone();
+    if !flag.enabled() {
+        return flag.default_value().clone();
     }
 
     // 1. Override scan (first match wins — config author controls order)
-    for ov in &flag.overrides {
+    for ov in flag.overrides() {
         let user_matches = ov.user().is_none_or(|u| u == user_id);
         let tenant_matches = match (ov.tenant(), tenant_id) {
             (Some(t), Some(tid)) => t == tid,
@@ -484,19 +484,19 @@ fn resolve_single_flag(
     }
 
     // 2. Rollout bucket
-    if let Some(pct) = flag.rollout_percentage {
+    if let Some(pct) = flag.rollout_percentage() {
         let name_str = name.to_string();
         let bucket = deterministic_bucket(&name_str, tenant_id, user_id);
         if bucket < pct {
             return flag
-                .rollout_variant
-                .clone()
+                .rollout_variant()
+                .cloned()
                 .unwrap_or(FlagValue::Bool(true));
         }
     }
 
     // 3. Default
-    flag.default.clone()
+    flag.default_value().clone()
 }
 
 fn deterministic_bucket(flag: &str, tenant: Option<&TenantId>, user: &UserId) -> u8 {
