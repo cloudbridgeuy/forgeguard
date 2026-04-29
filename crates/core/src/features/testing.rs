@@ -1,22 +1,19 @@
-//! Test-only constructors for feature-flag types.
+//! Test-only constructors for feature-flag types whose constructors take
+//! enough positional arguments to make call sites hard to read.
 //!
-//! Gated behind `cfg(any(test, feature = "testing"))` so the helpers are
-//! available to in-crate tests automatically and to other crates' tests
-//! when they opt in via `[dev-dependencies] forgeguard_core = { ..., features = ["testing"] }`.
+//! Not every flag type has a builder here. `FlagDefinition` is intentionally
+//! absent: `FlagDefinitionParams` (the workspace Params-struct pattern) already
+//! provides named-field construction, so callers should use
+//! `FlagDefinition::new(FlagDefinitionParams { ... })` directly.
 //!
-//! These are pure builders (Functional Core). They wrap the public
-//! `new()` constructors and exist solely to keep test-site syntax close
-//! to the legacy struct-literal style.
-//!
-//! For `FlagDefinition`, call `FlagDefinition::new(FlagDefinitionParams { ... })` directly —
-//! no wrapper is needed.
+//! Available to in-crate tests automatically. Other crates opt in via
+//! `[dev-dependencies] forgeguard_core = { ..., features = ["testing"] }`.
 
 use crate::{
     FlagConfig, FlagDefinition, FlagName, FlagOverride, FlagValue, GroupName, TenantId, UserId,
 };
 
-/// Build a `FlagOverride` from individual scope parts. Equivalent to `FlagOverride::new`,
-/// kept here so test-site syntax will be uniform with `make_flag_config`.
+/// Build a `FlagOverride` from individual scope parts.
 pub fn make_flag_override(
     tenant: Option<TenantId>,
     user: Option<UserId>,
