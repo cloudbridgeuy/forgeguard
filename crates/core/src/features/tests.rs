@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use super::*;
-use crate::features::testing::make_flag_override;
+use crate::features::testing::{make_flag_config, make_flag_override};
 
 // -- FlagName parsing ----------------------------------------------------
 
@@ -81,7 +81,6 @@ fn is_in_namespace_scoped_wrong_namespace() {
 // -- Override hierarchy --------------------------------------------------
 
 fn make_config(name: &str, def: FlagDefinition) -> FlagConfig {
-    use crate::features::testing::make_flag_config;
     make_flag_config([(FlagName::parse(name).unwrap(), def)])
 }
 
@@ -308,7 +307,6 @@ fn rollout_is_deterministic() {
 
 #[test]
 fn rollout_distribution_approximately_correct() {
-    use crate::features::testing::make_flag_config;
     let flag_name = FlagName::parse("test-rollout").unwrap();
     let config = make_flag_config([(
         flag_name,

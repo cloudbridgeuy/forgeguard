@@ -8,9 +8,8 @@
 //! `new()` constructors and exist solely to keep test-site syntax close
 //! to the legacy struct-literal style.
 //!
-//! `make_flag_config` will be added in V3. For `FlagDefinition`, call
-//! `FlagDefinition::new(FlagDefinitionParams { ... })` directly — no wrapper
-//! is needed.
+//! For `FlagDefinition`, call `FlagDefinition::new(FlagDefinitionParams { ... })` directly —
+//! no wrapper is needed.
 
 use crate::{
     FlagConfig, FlagDefinition, FlagName, FlagOverride, FlagValue, GroupName, TenantId, UserId,
