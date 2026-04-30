@@ -187,6 +187,11 @@ pub(crate) async fn list_handler<S: OrgStore>(
     }
 }
 
+#[tracing::instrument(
+    name = "proxy_config",
+    skip_all,
+    fields(org_id = %raw_org_id, if_none_match_hit = tracing::field::Empty),
+)]
 pub(crate) async fn proxy_config_handler<S: OrgStore>(
     ForgeGuardIdentity(_identity): ForgeGuardIdentity,
     Path(raw_org_id): Path<String>,
@@ -221,27 +226,35 @@ pub(crate) async fn proxy_config_handler<S: OrgStore>(
             .into_response();
     };
 
-    // ETag check
-    if headers
+    let if_none_match_parsed = headers
         .get(axum::http::header::IF_NONE_MATCH)
         .and_then(|v| v.to_str().ok())
-        .is_some_and(|e| e == configured.etag().as_str())
-    {
-        return StatusCode::NOT_MODIFIED.into_response();
-    }
+        .and_then(etag::parse_if_match);
 
-    // Return config with ETag
-    let mut response_headers = HeaderMap::new();
-    if let Ok(val) = configured.etag().as_str().parse() {
-        response_headers.insert(axum::http::header::ETAG, val);
-    }
+    // Build response headers once — ETag is echoed on both 304 and 200 (RFC 7232 §4.1).
+    let response_headers = etag_header_map(Some(configured.etag()));
 
-    (
-        StatusCode::OK,
-        response_headers,
-        Json(configured.config().clone()),
-    )
-        .into_response()
+    match etag::check_if_none_match(if_none_match_parsed, Some(configured.etag())) {
+        IfNoneMatchResult::Matched | IfNoneMatchResult::WildcardMatched => {
+            tracing::Span::current().record("if_none_match_hit", true);
+            (
+                StatusCode::NOT_MODIFIED,
+                response_headers,
+                axum::body::Body::empty(),
+            )
+                .into_response()
+        }
+        // NotMatched: header absent, stale etag, or strong match against a
+        // Draft org — return the full config.
+        // WildcardOnDraft: unreachable here because the Draft branch above
+        // already returned 409; matched exhaustively to keep the call site total.
+        IfNoneMatchResult::NotMatched | IfNoneMatchResult::WildcardOnDraft => (
+            StatusCode::OK,
+            response_headers,
+            Json(configured.config().clone()),
+        )
+            .into_response(),
+    }
 }
 
 #[derive(Debug, Deserialize)]
