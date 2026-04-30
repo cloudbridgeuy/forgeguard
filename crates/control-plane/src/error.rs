@@ -28,7 +28,8 @@ pub(crate) enum Error {
     Store(String),
     /// A group write was rejected by field-level validation.
     ///
-    /// Constructed by Group D handlers. The allow below is removed when Group D lands.
+    /// Reserved for Group E (DynamoDB store validation path). Group D handlers
+    /// use `GroupHandlerError::Validation` directly.
     #[allow(dead_code)]
     #[error("group validation failed: {reason}")]
     Validation {
@@ -37,7 +38,8 @@ pub(crate) enum Error {
     /// A group cannot be deleted because it is still referenced by inheritors
     /// or has active memberships.
     ///
-    /// Constructed by Group D handlers. The allow below is removed when Group D lands.
+    /// Reserved for Group E (DynamoDB store path). Group D handlers use
+    /// `GroupHandlerError::DeleteConflict` directly.
     #[allow(dead_code)]
     #[error(
         "delete conflict: blocking_inheritors={blocking_inheritors:?}, memberships_count={memberships_count:?}"

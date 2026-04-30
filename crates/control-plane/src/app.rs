@@ -144,6 +144,11 @@ const API_ROUTES: &[(&str, &str)] = &[
         "POST",
         "/api/v1/organizations/{org_id}/keys/{key_id}/rotate",
     ),
+    ("POST", "/api/v1/organizations/{org_id}/groups"),
+    ("GET", "/api/v1/organizations/{org_id}/groups"),
+    ("GET", "/api/v1/organizations/{org_id}/groups/{name}"),
+    ("PUT", "/api/v1/organizations/{org_id}/groups/{name}"),
+    ("DELETE", "/api/v1/organizations/{org_id}/groups/{name}"),
 ];
 
 /// Route-to-action mappings for all control-plane API routes.
@@ -207,6 +212,36 @@ fn cp_route_actions() -> forgeguard_http::Result<Vec<RouteMapping>> {
             "POST",
             "/api/v1/organizations/{org_id}/keys/{key_id}/rotate",
             "cp:key:rotate",
+            Some("org_id"),
+        ),
+        (
+            "POST",
+            "/api/v1/organizations/{org_id}/groups",
+            "cp:group:create",
+            Some("org_id"),
+        ),
+        (
+            "GET",
+            "/api/v1/organizations/{org_id}/groups",
+            "cp:group:read",
+            Some("org_id"),
+        ),
+        (
+            "GET",
+            "/api/v1/organizations/{org_id}/groups/{name}",
+            "cp:group:read",
+            Some("org_id"),
+        ),
+        (
+            "PUT",
+            "/api/v1/organizations/{org_id}/groups/{name}",
+            "cp:group:update",
+            Some("org_id"),
+        ),
+        (
+            "DELETE",
+            "/api/v1/organizations/{org_id}/groups/{name}",
+            "cp:group:delete",
             Some("org_id"),
         ),
     ];
@@ -360,6 +395,16 @@ fn build_router<S: OrgStore + 'static>(store: Arc<S>, fg: Arc<ForgeGuard>) -> Ro
             "/api/v1/organizations/{org_id}/keys/{key_id}/rotate",
             axum::routing::post(handlers::rotate_key_handler::<S>),
         )
+        .route(
+            "/api/v1/organizations/{org_id}/groups",
+            post(handlers::groups::create_handler::<S>).get(handlers::groups::list_handler::<S>),
+        )
+        .route(
+            "/api/v1/organizations/{org_id}/groups/{name}",
+            get(handlers::groups::get_handler::<S>)
+                .put(handlers::groups::update_handler::<S>)
+                .delete(handlers::groups::delete_handler::<S>),
+        )
         .with_state(store)
         .layer(axum::middleware::from_fn_with_state(fg, forgeguard_layer))
         .layer(TraceLayer::new_for_http())
@@ -379,8 +424,8 @@ mod tests {
         let mappings = cp_route_actions().expect("cp_route_actions must not fail");
         assert_eq!(
             mappings.len(),
-            10,
-            "expected 10 route mappings, got {}",
+            15,
+            "expected 15 route mappings, got {}",
             mappings.len()
         );
         // Confirm each action string round-trips correctly through QualifiedAction
@@ -395,6 +440,11 @@ mod tests {
             "cp:key:read",
             "cp:key:revoke",
             "cp:key:rotate",
+            "cp:group:create",
+            "cp:group:read",
+            "cp:group:read",
+            "cp:group:update",
+            "cp:group:delete",
         ];
         for (mapping, expected) in mappings.iter().zip(expected_actions.iter()) {
             assert_eq!(
@@ -450,6 +500,31 @@ mod tests {
                 "POST",
                 "/api/v1/organizations/org-123/keys/key-456/rotate",
                 "cp:key:rotate",
+            ),
+            (
+                "POST",
+                "/api/v1/organizations/org-123/groups",
+                "cp:group:create",
+            ),
+            (
+                "GET",
+                "/api/v1/organizations/org-123/groups",
+                "cp:group:read",
+            ),
+            (
+                "GET",
+                "/api/v1/organizations/org-123/groups/admin",
+                "cp:group:read",
+            ),
+            (
+                "PUT",
+                "/api/v1/organizations/org-123/groups/admin",
+                "cp:group:update",
+            ),
+            (
+                "DELETE",
+                "/api/v1/organizations/org-123/groups/admin",
+                "cp:group:delete",
             ),
         ];
 

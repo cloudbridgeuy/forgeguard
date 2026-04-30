@@ -21,9 +21,6 @@ pub(crate) enum PreconditionReason {
     /// Caller sent `If-Match: *` on a Draft org (no stored representation).
     WildcardOnDraft,
     /// `PUT`/`DELETE` on a group requires `If-Match`, but the header was absent.
-    ///
-    /// Constructed by Group D handlers. The allow below is removed when Group D lands.
-    #[allow(dead_code)]
     MissingIfMatch,
 }
 

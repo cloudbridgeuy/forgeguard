@@ -567,6 +567,17 @@ pub(super) mod test_support {
                 "/api/v1/organizations/{org_id}/keys/{key_id}/rotate",
                 axum::routing::post(super::keys::rotate_key_handler::<InMemoryOrgStore>),
             )
+            .route(
+                "/api/v1/organizations/{org_id}/groups",
+                axum::routing::post(super::groups::create_handler::<InMemoryOrgStore>)
+                    .get(super::groups::list_handler::<InMemoryOrgStore>),
+            )
+            .route(
+                "/api/v1/organizations/{org_id}/groups/{name}",
+                axum::routing::get(super::groups::get_handler::<InMemoryOrgStore>)
+                    .put(super::groups::update_handler::<InMemoryOrgStore>)
+                    .delete(super::groups::delete_handler::<InMemoryOrgStore>),
+            )
             .route("/metrics", axum::routing::get(super::metrics_handler))
             .with_state(store)
             .layer(axum::middleware::from_fn_with_state(fg, forgeguard_layer))

@@ -88,7 +88,6 @@ pub(crate) trait OrgStore: Send + Sync {
     // -----------------------------------------------------------------------
 
     /// Retrieve a single group by name, or `None` if it does not exist.
-    #[allow(dead_code)] // consumed by Group D handler bodies
     fn get_group(
         &self,
         org_id: &OrganizationId,
@@ -104,7 +103,6 @@ pub(crate) trait OrgStore: Send + Sync {
     /// | `(Some(e), Some(t))` where `e.etag() == t` | Update |
     /// | `(Some(e), Some(t))` where `e.etag() != t` | `PreconditionFailed` |
     /// | `(None, Some(_))`           | `PreconditionFailed { current_etag: "" }` |
-    #[allow(dead_code)] // consumed by Group D handler bodies
     fn put_group(
         &self,
         org_id: &OrganizationId,
@@ -113,7 +111,6 @@ pub(crate) trait OrgStore: Send + Sync {
     ) -> impl std::future::Future<Output = Result<EtagedGroup>> + Send;
 
     /// List all groups for an org, sorted ascending by name.
-    #[allow(dead_code)] // consumed by Group D handler bodies
     fn list_groups(
         &self,
         org_id: &OrganizationId,
@@ -124,7 +121,6 @@ pub(crate) trait OrgStore: Send + Sync {
     /// Callers MUST verify no live memberships (via `count_memberships_for_group`)
     /// and no inheritors (via `list_inheritors`) exist before calling this method;
     /// `delete_group` does not re-check these constraints.
-    #[allow(dead_code)] // consumed by Group D handler bodies
     fn delete_group(
         &self,
         org_id: &OrganizationId,
@@ -133,7 +129,6 @@ pub(crate) trait OrgStore: Send + Sync {
     ) -> impl std::future::Future<Output = Result<()>> + Send;
 
     /// Return the names of groups that list `name` in their `inherits` field.
-    #[allow(dead_code)] // consumed by Group D handler bodies
     fn list_inheritors(
         &self,
         org_id: &OrganizationId,
@@ -141,7 +136,6 @@ pub(crate) trait OrgStore: Send + Sync {
     ) -> impl std::future::Future<Output = Result<Vec<String>>> + Send;
 
     /// Return the count of users in the given group, keyed by user id.
-    #[allow(dead_code)] // consumed by Group D handler bodies
     fn count_memberships_for_group(
         &self,
         org_id: &OrganizationId,
@@ -149,7 +143,9 @@ pub(crate) trait OrgStore: Send + Sync {
     ) -> impl std::future::Future<Output = Result<BTreeMap<String, u32>>> + Send;
 
     /// Return `true` iff `name` is a declared (written) group for the org.
-    #[allow(dead_code)] // consumed by Group D handler bodies
+    ///
+    /// Reserved for Group E (Cedar sync validation). Not yet called by Group D handlers.
+    #[allow(dead_code)]
     fn is_declared_group(
         &self,
         org_id: &OrganizationId,
@@ -229,15 +225,11 @@ pub(crate) struct InMemoryOrgStore {
     orgs: tokio::sync::RwLock<BTreeMap<OrganizationId, OrgRecord>>,
     signing_keys: tokio::sync::RwLock<BTreeMap<OrganizationId, Vec<SigningKeyEntry>>>,
     /// `(org_id, group_name)` → stored group + etag.
-    // consumed by group-method impls and test helper (Group D)
-    #[allow(dead_code)]
     groups: tokio::sync::RwLock<BTreeMap<(OrganizationId, String), EtagedGroup>>,
     /// `(org_id, user_id)` → group names the user belongs to.
     ///
     /// Added in V2 to allow delete-conflict pre-checks to be exercised in
     /// InMemory tests. Production memberships live in DynamoDB only (Group E).
-    // consumed by count_memberships_for_group (Group D)
-    #[allow(dead_code)]
     memberships_to_groups: tokio::sync::RwLock<BTreeMap<(OrganizationId, String), Vec<String>>>,
 }
 

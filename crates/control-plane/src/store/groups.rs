@@ -21,7 +21,6 @@ pub(crate) struct EtagedGroup {
 
 impl EtagedGroup {
     /// Build from an `RbacEntry`, computing the etag from its contents.
-    #[allow(dead_code)] // consumed by Group D/E handler bodies
     pub(crate) fn compute(entry: RbacEntry) -> Result<Self> {
         let etag = crate::handlers::groups::pure::compute_group_etag(&entry)?;
         Ok(Self { entry, etag })
@@ -29,17 +28,15 @@ impl EtagedGroup {
 
     /// Build from an already-paired (entry, etag) — e.g. when reconstituting
     /// an `EtagedGroup` from a DynamoDB item.
-    #[allow(dead_code)] // consumed by Group E (DynamoDB codec)
+    #[allow(dead_code)] // consumed by Group E (DynamoDB codec) — not yet wired
     pub(crate) fn from_stored(entry: RbacEntry, etag: String) -> Self {
         Self { entry, etag }
     }
 
-    #[allow(dead_code)] // consumed by Group D/E handler bodies
     pub(crate) fn entry(&self) -> &RbacEntry {
         &self.entry
     }
 
-    #[allow(dead_code)] // consumed by Group D/E handler bodies
     pub(crate) fn etag(&self) -> &str {
         &self.etag
     }

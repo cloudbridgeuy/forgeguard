@@ -31,7 +31,6 @@ use super::{CreateGroupRequest, UpdateGroupRequest};
 /// `group_resource_from` currently takes `(entry: &RbacEntry, etag: &str)`
 /// directly. Once Group C introduces `EtagedGroup`, Group D should adjust
 /// its call site to destructure the tuple (or use `EtagedGroup` accessors).
-#[allow(dead_code)] // consumed by Group D handler bodies
 #[derive(Debug, Serialize)]
 pub(crate) struct GroupResource<'a> {
     pub name: &'a str,
@@ -43,7 +42,6 @@ pub(crate) struct GroupResource<'a> {
 }
 
 /// Body for a `409 Delete Conflict` response.
-#[allow(dead_code)] // consumed by Group D handler bodies
 #[derive(Debug, Serialize)]
 pub(crate) struct DeleteConflictBody<'a> {
     /// Always `"delete_conflict"`.
@@ -53,7 +51,6 @@ pub(crate) struct DeleteConflictBody<'a> {
 }
 
 /// Body for a `422 Validation Failed` response.
-#[allow(dead_code)] // consumed by Group D handler bodies
 #[derive(Debug, Serialize)]
 pub(crate) struct GroupValidationErrorBody<'a> {
     /// Always `"validation_failed"`.
@@ -75,7 +72,6 @@ pub(crate) struct GroupValidationErrorBody<'a> {
 /// This is a **mechanical conversion** — no field-level validation is performed
 /// here. The handler (Group D) MUST call `validate_rbac_entry` on the result
 /// before writing to the store.
-#[allow(dead_code)] // consumed by Group D handler bodies
 pub(crate) fn rbac_from_create(req: CreateGroupRequest) -> RbacEntry {
     RbacEntry {
         name: req.name,
@@ -90,7 +86,6 @@ pub(crate) fn rbac_from_create(req: CreateGroupRequest) -> RbacEntry {
 ///
 /// Returns `Err(GroupValidationError::NameMismatch)` when the body contains a
 /// `name` field that differs from `path_name`. No other validation is done here.
-#[allow(dead_code)] // consumed by Group D handler bodies
 pub(crate) fn rbac_from_update(
     path_name: &str,
     req: UpdateGroupRequest,
@@ -120,7 +115,6 @@ pub(crate) fn rbac_from_update(
 /// for the `EtagedGroup` tuple that Group C will introduce. Group D should call
 /// this function after destructuring the `(RbacEntry, String)` pair stored by
 /// Group C's codec.
-#[allow(dead_code)] // consumed by Group D handler bodies
 pub(crate) fn group_resource_from<'a>(entry: &'a RbacEntry, etag: &'a str) -> GroupResource<'a> {
     GroupResource {
         name: &entry.name,
@@ -142,7 +136,6 @@ pub(crate) fn group_resource_from<'a>(entry: &'a RbacEntry, etag: &'a str) -> Gr
 /// that care about canonical ordering must normalise the slices beforehand.
 /// The cycle resolver does not reorder, so two entries that differ only in
 /// `allow` element order will produce different etags.
-#[allow(dead_code)] // consumed by Group C/D handler bodies
 pub(crate) fn compute_group_etag(entry: &RbacEntry) -> Result<String> {
     let json =
         serde_json::to_string(entry).map_err(|e| Error::Config(format!("etag serial: {e}")))?;
@@ -158,7 +151,6 @@ pub(crate) fn compute_group_etag(entry: &RbacEntry) -> Result<String> {
 ///
 /// `shape_group_error_response` is the single place where these are turned
 /// into HTTP responses, keeping the handlers free of status-code logic.
-#[allow(dead_code)] // consumed by Group D handler bodies
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum GroupHandlerError {
     /// Field-level validation failed on the request body.
@@ -186,12 +178,12 @@ pub(crate) enum GroupHandlerError {
     },
     /// An unexpected internal error occurred (logged separately).
     #[error("internal error")]
+    #[allow(dead_code)] // will be constructed by Group E / F error-propagation paths
     Internal,
 }
 
 /// Map the `reason` field for a `GroupValidationError` to its snake_case label
 /// and the field name that caused the failure.
-#[allow(dead_code)] // consumed by Group D handler bodies (via shape_group_error_response)
 fn validation_label(err: &GroupValidationError) -> (&'static str, &'static str) {
     match err {
         GroupValidationError::BadNameRegex { .. } => ("bad_name_regex", "name"),
@@ -217,7 +209,6 @@ fn validation_label(err: &GroupValidationError) -> (&'static str, &'static str) 
 /// | `PreconditionFailed`   | 412    | `PreconditionFailedBody`           |
 /// | `DeleteConflict`       | 409    | `DeleteConflictBody`               |
 /// | `Internal`             | 500    | empty body                         |
-#[allow(dead_code)] // consumed by Group D handler bodies
 pub(crate) fn shape_group_error_response(err: &GroupHandlerError) -> Response {
     match err {
         GroupHandlerError::Validation(v_err) => {
