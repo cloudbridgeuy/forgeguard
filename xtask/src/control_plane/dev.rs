@@ -158,6 +158,11 @@ async fn seed_organizations(client: &Client, table: &str, seed_path: &str) -> Re
 
         let pk_value = org_type.pk.replace("{org_id}", org_id);
         let sk_value = &org_type.sk;
+        let status_value = if org.config.is_some() {
+            "active"
+        } else {
+            "draft"
+        };
 
         let mut request = client
             .put_item()
@@ -180,7 +185,7 @@ async fn seed_organizations(client: &Client, table: &str, seed_path: &str) -> Re
             )
             .item(
                 "status",
-                aws_sdk_dynamodb::types::AttributeValue::S("active".to_string()),
+                aws_sdk_dynamodb::types::AttributeValue::S(status_value.to_string()),
             )
             .item(
                 "created_at",

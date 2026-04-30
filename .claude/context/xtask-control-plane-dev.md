@@ -35,6 +35,12 @@ Because credential inheritance is silent, the launch banner reminds the operator
 
 `dev` writes only organization rows to the local table. It does **not** provision Cognito users, membership rows, or 1Password secrets. Run `cargo xtask control-plane seed --dynamodb-endpoint http://127.0.0.1:<port> --dynamodb-table forgeguard-orgs-dev` in a second terminal to populate the rest of the fixture data. See [xtask-control-plane-tools.md](./xtask-control-plane-tools.md).
 
+## Seed status mapping
+
+The dev seed mirrors the legacy file-loader convention documented in [control-plane.md § Lifecycle](./control-plane.md): an entry **with** a `config` block lands as `OrgStatus::Active`, an entry **without** lands as `OrgStatus::Draft`. The mapping is computed from `org.config.is_some()` in `seed_organizations` (`xtask/src/control_plane/dev.rs`) and written to the `status` attribute alongside `config`/`etag`.
+
+This is what makes the V2 Groups path testable locally: `org-seeded-draft` in `examples/control-plane/orgs.test.json` has no `config`, so it seeds as Draft and accepts V2 mutations; `org-acme` and `org-globex` carry a `config`, so they seed as Active and the V3 guard short-circuits Groups mutations with `501 Not Implemented`. Editing the seed JSON is the canonical way to flip an org between Draft and Active for local QA.
+
 ## Ports and cleanup
 
 Each `dev` invocation picks a free ephemeral port for `dynamodb-local`; the launch message prints both the container id and the endpoint URL. When the child exits, `ContainerGuard` stops and removes the container. Crashed runs can leave orphan containers behind:
