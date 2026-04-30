@@ -11,9 +11,8 @@
 ///
 /// Stores the raw etag string exactly as supplied by the caller. For values
 /// produced by [`crate::store::compute_etag`] the string includes surrounding
-/// double-quotes (e.g. `"\"a1b2c3d4e5f60708\"`). The optional `W/` weak-validator
-/// prefix is preserved. The only invariant enforced here is that the value is
-/// non-empty.
+/// double-quotes (e.g. `"\"a1b2c3d4e5f60708\"`). The only invariant enforced
+/// here is that the value is non-empty.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct Etag(String);
 
