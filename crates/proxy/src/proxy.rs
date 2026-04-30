@@ -187,8 +187,9 @@ impl ProxyHttp for ForgeGuardProxy {
                 Ok(true)
             }
             PipelineOutcome::Reject { status, body } => {
-                record_outcome_metrics(status);
-                let _ = send_json_response(session, status, body.as_bytes(), &cors_hdrs).await;
+                record_outcome_metrics(status.as_u16());
+                let _ =
+                    send_json_response(session, status.as_u16(), body.as_bytes(), &cors_hdrs).await;
                 Ok(true)
             }
             PipelineOutcome::Forward {

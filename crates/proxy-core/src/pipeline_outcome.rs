@@ -4,8 +4,6 @@ use forgeguard_authn_core::Identity;
 use forgeguard_core::ResolvedFlags;
 use forgeguard_http::MatchedRoute;
 
-use crate::{Error, Result};
-
 // ---------------------------------------------------------------------------
 // PipelineOutcome
 // ---------------------------------------------------------------------------
@@ -23,7 +21,7 @@ pub enum PipelineOutcome {
     /// The pipeline rejected the request (auth failure, no route, etc.).
     Reject {
         /// HTTP status code to return (e.g. 401, 403, 404).
-        status: u16,
+        status: http::StatusCode,
         /// Response body (error message or JSON).
         body: String,
     },
@@ -51,19 +49,11 @@ impl PipelineOutcome {
     }
 
     /// Create a `Reject` outcome.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::InvalidRejectStatus`] if `status` is outside the
-    /// 400..=599 range (HTTP client-error and server-error codes).
-    pub fn reject(status: u16, body: impl Into<String>) -> Result<Self> {
-        if !(400..=599).contains(&status) {
-            return Err(Error::InvalidRejectStatus(status));
-        }
-        Ok(Self::Reject {
+    pub fn reject(status: http::StatusCode, body: impl Into<String>) -> Self {
+        Self::Reject {
             status,
             body: body.into(),
-        })
+        }
     }
 
     /// Create a `Forward` outcome with no identity, flags, or matched route.
@@ -114,14 +104,14 @@ mod tests {
     }
 
     #[test]
-    fn reject_outcome() {
-        let outcome = PipelineOutcome::reject(403, "forbidden").unwrap();
+    fn reject_constructor_takes_typed_status() {
+        let outcome = PipelineOutcome::reject(http::StatusCode::FORBIDDEN, "denied");
         match outcome {
             PipelineOutcome::Reject { status, body } => {
-                assert_eq!(status, 403);
-                assert_eq!(body, "forbidden");
+                assert_eq!(status, http::StatusCode::FORBIDDEN);
+                assert_eq!(body, "denied");
             }
-            _ => panic!("expected Reject variant"),
+            _ => panic!("expected Reject"),
         }
     }
 
@@ -164,16 +154,14 @@ mod tests {
 
     #[test]
     fn is_forward_returns_false_for_reject() {
-        assert!(!PipelineOutcome::reject(401, "unauthorized")
-            .unwrap()
-            .is_forward());
+        assert!(
+            !PipelineOutcome::reject(http::StatusCode::UNAUTHORIZED, "unauthorized").is_forward()
+        );
     }
 
     #[test]
     fn is_reject_returns_true_for_reject() {
-        assert!(PipelineOutcome::reject(403, "forbidden")
-            .unwrap()
-            .is_reject());
+        assert!(PipelineOutcome::reject(http::StatusCode::FORBIDDEN, "forbidden").is_reject());
     }
 
     #[test]
@@ -184,35 +172,5 @@ mod tests {
     #[test]
     fn is_reject_returns_false_for_forward() {
         assert!(!PipelineOutcome::forward_anonymous().is_reject());
-    }
-
-    #[test]
-    fn reject_accepts_400() {
-        assert!(PipelineOutcome::reject(400, "bad request").is_ok());
-    }
-
-    #[test]
-    fn reject_accepts_599() {
-        assert!(PipelineOutcome::reject(599, "error").is_ok());
-    }
-
-    #[test]
-    fn reject_rejects_200() {
-        let err = PipelineOutcome::reject(200, "ok").unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("200") && msg.contains("400..=599"),
-            "expected status-range message in: {msg}"
-        );
-    }
-
-    #[test]
-    fn reject_rejects_399() {
-        assert!(PipelineOutcome::reject(399, "redirect").is_err());
-    }
-
-    #[test]
-    fn reject_rejects_600() {
-        assert!(PipelineOutcome::reject(600, "invalid").is_err());
     }
 }

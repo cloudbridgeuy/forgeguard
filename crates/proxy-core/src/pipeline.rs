@@ -10,6 +10,7 @@ use forgeguard_core::evaluate_flags;
 use forgeguard_http::{
     build_query, evaluate_debug, extract_credential, DefaultPolicy, FlagDebugQuery, PublicMatch,
 };
+use http::StatusCode;
 
 use crate::{PipelineConfig, PipelineOutcome, RequestInput};
 
@@ -80,14 +81,14 @@ pub async fn evaluate_pipeline(
                     identity = Some(id);
                 }
                 Err(_) if require_credential => {
-                    return reject_json(401, "Unauthorized");
+                    return reject_json(StatusCode::UNAUTHORIZED, "Unauthorized");
                 }
                 Err(_) => {
                     // Opportunistic: resolution failed, continue without identity
                 }
             },
             None if require_credential => {
-                return reject_json(401, "Unauthorized");
+                return reject_json(StatusCode::UNAUTHORIZED, "Unauthorized");
             }
             None => {
                 // Opportunistic or Anonymous: no credential, continue
@@ -111,7 +112,10 @@ pub async fn evaluate_pipeline(
             // early-return paths leave `identity` untouched.
             let org_id = match org_header {
                 None if require_credential => {
-                    return reject_json(400, "Missing X-ForgeGuard-Org-Id header");
+                    return reject_json(
+                        StatusCode::BAD_REQUEST,
+                        "Missing X-ForgeGuard-Org-Id header",
+                    );
                 }
                 None => {
                     // No org header on an optional/public route — skip enrichment.
@@ -119,7 +123,12 @@ pub async fn evaluate_pipeline(
                 }
                 Some(org_str) => match forgeguard_core::OrganizationId::new(org_str) {
                     Ok(id) => Some(id),
-                    Err(_) => return reject_json(400, "Invalid X-ForgeGuard-Org-Id header"),
+                    Err(_) => {
+                        return reject_json(
+                            StatusCode::BAD_REQUEST,
+                            "Invalid X-ForgeGuard-Org-Id header",
+                        )
+                    }
                 },
             };
 
@@ -145,10 +154,16 @@ pub async fn evaluate_pipeline(
                             }));
                         }
                         Ok(None) => {
-                            return reject_json(403, "Not a member of this organization");
+                            return reject_json(
+                                StatusCode::FORBIDDEN,
+                                "Not a member of this organization",
+                            );
                         }
                         Err(_) => {
-                            return reject_json(500, "Internal Server Error");
+                            return reject_json(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                "Internal Server Error",
+                            );
                         }
                     }
                 }
@@ -174,7 +189,7 @@ pub async fn evaluate_pipeline(
         if let Some(gate) = matched_route.feature_gate() {
             let gate_enabled = flags.as_ref().is_some_and(|f| f.enabled(&gate.to_string()));
             if !gate_enabled {
-                return reject_json(404, "Not Found");
+                return reject_json(StatusCode::NOT_FOUND, "Not Found");
             }
         }
 
@@ -210,7 +225,7 @@ pub async fn evaluate_pipeline(
             DefaultPolicy::Deny => {
                 let body = serde_json::json!({"error": "Forbidden", "reason": "no matching route"});
                 PipelineOutcome::Reject {
-                    status: 403,
+                    status: StatusCode::FORBIDDEN,
                     body: body.to_string(),
                 }
             }
@@ -252,25 +267,19 @@ fn debug_response(config: &PipelineConfig, input: &RequestInput) -> PipelineOutc
 
     let query = match FlagDebugQuery::parse(query_str) {
         Ok(q) => q,
-        Err(e) => return reject_json(400, &format!("{e}")),
+        Err(e) => return reject_json(StatusCode::BAD_REQUEST, &format!("{e}")),
     };
 
     let result = evaluate_debug(config.flag_config(), &query);
 
     match serde_json::to_string(&result) {
         Ok(json) => PipelineOutcome::Debug(json),
-        Err(_) => reject_json(500, "Internal Server Error"),
+        Err(_) => reject_json(StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error"),
     }
 }
 
 /// Build a JSON `{"error": <msg>}` reject outcome.
-///
-/// This intentionally constructs `PipelineOutcome::Reject` directly, bypassing
-/// the validated [`PipelineOutcome::reject()`] constructor. All call sites use
-/// hardcoded HTTP status codes (400, 401, 403, 404, 500) that are known-valid,
-/// so runtime validation is unnecessary. External callers should use
-/// [`PipelineOutcome::reject()`] which validates the status range.
-fn reject_json(status: u16, error: &str) -> PipelineOutcome {
+fn reject_json(status: StatusCode, error: &str) -> PipelineOutcome {
     let body = serde_json::json!({"error": error});
     PipelineOutcome::Reject {
         status,
@@ -285,7 +294,7 @@ fn reject_forbidden_with_action(action: &str) -> PipelineOutcome {
         "action": action,
     });
     PipelineOutcome::Reject {
-        status: 403,
+        status: StatusCode::FORBIDDEN,
         body: body.to_string(),
     }
 }

@@ -2006,6 +2006,7 @@ dependencies = [
  "forgeguard_authz_core",
  "forgeguard_core",
  "forgeguard_http",
+ "http 1.4.0",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",

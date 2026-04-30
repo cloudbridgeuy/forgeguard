@@ -102,11 +102,7 @@ pub async fn forgeguard_layer(
             request.extensions_mut().insert(ForgeGuardFlags(flags));
             next.run(request).await
         }
-        PipelineOutcome::Reject { status, body } => {
-            let status_code =
-                StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-            json_response(status_code, &body)
-        }
+        PipelineOutcome::Reject { status, body } => json_response(status, &body),
         PipelineOutcome::Health(body) => json_response(StatusCode::OK, &body),
         PipelineOutcome::Debug(body) => json_response(StatusCode::OK, &body),
     }

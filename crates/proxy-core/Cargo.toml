@@ -18,6 +18,7 @@ forgeguard_authn_core = { workspace = true }
 forgeguard_authz_core = { workspace = true }
 forgeguard_core = { workspace = true }
 forgeguard_http = { workspace = true }
+http = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 
