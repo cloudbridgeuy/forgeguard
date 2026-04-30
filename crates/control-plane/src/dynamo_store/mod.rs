@@ -15,6 +15,7 @@ use forgeguard_core::{OrgStatus, Organization, OrganizationId};
 
 use crate::config::OrgConfig;
 use crate::error::{Error, Result};
+use crate::etag::Etag;
 use crate::signing_key::{GenerateKeyResult, SigningKeyEntry};
 use crate::store::{generate_key_material, ConfiguredConfig, OrgRecord, OrgStore};
 
@@ -176,7 +177,7 @@ fn to_item(
         let config_json = serde_json::to_string(c.config())
             .map_err(|e| Error::Store(format!("serialize config: {e}")))?;
         put_s(&mut item, "config", config_json);
-        put_s(&mut item, "etag", c.etag());
+        put_s(&mut item, "etag", c.etag().as_str());
     }
 
     if !signing_keys.is_empty() {
@@ -216,10 +217,15 @@ fn from_item(item: &HashMap<String, AttributeValue>) -> Result<OrgRecord> {
     let policy_store_id = get_s_opt(item, "policy_store_id");
 
     let configured = match (get_s_opt(item, "config"), get_s_opt(item, "etag")) {
-        (Some(config_json), Some(etag)) => {
+        (Some(config_json), Some(etag_raw)) => {
             let config: OrgConfig = serde_json::from_str(&config_json)
                 .map_err(|e| Error::Store(format!("deserialize config: {e}")))?;
-            Some(ConfiguredConfig::from_stored(config, etag))
+            let etag = Etag::try_new(etag_raw).map_err(|e| {
+                Error::Store(format!("invalid stored etag for org '{org_id}': {e}"))
+            })?;
+            Some(ConfiguredConfig::from_stored(config, etag).map_err(|e| {
+                Error::Store(format!("reconstitute config for org '{org_id}': {e}"))
+            })?)
         }
         (None, None) => None,
         (Some(_), None) => {
@@ -421,7 +427,7 @@ impl OrgStore for DynamoOrgStore {
         org_id: &OrganizationId,
         org: Organization,
         config: Option<OrgConfig>,
-        expected_etag: Option<&str>,
+        expected_etag: Option<&Etag>,
     ) -> Result<OrgRecord> {
         if org_id != org.org_id() {
             return Err(Error::Store(format!(
@@ -590,7 +596,7 @@ struct ConditionParts {
 ///
 /// Pure: deterministic, no I/O, trivially unit-testable.
 /// Functional Core — consumed by the `update` shell method.
-fn build_update_condition(expected_etag: Option<&str>) -> ConditionParts {
+fn build_update_condition(expected_etag: Option<&Etag>) -> ConditionParts {
     match expected_etag {
         None => ConditionParts {
             expression: "attribute_exists(#pk)".to_string(),
@@ -600,7 +606,10 @@ fn build_update_condition(expected_etag: Option<&str>) -> ConditionParts {
         Some(etag) => ConditionParts {
             expression: "attribute_exists(#pk) AND #etag = :expected_etag".to_string(),
             names: vec![("#pk", pk()), ("#etag", "etag")],
-            values: vec![(":expected_etag", AttributeValue::S(etag.to_string()))],
+            values: vec![(
+                ":expected_etag",
+                AttributeValue::S(etag.as_str().to_string()),
+            )],
         },
     }
 }
@@ -608,15 +617,21 @@ fn build_update_condition(expected_etag: Option<&str>) -> ConditionParts {
 /// Recover the current stored etag for an org after a
 /// `ConditionalCheckFailedException`.
 ///
-/// Returns `Ok("")` when the item is absent or has no `etag` attribute — this
+/// Returns `Ok(None)` when the item is absent or has no `etag` attribute — this
 /// matches the Draft fail-closed contract: a Draft org has never had a config
-/// written, so any `If-Match` value is wrong and the empty string tells the
+/// written, so any `If-Match` value is wrong and `None` tells the
 /// handler to emit a `current_etag: ""` body (same as the memory store's
 /// Draft 412 behaviour pinned in V2).
-async fn recover_current_etag(store: &DynamoOrgStore, org_id: &OrganizationId) -> Result<String> {
+async fn recover_current_etag(
+    store: &DynamoOrgStore,
+    org_id: &OrganizationId,
+) -> Result<Option<Etag>> {
     match store.get_raw_item(org_id).await? {
-        None => Ok(String::new()),
-        Some(ref item) => Ok(get_s_opt(item, "etag").unwrap_or_default()),
+        None => Ok(None),
+        Some(ref item) => match get_s_opt(item, "etag") {
+            Some(raw) => Etag::try_new(raw).map(Some),
+            None => Ok(None),
+        },
     }
 }
 
@@ -625,6 +640,7 @@ async fn recover_current_etag(store: &DynamoOrgStore, org_id: &OrganizationId) -
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod condition_builder_tests {
     use super::*;
 
@@ -637,7 +653,8 @@ mod condition_builder_tests {
 
     #[test]
     fn with_expected_etag_adds_etag_clause() {
-        let parts = build_update_condition(Some("\"abc123\""));
+        let etag = Etag::try_new("\"abc123\"").unwrap();
+        let parts = build_update_condition(Some(&etag));
         assert_eq!(
             parts.expression,
             "attribute_exists(#pk) AND #etag = :expected_etag"

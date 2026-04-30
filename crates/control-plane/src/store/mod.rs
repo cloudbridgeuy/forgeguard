@@ -11,6 +11,7 @@ use serde::Deserialize;
 use crate::config::OrgConfig;
 use crate::dynamo_store::DynamoOrgStore;
 use crate::error::{Error, Result};
+use crate::etag::Etag;
 use crate::signing_key::{GenerateKeyResult, SigningKeyEntry};
 
 /// Abstraction over organization config storage.
@@ -47,7 +48,7 @@ pub(crate) trait OrgStore: Send + Sync {
         org_id: &OrganizationId,
         org: Organization,
         config: Option<OrgConfig>,
-        expected_etag: Option<&str>,
+        expected_etag: Option<&Etag>,
     ) -> impl std::future::Future<Output = Result<OrgRecord>> + Send;
 
     fn delete(
@@ -87,7 +88,7 @@ pub(crate) trait OrgStore: Send + Sync {
 #[derive(Debug, Clone)]
 pub(crate) struct ConfiguredConfig {
     config: OrgConfig,
-    etag: String,
+    etag: Etag,
 }
 
 impl ConfiguredConfig {
@@ -99,15 +100,15 @@ impl ConfiguredConfig {
 
     /// Build from an already-paired (config, etag) — e.g. when
     /// reconstituting an `OrgRecord` from a DynamoDB item.
-    pub(crate) fn from_stored(config: OrgConfig, etag: String) -> Self {
-        Self { config, etag }
+    pub(crate) fn from_stored(config: OrgConfig, etag: Etag) -> Result<Self> {
+        Ok(Self { config, etag })
     }
 
     pub(crate) fn config(&self) -> &OrgConfig {
         &self.config
     }
 
-    pub(crate) fn etag(&self) -> &str {
+    pub(crate) fn etag(&self) -> &Etag {
         &self.etag
     }
 }
@@ -190,7 +191,7 @@ impl OrgStore for InMemoryOrgStore {
         org_id: &OrganizationId,
         org: Organization,
         config: Option<OrgConfig>,
-        expected_etag: Option<&str>,
+        expected_etag: Option<&Etag>,
     ) -> Result<OrgRecord> {
         if org_id != org.org_id() {
             return Err(Error::Store(format!(
@@ -342,10 +343,11 @@ pub(crate) fn generate_key_material() -> Result<GenerateKeyResult> {
     Ok(GenerateKeyResult::new(key_id, private_pem, public_pem, now))
 }
 
-pub(crate) fn compute_etag(config: &OrgConfig) -> Result<String> {
+pub(crate) fn compute_etag(config: &OrgConfig) -> Result<Etag> {
     let json = serde_json::to_string(config).map_err(|e| Error::Config(e.to_string()))?;
     let hash = xxhash_rust::xxh64::xxh64(json.as_bytes(), 0);
-    Ok(format!("\"{hash:016x}\""))
+    let raw = format!("\"{hash:016x}\"");
+    Etag::try_new(raw).map_err(|e| Error::Config(e.to_string()))
 }
 
 pub(crate) fn build_org_store(json_str: &str) -> Result<InMemoryOrgStore> {
@@ -426,7 +428,7 @@ impl OrgStore for AnyOrgStore {
         org_id: &OrganizationId,
         org: Organization,
         config: Option<OrgConfig>,
-        expected_etag: Option<&str>,
+        expected_etag: Option<&Etag>,
     ) -> Result<OrgRecord> {
         match self {
             Self::Memory(s) => s.update(org_id, org, config, expected_etag).await,

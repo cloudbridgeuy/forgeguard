@@ -7,6 +7,47 @@
 //! calls into these functions and translates their outputs into HTTP responses
 //! or storage side effects.
 
+/// RFC 7232 entity tag value.
+///
+/// Stores the etag value **without** surrounding quotes. The optional
+/// `W/` weak-validator prefix is preserved as part of the value.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct Etag(String);
+
+impl Etag {
+    /// Construct, validating the input is a non-empty etag value.
+    ///
+    /// Accepts the bare value (e.g. `"abc123"` or `W/"abc123"`).
+    /// Does not require surrounding quotes — quotes belong to the wire
+    /// format, not the value.
+    pub(crate) fn try_new(raw: impl Into<String>) -> crate::error::Result<Self> {
+        let raw = raw.into();
+        if raw.is_empty() {
+            return Err(crate::error::Error::InvalidEtag { raw });
+        }
+        Ok(Self(raw))
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Returns `true` when this is a weak validator (starts with `W/`).
+    ///
+    /// Weak validators are accepted in the `If-Match` header but are not
+    /// used for strong comparison (RFC 7232 §3). Kept for future use.
+    #[allow(dead_code)]
+    pub(crate) fn is_weak(&self) -> bool {
+        self.0.starts_with("W/")
+    }
+}
+
+impl std::fmt::Display for Etag {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// Parsed form of the `If-Match` request header.
 ///
 /// Only two legal forms are recognised:
@@ -18,7 +59,7 @@ pub(crate) enum IfMatch {
     /// `If-Match: *` — matches any currently stored representation.
     Wildcard,
     /// `If-Match: "<hex>"` — strong comparator against a specific etag.
-    Strong(String),
+    Strong(Etag),
 }
 
 /// Outcome of resolving an `IfMatch` header against the stored state.
@@ -30,7 +71,7 @@ pub(crate) enum ResolvedIfMatch {
     /// No `If-Match` header present — skip the check.
     Absent,
     /// Strong comparison — forward the expected etag to [`check_etag`].
-    Strong(String),
+    Strong(Etag),
     /// Wildcard matched an existing representation — check passes, no
     /// etag comparison needed.
     WildcardMatched,
@@ -51,9 +92,8 @@ pub(crate) enum EtagCheck {
     Match,
     /// Stored etag does not match (or there is no stored etag and the
     /// caller supplied one). `current` carries whatever is actually stored;
-    /// an empty string means there is no stored etag (a draft org has no
-    /// config yet).
-    Mismatch { current: String },
+    /// `None` means there is no stored etag (a Draft org has no config yet).
+    Mismatch { current: Option<Etag> },
 }
 
 /// Outcome of comparing an `If-None-Match` header against the stored etag.
@@ -81,7 +121,9 @@ pub(crate) enum IfNoneMatchResult {
 /// - Trims surrounding whitespace.
 /// - Empty / whitespace-only → `None` (header absent).
 /// - Exactly `*` → `Some(IfMatch::Wildcard)`.
-/// - Anything else → `Some(IfMatch::Strong(trimmed))`.
+/// - Anything else → `Some(IfMatch::Strong(etag))`, or `None` if the
+///   trimmed value is empty (which cannot happen after the earlier check,
+///   but we guard defensively).
 ///
 /// Stored etags are already stored with their surrounding quotes (see
 /// the `compute_etag` helper in `crate::store`), so strong comparison is byte-exact with no
@@ -94,7 +136,7 @@ pub(crate) fn parse_if_match(raw: &str) -> Option<IfMatch> {
     if trimmed == "*" {
         Some(IfMatch::Wildcard)
     } else {
-        Some(IfMatch::Strong(trimmed.to_owned()))
+        Etag::try_new(trimmed).ok().map(IfMatch::Strong)
     }
 }
 
@@ -106,7 +148,7 @@ pub(crate) fn parse_if_match(raw: &str) -> Option<IfMatch> {
 /// | `Some(Strong(e))`  | any       | `Strong(e)`         |
 /// | `Some(Wildcard)`   | `Some(_)` | `WildcardMatched`   |
 /// | `Some(Wildcard)`   | `None`    | `WildcardOnDraft`   |
-pub(crate) fn resolve_if_match(header: Option<IfMatch>, stored: Option<&str>) -> ResolvedIfMatch {
+pub(crate) fn resolve_if_match(header: Option<IfMatch>, stored: Option<&Etag>) -> ResolvedIfMatch {
     match (header, stored) {
         (None, _) => ResolvedIfMatch::Absent,
         (Some(IfMatch::Strong(e)), _) => ResolvedIfMatch::Strong(e),
@@ -119,18 +161,16 @@ pub(crate) fn resolve_if_match(header: Option<IfMatch>, stored: Option<&str>) ->
 ///
 /// - `expected == None`                                          → `Unchecked`
 /// - `expected == Some(e)` and `stored == Some(s)` and `s == e`  → `Match`
-/// - `expected == Some(e)` and `stored == Some(s)` and `s != e`  → `Mismatch { current: s }`
-/// - `expected == Some(e)` and `stored == None`                  → `Mismatch { current: "" }`
-pub(crate) fn check_etag(stored: Option<&str>, expected: Option<&str>) -> EtagCheck {
+/// - `expected == Some(e)` and `stored == Some(s)` and `s != e`  → `Mismatch { current: Some(s) }`
+/// - `expected == Some(e)` and `stored == None`                  → `Mismatch { current: None }`
+pub(crate) fn check_etag(stored: Option<&Etag>, expected: Option<&Etag>) -> EtagCheck {
     match (expected, stored) {
         (None, _) => EtagCheck::Unchecked,
         (Some(e), Some(s)) if s == e => EtagCheck::Match,
         (Some(_), Some(s)) => EtagCheck::Mismatch {
-            current: s.to_string(),
+            current: Some(s.clone()),
         },
-        (Some(_), None) => EtagCheck::Mismatch {
-            current: String::new(),
-        },
+        (Some(_), None) => EtagCheck::Mismatch { current: None },
     }
 }
 
@@ -147,14 +187,44 @@ pub(crate) fn check_etag(stored: Option<&str>, expected: Option<&str>) -> EtagCh
 /// | `Some(Strong(_))`         | `None`                | `NotMatched`        |
 pub(crate) fn check_if_none_match(
     header: Option<IfMatch>,
-    stored_etag: Option<&str>,
+    stored_etag: Option<&Etag>,
 ) -> IfNoneMatchResult {
     match (header, stored_etag) {
         (None, _) => IfNoneMatchResult::NotMatched,
         (Some(IfMatch::Wildcard), Some(_)) => IfNoneMatchResult::WildcardMatched,
         (Some(IfMatch::Wildcard), None) => IfNoneMatchResult::WildcardOnDraft,
-        (Some(IfMatch::Strong(h)), Some(s)) if h == s => IfNoneMatchResult::Matched,
+        (Some(IfMatch::Strong(h)), Some(s)) if h == *s => IfNoneMatchResult::Matched,
         (Some(IfMatch::Strong(_)), _) => IfNoneMatchResult::NotMatched,
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod etag_value_tests {
+    use super::*;
+
+    #[test]
+    fn try_new_accepts_strong() {
+        let e = Etag::try_new("abc123").unwrap();
+        assert_eq!(e.as_str(), "abc123");
+        assert!(!e.is_weak());
+    }
+
+    #[test]
+    fn try_new_accepts_weak() {
+        let e = Etag::try_new("W/abc123").unwrap();
+        assert!(e.is_weak());
+    }
+
+    #[test]
+    fn try_new_rejects_empty() {
+        assert!(Etag::try_new("").is_err());
+    }
+
+    #[test]
+    fn display_round_trips() {
+        let e = Etag::try_new("abc").unwrap();
+        assert_eq!(e.to_string(), "abc");
     }
 }
 
@@ -179,7 +249,7 @@ mod tests {
     fn parse_if_match_strong_quoted_value() {
         assert_eq!(
             parse_if_match("\"abc123\""),
-            Some(IfMatch::Strong("\"abc123\"".to_owned()))
+            Some(IfMatch::Strong(Etag::try_new("\"abc123\"").unwrap()))
         );
     }
 
@@ -187,13 +257,16 @@ mod tests {
     fn parse_if_match_strong_trims_whitespace() {
         assert_eq!(
             parse_if_match("   \"abc123\"\t"),
-            Some(IfMatch::Strong("\"abc123\"".to_owned()))
+            Some(IfMatch::Strong(Etag::try_new("\"abc123\"").unwrap()))
         );
     }
 
     #[test]
     fn parse_if_match_double_star_is_strong_not_wildcard() {
-        assert_eq!(parse_if_match("**"), Some(IfMatch::Strong("**".to_owned())));
+        assert_eq!(
+            parse_if_match("**"),
+            Some(IfMatch::Strong(Etag::try_new("**").unwrap()))
+        );
     }
 
     #[test]
@@ -210,8 +283,9 @@ mod tests {
 
     #[test]
     fn resolve_absent_when_no_header() {
+        let stored = Etag::try_new("\"abc\"").unwrap();
         assert_eq!(
-            resolve_if_match(None, Some("\"abc\"")),
+            resolve_if_match(None, Some(&stored)),
             ResolvedIfMatch::Absent
         );
         assert_eq!(resolve_if_match(None, None), ResolvedIfMatch::Absent);
@@ -219,20 +293,23 @@ mod tests {
 
     #[test]
     fn resolve_strong_forwards_etag_regardless_of_stored() {
+        let e = Etag::try_new("\"e\"").unwrap();
+        let stored = Etag::try_new("\"abc\"").unwrap();
         assert_eq!(
-            resolve_if_match(Some(IfMatch::Strong("\"e\"".to_owned())), Some("\"abc\"")),
-            ResolvedIfMatch::Strong("\"e\"".to_owned())
+            resolve_if_match(Some(IfMatch::Strong(e.clone())), Some(&stored)),
+            ResolvedIfMatch::Strong(e.clone())
         );
         assert_eq!(
-            resolve_if_match(Some(IfMatch::Strong("\"e\"".to_owned())), None),
-            ResolvedIfMatch::Strong("\"e\"".to_owned())
+            resolve_if_match(Some(IfMatch::Strong(e.clone())), None),
+            ResolvedIfMatch::Strong(e)
         );
     }
 
     #[test]
     fn resolve_wildcard_matched_when_stored_exists() {
+        let stored = Etag::try_new("\"abc\"").unwrap();
         assert_eq!(
-            resolve_if_match(Some(IfMatch::Wildcard), Some("\"abc\"")),
+            resolve_if_match(Some(IfMatch::Wildcard), Some(&stored)),
             ResolvedIfMatch::WildcardMatched
         );
     }
@@ -249,44 +326,59 @@ mod tests {
 
     #[test]
     fn check_unchecked_when_expected_is_none() {
-        assert_eq!(check_etag(Some("\"abc\""), None), EtagCheck::Unchecked);
+        let stored = Etag::try_new("\"abc\"").unwrap();
+        assert_eq!(check_etag(Some(&stored), None), EtagCheck::Unchecked);
         assert_eq!(check_etag(None, None), EtagCheck::Unchecked);
     }
 
     #[test]
     fn check_match_when_stored_equals_expected() {
-        assert_eq!(
-            check_etag(Some("\"abc\""), Some("\"abc\"")),
-            EtagCheck::Match
-        );
+        let stored = Etag::try_new("\"abc\"").unwrap();
+        let expected = Etag::try_new("\"abc\"").unwrap();
+        assert_eq!(check_etag(Some(&stored), Some(&expected)), EtagCheck::Match);
     }
 
     #[test]
     fn check_mismatch_when_stored_differs_from_expected() {
+        let stored = Etag::try_new("\"current\"").unwrap();
+        let expected = Etag::try_new("\"stale\"").unwrap();
         assert_eq!(
-            check_etag(Some("\"current\""), Some("\"stale\"")),
+            check_etag(Some(&stored), Some(&expected)),
             EtagCheck::Mismatch {
-                current: "\"current\"".to_string()
+                current: Some(Etag::try_new("\"current\"").unwrap())
             }
         );
     }
 
     #[test]
     fn check_mismatch_when_no_stored_etag_but_expected_supplied() {
+        let expected = Etag::try_new("\"anything\"").unwrap();
         assert_eq!(
-            check_etag(None, Some("\"anything\"")),
-            EtagCheck::Mismatch {
-                current: String::new()
-            }
+            check_etag(None, Some(&expected)),
+            EtagCheck::Mismatch { current: None }
         );
+    }
+
+    #[test]
+    fn check_etag_typed_mismatch() {
+        let stored = Etag::try_new("abc").unwrap();
+        let expected = Etag::try_new("xyz").unwrap();
+        let result = check_etag(Some(&stored), Some(&expected));
+        match result {
+            EtagCheck::Mismatch { current } => {
+                assert_eq!(current.unwrap().as_str(), "abc")
+            }
+            _ => panic!("expected Mismatch"),
+        }
     }
 
     // --- check_if_none_match ------------------------------------------------
 
     #[test]
     fn check_none_header_is_not_matched() {
+        let stored = Etag::try_new("\"abc\"").unwrap();
         assert_eq!(
-            check_if_none_match(None, Some("\"abc\"")),
+            check_if_none_match(None, Some(&stored)),
             IfNoneMatchResult::NotMatched
         );
         assert_eq!(
@@ -297,8 +389,9 @@ mod tests {
 
     #[test]
     fn check_wildcard_on_configured_is_wildcard_matched() {
+        let stored = Etag::try_new("\"abc\"").unwrap();
         assert_eq!(
-            check_if_none_match(Some(IfMatch::Wildcard), Some("\"abc\"")),
+            check_if_none_match(Some(IfMatch::Wildcard), Some(&stored)),
             IfNoneMatchResult::WildcardMatched
         );
     }
@@ -313,10 +406,11 @@ mod tests {
 
     #[test]
     fn check_strong_matching_stored_is_matched() {
+        let stored = Etag::try_new("\"abc123\"").unwrap();
         assert_eq!(
             check_if_none_match(
-                Some(IfMatch::Strong("\"abc123\"".to_owned())),
-                Some("\"abc123\"")
+                Some(IfMatch::Strong(Etag::try_new("\"abc123\"").unwrap())),
+                Some(&stored)
             ),
             IfNoneMatchResult::Matched
         );
@@ -324,10 +418,11 @@ mod tests {
 
     #[test]
     fn check_strong_differing_from_stored_is_not_matched() {
+        let stored = Etag::try_new("\"current\"").unwrap();
         assert_eq!(
             check_if_none_match(
-                Some(IfMatch::Strong("\"stale\"".to_owned())),
-                Some("\"current\"")
+                Some(IfMatch::Strong(Etag::try_new("\"stale\"").unwrap())),
+                Some(&stored)
             ),
             IfNoneMatchResult::NotMatched
         );
@@ -336,7 +431,10 @@ mod tests {
     #[test]
     fn check_strong_on_draft_is_not_matched() {
         assert_eq!(
-            check_if_none_match(Some(IfMatch::Strong("\"abc\"".to_owned())), None),
+            check_if_none_match(
+                Some(IfMatch::Strong(Etag::try_new("\"abc\"").unwrap())),
+                None
+            ),
             IfNoneMatchResult::NotMatched
         );
     }

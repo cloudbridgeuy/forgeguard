@@ -6,7 +6,7 @@
 
 use std::sync::LazyLock;
 
-use crate::etag::ResolvedIfMatch;
+use crate::etag::{Etag, ResolvedIfMatch};
 
 /// Why a `PUT /organizations/{id}` responded 412.
 ///
@@ -45,7 +45,7 @@ impl PreconditionReason {
 /// request handler.
 pub(crate) fn precondition_reason(
     resolved: &ResolvedIfMatch,
-    stored: Option<&str>,
+    stored: Option<&Etag>,
 ) -> PreconditionReason {
     match resolved {
         ResolvedIfMatch::WildcardOnDraft => PreconditionReason::WildcardOnDraft,
@@ -89,6 +89,7 @@ pub(crate) fn record_precondition_failed(reason: PreconditionReason) {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use crate::etag::Etag;
 
     #[test]
     fn reason_wildcard_on_draft() {
@@ -101,17 +102,21 @@ mod tests {
     #[test]
     fn reason_draft_fail_closed_when_strong_on_missing_store() {
         assert_eq!(
-            precondition_reason(&ResolvedIfMatch::Strong("\"abc\"".to_owned()), None),
+            precondition_reason(
+                &ResolvedIfMatch::Strong(Etag::try_new("\"abc\"").unwrap()),
+                None
+            ),
             PreconditionReason::DraftFailClosed
         );
     }
 
     #[test]
     fn reason_stale_etag_when_strong_on_configured() {
+        let current = Etag::try_new("\"current\"").unwrap();
         assert_eq!(
             precondition_reason(
-                &ResolvedIfMatch::Strong("\"stale\"".to_owned()),
-                Some("\"current\"")
+                &ResolvedIfMatch::Strong(Etag::try_new("\"stale\"").unwrap()),
+                Some(&current)
             ),
             PreconditionReason::StaleEtag
         );

@@ -11,7 +11,7 @@ use forgeguard_core::{OrgStatus, Organization, OrganizationId};
 use serde::{Deserialize, Serialize};
 
 use crate::config::OrgConfig;
-use crate::etag::{self, IfNoneMatchResult, ResolvedIfMatch};
+use crate::etag::{self, Etag, IfNoneMatchResult, ResolvedIfMatch};
 use crate::store::{OrgRecord, OrgStore};
 
 pub(crate) use keys::{
@@ -30,8 +30,8 @@ pub(crate) struct PreconditionFailedBody {
     /// Machine-readable reason: one of `"stale_etag"`, `"draft_fail_closed"`,
     /// or `"wildcard_on_draft"`.
     reason: &'static str,
-    /// The ETag of the current stored representation (empty string for Draft orgs
-    /// that have no config yet).
+    /// The ETag of the current stored representation as a string. Empty string for
+    /// Draft orgs that have no config yet (`None` current_etag from the store).
     current_etag: String,
 }
 
@@ -94,7 +94,10 @@ pub(crate) async fn create_handler<S: OrgStore>(
     match store.create(org, body.config).await {
         Ok(record) => {
             let mut response_headers = HeaderMap::new();
-            if let Some(val) = record.configured().and_then(|c| c.etag().parse().ok()) {
+            if let Some(val) = record
+                .configured()
+                .and_then(|c| c.etag().as_str().parse().ok())
+            {
                 response_headers.insert(axum::http::header::ETAG, val);
             }
             (
@@ -222,14 +225,14 @@ pub(crate) async fn proxy_config_handler<S: OrgStore>(
     if headers
         .get(axum::http::header::IF_NONE_MATCH)
         .and_then(|v| v.to_str().ok())
-        .is_some_and(|etag| etag == configured.etag())
+        .is_some_and(|e| e == configured.etag().as_str())
     {
         return StatusCode::NOT_MODIFIED.into_response();
     }
 
     // Return config with ETag
     let mut response_headers = HeaderMap::new();
-    if let Ok(val) = configured.etag().parse() {
+    if let Ok(val) = configured.etag().as_str().parse() {
         response_headers.insert(axum::http::header::ETAG, val);
     }
 
@@ -308,7 +311,9 @@ pub(crate) async fn update_handler<S: OrgStore>(
     } else {
         ResolvedIfMatch::Absent
     };
-    let expected_etag = match &resolved {
+    // `expected_etag` is `Option<Etag>` — `Some` means a strong check is required,
+    // `None` means unconditional write (Absent or WildcardMatched paths).
+    let expected_etag: Option<Etag> = match &resolved {
         ResolvedIfMatch::Absent => None,
         ResolvedIfMatch::Strong(e) => Some(e.clone()),
         // Wildcard with existing config — unconditional write; check already passed.
@@ -323,6 +328,7 @@ pub(crate) async fn update_handler<S: OrgStore>(
                 Json(PreconditionFailedBody {
                     error: "etag mismatch",
                     reason: crate::metrics::PreconditionReason::WildcardOnDraft.as_label(),
+                    // Draft org has no stored etag — emit empty string on the wire.
                     current_etag: String::new(),
                 }),
             )
@@ -331,12 +337,15 @@ pub(crate) async fn update_handler<S: OrgStore>(
     };
 
     match store
-        .update(&org_id, org, config, expected_etag.as_deref())
+        .update(&org_id, org, config, expected_etag.as_ref())
         .await
     {
         Ok(updated) => {
             let mut response_headers = HeaderMap::new();
-            if let Some(val) = updated.configured().and_then(|c| c.etag().parse().ok()) {
+            if let Some(val) = updated
+                .configured()
+                .and_then(|c| c.etag().as_str().parse().ok())
+            {
                 response_headers.insert(axum::http::header::ETAG, val);
             }
             (
@@ -365,11 +374,15 @@ pub(crate) async fn update_handler<S: OrgStore>(
             );
             crate::metrics::record_precondition_failed(reason);
             let mut response_headers = HeaderMap::new();
-            // Only emit ETag when `current_etag` is non-empty. An empty
-            // string signals a Draft org (no config yet); empty strings
-            // are valid `HeaderValue`s, so we must guard explicitly.
-            if !current_etag.is_empty() {
-                if let Ok(val) = current_etag.parse() {
+            // Only emit ETag when `current_etag` is `Some`. `None` signals a
+            // Draft org (no config yet) — there is no etag to include.
+            let current_etag_str = current_etag
+                .as_ref()
+                .map(Etag::as_str)
+                .unwrap_or_default()
+                .to_string();
+            if let Some(ref etag) = current_etag {
+                if let Ok(val) = etag.as_str().parse() {
                     response_headers.insert(axum::http::header::ETAG, val);
                 }
             }
@@ -379,7 +392,7 @@ pub(crate) async fn update_handler<S: OrgStore>(
                 Json(PreconditionFailedBody {
                     error: "etag mismatch",
                     reason: reason.as_label(),
-                    current_etag,
+                    current_etag: current_etag_str,
                 }),
             )
                 .into_response()
@@ -418,10 +431,10 @@ fn not_found() -> Response {
 
 /// Build a [`HeaderMap`] containing an `ETag` header when `stored_etag` is
 /// `Some`. Returns an empty map for Draft orgs (no stored representation).
-fn etag_header_map(stored_etag: Option<&str>) -> HeaderMap {
+fn etag_header_map(stored_etag: Option<&Etag>) -> HeaderMap {
     let mut headers = HeaderMap::new();
-    if let Some(etag_str) = stored_etag {
-        if let Ok(val) = etag_str.parse() {
+    if let Some(etag) = stored_etag {
+        if let Ok(val) = etag.as_str().parse() {
             headers.insert(axum::http::header::ETAG, val);
         }
     }

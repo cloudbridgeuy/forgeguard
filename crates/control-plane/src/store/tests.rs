@@ -155,15 +155,23 @@ fn compute_etag_quoted_hex_format() {
     let config = record.config().unwrap();
 
     let etag = compute_etag(config).unwrap();
+    let etag_str = etag.as_str();
     // 16 hex chars + 2 quote chars = 18
-    assert_eq!(etag.len(), 18, "ETag should be 18 chars, got: {etag}");
-    assert!(
-        etag.starts_with('"'),
-        "ETag should start with quote: {etag}"
+    assert_eq!(
+        etag_str.len(),
+        18,
+        "ETag should be 18 chars, got: {etag_str}"
     );
-    assert!(etag.ends_with('"'), "ETag should end with quote: {etag}");
+    assert!(
+        etag_str.starts_with('"'),
+        "ETag should start with quote: {etag_str}"
+    );
+    assert!(
+        etag_str.ends_with('"'),
+        "ETag should end with quote: {etag_str}"
+    );
     // Inner part is hex
-    let inner = &etag[1..17];
+    let inner = &etag_str[1..17];
     assert!(
         inner.chars().all(|c| c.is_ascii_hexdigit()),
         "ETag inner should be hex: {inner}"
@@ -563,15 +571,17 @@ async fn revoke_key_nonexistent_key_returns_error() {
 
 #[tokio::test]
 async fn update_with_matching_expected_etag_succeeds() {
+    use crate::etag::Etag;
+
     let store = build_org_store(sample_json()).unwrap();
     let org_id = OrganizationId::new("org-acme").unwrap();
 
     let record = store.get(&org_id).await.unwrap().unwrap();
-    let current_etag = record
+    let current_etag: Etag = record
         .configured()
         .expect("sample has config")
         .etag()
-        .to_string();
+        .clone();
 
     let new_config = record.config().cloned();
     let new_org = record.org().clone();
@@ -581,27 +591,33 @@ async fn update_with_matching_expected_etag_succeeds() {
         .unwrap();
 
     // Same content → same etag.
-    assert_eq!(updated.configured().unwrap().etag(), current_etag);
+    assert_eq!(updated.configured().unwrap().etag(), &current_etag);
 }
 
 #[tokio::test]
 async fn update_with_stale_expected_etag_returns_precondition_failed() {
+    use crate::etag::Etag;
+
     let store = build_org_store(sample_json()).unwrap();
     let org_id = OrganizationId::new("org-acme").unwrap();
     let record = store.get(&org_id).await.unwrap().unwrap();
 
+    let stale = Etag::try_new("\"definitely-not-the-etag\"").unwrap();
     let result = store
         .update(
             &org_id,
             record.org().clone(),
             record.config().cloned(),
-            Some("\"definitely-not-the-etag\""),
+            Some(&stale),
         )
         .await;
 
     match result {
         Err(Error::PreconditionFailed { current_etag }) => {
-            assert_eq!(current_etag, record.configured().unwrap().etag());
+            assert_eq!(
+                current_etag.as_ref(),
+                Some(record.configured().unwrap().etag())
+            );
         }
         other => panic!("expected PreconditionFailed, got {other:?}"),
     }
@@ -626,7 +642,9 @@ async fn update_without_expected_etag_writes_unconditionally() {
 }
 
 #[tokio::test]
-async fn update_draft_with_expected_etag_fails_with_empty_current() {
+async fn update_draft_with_expected_etag_fails_with_none_current() {
+    use crate::etag::Etag;
+
     let json = r#"{
             "organizations": {
                 "org-draft": {
@@ -638,15 +656,16 @@ async fn update_draft_with_expected_etag_fails_with_empty_current() {
     let org_id = OrganizationId::new("org-draft").unwrap();
     let record = store.get(&org_id).await.unwrap().unwrap();
 
+    let expected = Etag::try_new("\"anything\"").unwrap();
     let result = store
-        .update(&org_id, record.org().clone(), None, Some("\"anything\""))
+        .update(&org_id, record.org().clone(), None, Some(&expected))
         .await;
 
     match result {
         Err(Error::PreconditionFailed { current_etag }) => {
-            assert!(current_etag.is_empty(), "Draft has no etag");
+            assert!(current_etag.is_none(), "Draft has no etag — expected None");
         }
-        other => panic!("expected PreconditionFailed with empty current, got {other:?}"),
+        other => panic!("expected PreconditionFailed with None current, got {other:?}"),
     }
 }
 
