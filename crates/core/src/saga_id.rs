@@ -107,4 +107,16 @@ mod tests {
         let err = SagaId::from_pk("SAGA#").unwrap_err();
         assert!(matches!(err, Error::InvalidSagaId { .. }));
     }
+
+    #[test]
+    fn from_str_works() {
+        let id: SagaId = "abc-123".parse().unwrap();
+        assert_eq!(id.as_str(), "abc-123");
+    }
+
+    #[test]
+    fn from_str_rejects_empty() {
+        let err = "".parse::<SagaId>().unwrap_err();
+        assert!(matches!(err, Error::InvalidSagaId { .. }));
+    }
 }
