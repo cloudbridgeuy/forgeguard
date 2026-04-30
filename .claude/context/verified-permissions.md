@@ -49,7 +49,7 @@ The sync engine (`cargo xtask control-plane cedar`) manages the VP policy store 
 
 These workarounds are baked into the sync engine. Knowing them prevents re-introducing the original bugs:
 
-1. **No `name` field on CreatePolicyTemplate/CreatePolicy.** The SDK v1.110.0 exposes `.name()` on the builder, but VP rejects it with `ValidationException: Invalid input`. The sync engine encodes names as a `[name]` prefix in the `description` field and decodes on read. See `encode_name_in_description` / `decode_name_from_description` in `cedar_io.rs`.
+1. **No `name` field on CreatePolicyTemplate/CreatePolicy.** The SDK v1.110.0 exposes `.name()` on the builder, but VP rejects it with `ValidationException: Invalid input`. The sync engine encodes names as a `[name]` prefix in the `description` field and decodes on read. The same `[name]` encoding is now consumed by the control-plane runtime when the V3 Groups handlers materialize per-org Cedar permits via `vp_client/mod.rs` — both call sites (xtask `cedar sync` and the CP runtime) share the encoding so policies created by either tool round-trip cleanly. See `encode_name_in_description` / `decode_name_from_description` in `cedar_io.rs`, and the mirror helpers in `crates/control-plane/src/vp_client/mod.rs`.
 
 2. **Actions require `appliesTo` blocks.** Schema actions defined as `"name": {}` (no `appliesTo`) are accepted by `PutSchema` but cause `ValidationException` when templates/policies reference them. The schema generator adds `appliesTo` with all entity types as both `principalTypes` and `resourceTypes`. See `generate_schema_json` in `schema.rs`.
 

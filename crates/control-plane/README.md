@@ -43,11 +43,13 @@ Authentication and authorization are handled by the `forgeguard-axum` middleware
 | 304 | Config unchanged (`If-None-Match` matched) |
 | 404 | Organization not found |
 
-### Groups sub-resource (V2)
+### Groups sub-resource (V2 + V3)
 
 Groups are RBAC role definitions stored per-org. Full request/response shapes and
 validation rules are defined in the design doc (§A.1 / §B.x):
 [`.claude/plans/2026-04-30-issue-102-cp-groups-v2/v2-plan.md`](../../.claude/plans/2026-04-30-issue-102-cp-groups-v2/v2-plan.md).
+The V3 implementation plan lives at
+[`.claude/designs/issue-102-v3-implementation-plan.md`](../../.claude/designs/issue-102-v3-implementation-plan.md).
 
 **Error codes:**
 
@@ -60,15 +62,48 @@ validation rules are defined in the design doc (§A.1 / §B.x):
 | 409 | Conflict — group name already exists on create |
 | 412 | Precondition Failed — `If-Match` etag mismatch on PUT/DELETE |
 | 422 | Unprocessable Entity — validation error (bad name, empty allow, bad action format, etc.) |
-| 501 | Not Implemented — Active-org VP push (lands in V3) |
+| 500 | Inconsistent State — F3' (DDB committed, VP push failed, rollback also failed) |
+| 503 | VP Push Failed — F3 (parent push failed, DDB rolled back) or F4 (mid-fanout failure on UPDATE) |
 
 **Caveats:**
 
-- **Draft-only** — the Active-org branch that pushes compiled Cedar policies to
-  Verified Permissions is `todo!("V3")` until that work lands.
 - `PUT` and `DELETE` require an `If-Match` header; omitting it returns `412`.
 - `DELETE` pre-checks for live memberships and inheriting groups; either
   blocks deletion with an appropriate error.
+
+#### V3: Active-org VP materialization
+
+When an org is in `OrgStatus::Active` (config carries a `vp_store_id`), the
+group write handlers materialize the compiled Cedar permit into the org's
+Verified Permissions (VP) policy store atomically with the DDB write.
+
+**`vp_client` module** (`crates/control-plane/src/vp_client/`) — three pieces:
+
+- The `VpClient` trait (`mod.rs`) — `create_policy`, `delete_policy_by_name`,
+  `list_policy_ids`. The trait centralises the `[name]` description-prefix
+  encoding shared with `cargo xtask control-plane cedar sync` (see
+  [verified-permissions.md](../../.claude/context/verified-permissions.md)).
+- `AwsVpClient` (`aws.rs`) — production impl over the AWS SDK.
+- `StubVpClient` (`stub.rs`, `cfg(any(test, feature = "test-support"))`) —
+  in-process stub with `fail_on_create(name)`, `fail_on_delete(name)`, and
+  `fail_after_n_creates(n)` knobs for failure-mode tests.
+
+**Failure modes:**
+
+| Mode | When | Status | Body shape |
+|------|------|--------|-----------|
+| **F3** | VP parent push fails after DDB write; rollback succeeds | `503` | `{"error":"vp_push_failed","stage":"parent","failed":"<policy>","completed":[],"remaining":[]}` |
+| **F3'** | Same as F3 but the DDB rollback also fails | `500` | `{"error":"inconsistent_state","ddb_committed":true,"vp_committed":false}` |
+| **F4** | Mid-fanout failure on UPDATE (parent succeeded, one dependent fails) | `503` | `{"error":"vp_push_failed","stage":"fanout","completed":[…],"failed":"<policy>","remaining":[…]}` — no rollback |
+
+**Metric:** `forgeguard_cp_group_rollback_failed_total{stage}` (Prometheus
+counter) increments on F3' (`stage="parent"`). Fanout failures (F4) do not
+rollback in V3, so the `stage="fanout"` label is currently never bumped — the
+label exists for forward compatibility.
+
+**Boundary case (Risk #5):** an org with `OrgStatus::Active` but
+`vp_store_id == None` is a saga-invariant violation. The handler surfaces the
+same `503 vp_push_failed{stage="parent"}` shape as F3.
 
 **`is_declared_group` predicate:** exposed as
 `OrgStore::is_declared_group(org_id, name) -> Result<bool>`. Consumed by
