@@ -634,7 +634,7 @@ async fn dynamo_update_with_matching_if_match_returns_200_and_new_etag() {
 
     // Read the current etag.
     let record = store.get(&org_id).await.unwrap().unwrap();
-    let current_etag = record.configured().unwrap().etag().to_string();
+    let current_etag = record.configured().unwrap().etag().clone();
 
     // Build an org + new config to update with.
     let now = chrono::Utc::now();
@@ -663,11 +663,12 @@ async fn dynamo_update_with_matching_if_match_returns_200_and_new_etag() {
     // Different config content → new etag differs from the seeded one.
     let new_etag = updated.configured().unwrap().etag();
     assert_ne!(
-        new_etag, current_etag,
+        new_etag, &current_etag,
         "changing config must produce a new etag"
     );
+    let new_etag_str = new_etag.as_str();
     assert!(
-        new_etag.starts_with('"') && new_etag.ends_with('"'),
+        new_etag_str.starts_with('"') && new_etag_str.ends_with('"'),
         "etag must be a quoted string, got: {new_etag}"
     );
 }
@@ -690,7 +691,7 @@ async fn dynamo_update_with_stale_if_match_returns_412_and_current_etag() {
         .configured()
         .unwrap()
         .etag()
-        .to_string();
+        .clone();
 
     let now = chrono::Utc::now();
     let org = Organization::new(
@@ -700,19 +701,16 @@ async fn dynamo_update_with_stale_if_match_returns_412_and_current_etag() {
         now,
     );
 
+    let stale = Etag::try_new("\"definitely-not-the-etag\"").unwrap();
     let result = store
-        .update(
-            &org_id,
-            org,
-            Some(sample_config()),
-            Some("\"definitely-not-the-etag\""),
-        )
+        .update(&org_id, org, Some(sample_config()), Some(&stale))
         .await;
 
     match result {
         Err(Error::PreconditionFailed { current_etag }) => {
             assert_eq!(
-                current_etag, stored_etag,
+                current_etag.as_ref(),
+                Some(&stored_etag),
                 "recovered etag must match the stored one"
             );
         }
@@ -815,11 +813,12 @@ async fn dynamo_draft_first_put_without_if_match_succeeds_and_returns_etag() {
 
     // Etag must be a non-empty quoted hex string (18 chars: 16 hex + 2 quotes).
     let etag = configured.etag();
+    let etag_str = etag.as_str();
     assert!(
-        etag.starts_with('"') && etag.ends_with('"'),
+        etag_str.starts_with('"') && etag_str.ends_with('"'),
         "etag must be a quoted string, got: {etag}"
     );
-    let inner = &etag[1..etag.len() - 1];
+    let inner = &etag_str[1..etag_str.len() - 1];
     assert!(
         !inner.is_empty() && inner.chars().all(|c| c.is_ascii_hexdigit()),
         "etag inner must be hex, got: {inner}"
@@ -827,7 +826,7 @@ async fn dynamo_draft_first_put_without_if_match_succeeds_and_returns_etag() {
 }
 
 /// Any `If-Match` on a Draft org (which has no stored etag) is rejected with
-/// `PreconditionFailed { current_etag: "" }`.
+/// `PreconditionFailed { current_etag: None }`.
 ///
 /// Mirrors `update_draft_with_expected_etag_fails_with_empty_current` from
 /// `store/tests.rs`.
@@ -843,17 +842,18 @@ async fn dynamo_draft_put_with_any_if_match_returns_412() {
         now,
     );
 
+    let any = Etag::try_new("\"anything\"").unwrap();
     let result = store
-        .update(&org_id, org, Some(sample_config()), Some("\"anything\""))
+        .update(&org_id, org, Some(sample_config()), Some(&any))
         .await;
 
     match result {
         Err(Error::PreconditionFailed { current_etag }) => {
             assert!(
-                current_etag.is_empty(),
-                "Draft has no etag — current_etag must be empty, got: {current_etag:?}"
+                current_etag.is_none(),
+                "Draft has no etag — current_etag must be None, got: {current_etag:?}"
             );
         }
-        other => panic!("expected PreconditionFailed with empty current_etag, got {other:?}"),
+        other => panic!("expected PreconditionFailed with no current_etag, got {other:?}"),
     }
 }

@@ -204,7 +204,7 @@ mod tests {
             forgeguard_core::OrgStatus::Draft,
             chrono::Utc::now(),
         );
-        org_store.create(org, sample_config()).await.unwrap();
+        org_store.create(org, Some(sample_config())).await.unwrap();
 
         (org_store, key_store, org_id)
     }
