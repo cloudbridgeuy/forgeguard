@@ -3,6 +3,7 @@
 use forgeguard_authn_core::Identity;
 use forgeguard_core::ResolvedFlags;
 use forgeguard_http::MatchedRoute;
+use http::StatusCode;
 
 // ---------------------------------------------------------------------------
 // PipelineOutcome
@@ -20,8 +21,8 @@ pub enum PipelineOutcome {
     Debug(String),
     /// The pipeline rejected the request (auth failure, no route, etc.).
     Reject {
-        /// HTTP status code to return (e.g. 401, 403, 404).
-        status: http::StatusCode,
+        /// HTTP status code to return.
+        status: StatusCode,
         /// Response body (error message or JSON).
         body: String,
     },
@@ -49,7 +50,7 @@ impl PipelineOutcome {
     }
 
     /// Create a `Reject` outcome.
-    pub fn reject(status: http::StatusCode, body: impl Into<String>) -> Self {
+    pub fn reject(status: StatusCode, body: impl Into<String>) -> Self {
         Self::Reject {
             status,
             body: body.into(),
@@ -105,10 +106,10 @@ mod tests {
 
     #[test]
     fn reject_constructor_takes_typed_status() {
-        let outcome = PipelineOutcome::reject(http::StatusCode::FORBIDDEN, "denied");
+        let outcome = PipelineOutcome::reject(StatusCode::FORBIDDEN, "denied");
         match outcome {
             PipelineOutcome::Reject { status, body } => {
-                assert_eq!(status, http::StatusCode::FORBIDDEN);
+                assert_eq!(status, StatusCode::FORBIDDEN);
                 assert_eq!(body, "denied");
             }
             _ => panic!("expected Reject"),
@@ -154,14 +155,12 @@ mod tests {
 
     #[test]
     fn is_forward_returns_false_for_reject() {
-        assert!(
-            !PipelineOutcome::reject(http::StatusCode::UNAUTHORIZED, "unauthorized").is_forward()
-        );
+        assert!(!PipelineOutcome::reject(StatusCode::UNAUTHORIZED, "unauthorized").is_forward());
     }
 
     #[test]
     fn is_reject_returns_true_for_reject() {
-        assert!(PipelineOutcome::reject(http::StatusCode::FORBIDDEN, "forbidden").is_reject());
+        assert!(PipelineOutcome::reject(StatusCode::FORBIDDEN, "forbidden").is_reject());
     }
 
     #[test]
