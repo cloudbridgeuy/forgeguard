@@ -2,14 +2,7 @@
 //!
 //! Pure data manipulation — no I/O, no async, no AWS SDK calls.
 //! Only manipulates `HashMap<String, AttributeValue>` values.
-//!
-//! # Temporary tuple shape (TODO for Group C)
-//!
-//! `from_group_item` currently returns `(RbacEntry, String)` where the `String`
-//! is the stored etag. Group C will introduce `EtagedGroup` as a named type and
-//! should replace this return type with `crate::store::groups::EtagedGroup`.
-//! Group D's call sites should be updated in the same pass.
-//!
+
 use std::collections::HashMap;
 
 use aws_sdk_dynamodb::types::AttributeValue;
@@ -24,17 +17,14 @@ use crate::error::{Error, Result};
 // ---------------------------------------------------------------------------
 
 /// Prefix for group sort keys in DynamoDB (e.g. `"GROUP#admin"`).
-#[allow(dead_code)] // consumed by Group C/D handler bodies
 pub(crate) const SK_GROUP_PREFIX: &str = "GROUP#";
 
 /// Build the partition key value for a group item: `"ORG#{org_id}"`.
-#[allow(dead_code)] // consumed by Group C/D handler bodies
 pub(crate) fn group_pk(org_id: &OrganizationId) -> String {
     format!("{ORG_PREFIX}{org_id}")
 }
 
 /// Build the sort key value for a group item: `"GROUP#{name}"`.
-#[allow(dead_code)] // consumed by Group C/D handler bodies
 pub(crate) fn group_sk(name: &str) -> String {
     format!("{SK_GROUP_PREFIX}{name}")
 }
@@ -54,11 +44,6 @@ fn get_s(item: &HashMap<String, AttributeValue>, key: &str) -> Result<String> {
         .ok_or_else(|| Error::Store(format!("missing or non-string group attribute: {key}")))
 }
 
-#[allow(dead_code)] // consumed by Group C/D handler bodies
-fn get_s_opt(item: &HashMap<String, AttributeValue>, key: &str) -> Option<String> {
-    item.get(key).and_then(|v| v.as_s().ok()).cloned()
-}
-
 // ---------------------------------------------------------------------------
 // Codec
 // ---------------------------------------------------------------------------
@@ -68,7 +53,6 @@ fn get_s_opt(item: &HashMap<String, AttributeValue>, key: &str) -> Option<String
 /// The `config` attribute stores the JSON-serialized `RbacEntry`. The `etag`
 /// attribute stores the precomputed etag string (caller's responsibility to
 /// compute it via `compute_group_etag` in `pure.rs`).
-#[allow(dead_code)] // consumed by Group C/D handler bodies
 pub(crate) fn to_group_item(
     org_id: &OrganizationId,
     entry: &RbacEntry,
@@ -91,11 +75,6 @@ pub(crate) fn to_group_item(
 ///
 /// The `String` is the stored etag. Returns `Error::Store` for any integrity
 /// violation (missing attributes, bad JSON, mismatched SK prefix).
-///
-/// # TODO for Group C
-/// Replace the return type `(RbacEntry, String)` with
-/// `crate::store::groups::EtagedGroup` once that type is introduced.
-#[allow(dead_code)] // consumed by Group C/D handler bodies
 pub(crate) fn from_group_item(
     item: &HashMap<String, AttributeValue>,
 ) -> Result<(RbacEntry, String)> {

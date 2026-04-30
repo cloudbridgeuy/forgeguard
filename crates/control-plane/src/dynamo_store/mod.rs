@@ -7,15 +7,20 @@
 //! at `infra/control-plane/schema/forgeguard-orgs.json` — the single source
 //! of truth consumed by both CDK (TypeScript) and Rust.
 
-use std::collections::HashMap;
+pub(crate) mod groups;
+
+use std::collections::{BTreeMap, HashMap};
 
 use aws_sdk_dynamodb::types::AttributeValue;
 use chrono::{DateTime, Utc};
+use forgeguard_authz_core::ValidatedRbacEntry;
 use forgeguard_core::{OrgStatus, Organization, OrganizationId};
 
 use crate::config::OrgConfig;
 use crate::error::{Error, Result};
 use crate::etag::Etag;
+use crate::handlers::groups::codec::{group_pk, group_sk, to_group_item, SK_GROUP_PREFIX};
+use crate::handlers::groups::pure::compute_group_etag;
 use crate::signing_key::{GenerateKeyResult, SigningKeyEntry};
 use crate::store::{generate_key_material, ConfiguredConfig, EtagedGroup, OrgRecord, OrgStore};
 
@@ -575,53 +580,241 @@ impl OrgStore for DynamoOrgStore {
     }
 
     // -----------------------------------------------------------------------
-    // Group CRUD stubs — to be replaced by Group E
+    // Group CRUD (V2) — DynamoDB-backed implementations
     // -----------------------------------------------------------------------
 
-    async fn get_group(
-        &self,
-        _org_id: &OrganizationId,
-        _name: &str,
-    ) -> Result<Option<EtagedGroup>> {
-        todo!("Group E: DynamoDB get_group")
+    async fn get_group(&self, org_id: &OrganizationId, name: &str) -> Result<Option<EtagedGroup>> {
+        let pk_value = group_pk(org_id);
+        let sk_value = group_sk(name);
+        let result = self
+            .client
+            .get_item()
+            .table_name(&self.table_name)
+            .key(pk(), AttributeValue::S(pk_value))
+            .key(sk(), AttributeValue::S(sk_value))
+            .send()
+            .await
+            .map_err(map_sdk_error)?;
+        result
+            .item
+            .as_ref()
+            .map(groups::etaged_group_from_item)
+            .transpose()
     }
 
     async fn put_group(
         &self,
-        _org_id: &OrganizationId,
-        _entry: forgeguard_authz_core::ValidatedRbacEntry,
-        _expected_etag: Option<&str>,
+        org_id: &OrganizationId,
+        entry: ValidatedRbacEntry,
+        expected_etag: Option<&str>,
     ) -> Result<EtagedGroup> {
-        todo!("Group E: DynamoDB put_group")
+        // Capture the name before any moves so both the `Ok` and `Err` branches
+        // can reference it without a borrow-after-move.
+        let group_name = entry.entry().name.clone();
+        let etag = compute_group_etag(entry.entry())?;
+        let item = to_group_item(org_id, entry.entry(), &etag)?;
+        let parts = groups::build_group_put_condition(expected_etag);
+
+        let mut req = self
+            .client
+            .put_item()
+            .table_name(&self.table_name)
+            .set_item(Some(item))
+            .condition_expression(parts.expression);
+        for (k, v) in parts.names {
+            req = req.expression_attribute_names(k, v);
+        }
+        for (k, v) in parts.values {
+            req = req.expression_attribute_values(k, v);
+        }
+
+        match req.send().await {
+            Ok(_) => Ok(EtagedGroup::from_stored(entry.into_inner(), etag)),
+            Err(sdk_err) if is_conditional_check_failed(&sdk_err) => match expected_etag {
+                None => Err(Error::Conflict(format!(
+                    "group '{group_name}' already exists"
+                ))),
+                Some(_) => {
+                    let current_etag =
+                        groups::recover_group_etag(self, org_id, &group_name).await?;
+                    Err(Error::PreconditionFailed { current_etag })
+                }
+            },
+            Err(sdk_err) => Err(map_sdk_error(sdk_err)),
+        }
     }
 
-    async fn list_groups(&self, _org_id: &OrganizationId) -> Result<Vec<EtagedGroup>> {
-        todo!("Group E: DynamoDB list_groups")
+    async fn list_groups(&self, org_id: &OrganizationId) -> Result<Vec<EtagedGroup>> {
+        let pk_value = group_pk(org_id);
+
+        let mut all_items = Vec::new();
+        let mut exclusive_start_key = None;
+
+        loop {
+            let mut request = self
+                .client
+                .query()
+                .table_name(&self.table_name)
+                .key_condition_expression("#pk = :pk AND begins_with(#sk, :prefix)")
+                .expression_attribute_names("#pk", pk())
+                .expression_attribute_names("#sk", sk())
+                .expression_attribute_values(":pk", AttributeValue::S(pk_value.clone()))
+                .expression_attribute_values(
+                    ":prefix",
+                    AttributeValue::S(SK_GROUP_PREFIX.to_string()),
+                );
+
+            if let Some(key) = exclusive_start_key {
+                request = request.set_exclusive_start_key(Some(key));
+            }
+
+            let result = request.send().await.map_err(map_sdk_error)?;
+
+            all_items.extend(result.items.unwrap_or_default());
+
+            match result.last_evaluated_key {
+                Some(key) if !key.is_empty() => exclusive_start_key = Some(key),
+                _ => break,
+            }
+        }
+
+        // DynamoDB Query with a begins_with SK condition returns items sorted
+        // ascending by SK, which equals ascending by group name (after stripping
+        // the GROUP# prefix). No client-side sort needed.
+        all_items
+            .iter()
+            .map(groups::etaged_group_from_item)
+            .collect()
     }
 
     async fn delete_group(
         &self,
-        _org_id: &OrganizationId,
-        _name: &str,
-        _expected_etag: &str,
+        org_id: &OrganizationId,
+        name: &str,
+        expected_etag: &str,
     ) -> Result<()> {
-        todo!("Group E: DynamoDB delete_group")
+        let pk_value = group_pk(org_id);
+        let sk_value = group_sk(name);
+
+        let result = self
+            .client
+            .delete_item()
+            .table_name(&self.table_name)
+            .key(pk(), AttributeValue::S(pk_value))
+            .key(sk(), AttributeValue::S(sk_value))
+            .condition_expression("attribute_exists(#sk_attr) AND #etag = :expected_etag")
+            .expression_attribute_names("#sk_attr", sk())
+            .expression_attribute_names("#etag", "etag")
+            .expression_attribute_values(
+                ":expected_etag",
+                AttributeValue::S(expected_etag.to_string()),
+            )
+            .send()
+            .await;
+
+        match result {
+            Ok(_) => Ok(()),
+            Err(sdk_err) => {
+                // `DeleteItem` uses a different error type from `PutItem`.
+                let is_ccfe = matches!(
+                    sdk_err,
+                    aws_sdk_dynamodb::error::SdkError::ServiceError(ref e)
+                        if e.err().is_conditional_check_failed_exception()
+                );
+                if is_ccfe {
+                    // Either the group no longer exists (row absent → `attribute_exists` fired)
+                    // or the etag no longer matches. Re-read to distinguish.
+                    match self.get_group(org_id, name).await? {
+                        None => Err(Error::NotFound(format!("group '{name}' not found"))),
+                        Some(current) => Err(Error::PreconditionFailed {
+                            current_etag: current.etag().to_string(),
+                        }),
+                    }
+                } else {
+                    Err(map_sdk_error(sdk_err))
+                }
+            }
+        }
     }
 
-    async fn list_inheritors(&self, _org_id: &OrganizationId, _name: &str) -> Result<Vec<String>> {
-        todo!("Group E: DynamoDB list_inheritors")
+    async fn list_inheritors(&self, org_id: &OrganizationId, name: &str) -> Result<Vec<String>> {
+        // V2: dev-volume only; future work uses GSI1 for O(rows-in-org)
+        let groups_list = self.list_groups(org_id).await?;
+        Ok(groups_list
+            .into_iter()
+            .filter(|g| g.entry().inherits.iter().any(|s| s == name))
+            .map(|g| g.entry().name.clone())
+            .collect())
     }
 
     async fn count_memberships_for_group(
         &self,
-        _org_id: &OrganizationId,
-        _name: &str,
-    ) -> Result<std::collections::BTreeMap<String, u32>> {
-        todo!("Group E: DynamoDB count_memberships_for_group")
+        org_id: &OrganizationId,
+        name: &str,
+    ) -> Result<BTreeMap<String, u32>> {
+        // V2: full-table scan; future: GSI1 (PK=ORG#{org_id}, SK=USER#{sub})
+        // for O(rows-in-org) instead of O(table-size).
+        //
+        // Membership rows are keyed `PK=USER#{sub}, SK=ORG#{org_id}` and store
+        // the user's group memberships as `groups: List<String>`.
+        // If the write side for membership rows is not yet deployed, this scan
+        // returns an empty BTreeMap safely.
+        let sk_value = format!("{ORG_PREFIX}{org_id}");
+
+        let mut counts: BTreeMap<String, u32> = BTreeMap::new();
+        let mut exclusive_start_key = None;
+
+        loop {
+            let mut request = self
+                .client
+                .scan()
+                .table_name(&self.table_name)
+                // Filter: SK equals ORG#{org_id} AND the groups list contains the target name.
+                .filter_expression(
+                    "begins_with(#pk, :user_prefix) AND #sk = :sk_val AND contains(#groups, :group_name)",
+                )
+                .expression_attribute_names("#pk", pk())
+                .expression_attribute_names("#sk", sk())
+                .expression_attribute_names("#groups", "groups")
+                .expression_attribute_values(
+                    ":user_prefix",
+                    AttributeValue::S(USER_PREFIX.to_string()),
+                )
+                .expression_attribute_values(":sk_val", AttributeValue::S(sk_value.clone()))
+                .expression_attribute_values(
+                    ":group_name",
+                    AttributeValue::S(name.to_string()),
+                );
+
+            if let Some(key) = exclusive_start_key {
+                request = request.set_exclusive_start_key(Some(key));
+            }
+
+            let result = request.send().await.map_err(map_sdk_error)?;
+
+            for item in result.items.unwrap_or_default() {
+                // Extract the user sub from PK: "USER#{sub}" → sub.
+                if let Some(user_sub) = item
+                    .get(pk())
+                    .and_then(|v| v.as_s().ok())
+                    .and_then(|pk_val| pk_val.strip_prefix(USER_PREFIX))
+                {
+                    // Each user has at most one ORG row per org, so count is always 1 per user.
+                    *counts.entry(user_sub.to_string()).or_insert(0) += 1;
+                }
+            }
+
+            match result.last_evaluated_key {
+                Some(key) if !key.is_empty() => exclusive_start_key = Some(key),
+                _ => break,
+            }
+        }
+
+        Ok(counts)
     }
 
-    async fn is_declared_group(&self, _org_id: &OrganizationId, _name: &str) -> Result<bool> {
-        todo!("Group E: DynamoDB is_declared_group")
+    async fn is_declared_group(&self, org_id: &OrganizationId, name: &str) -> Result<bool> {
+        Ok(self.get_group(org_id, name).await?.is_some())
     }
 }
 

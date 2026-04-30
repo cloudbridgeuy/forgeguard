@@ -28,7 +28,6 @@ impl EtagedGroup {
 
     /// Build from an already-paired (entry, etag) — e.g. when reconstituting
     /// an `EtagedGroup` from a DynamoDB item.
-    #[allow(dead_code)] // consumed by Group E (DynamoDB codec) — not yet wired
     pub(crate) fn from_stored(entry: RbacEntry, etag: String) -> Self {
         Self { entry, etag }
     }
