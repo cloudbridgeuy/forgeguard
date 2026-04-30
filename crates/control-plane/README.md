@@ -302,7 +302,8 @@ The control plane uses the `Organization` entity from `forgeguard_core` to repre
 |------|----------|---------|
 | `Organization` | `forgeguard_core` | Domain entity with status lifecycle, timestamps |
 | `OrgConfig` | `config.rs` | Versioned proxy configuration (replaces old `OrgProxyConfig`) |
-| `OrgRecord` | `store.rs` | Pairs `Organization` + `OrgConfig` + precomputed ETag |
+| `Etag` | `etag.rs` | Typed ETag value (`pub(crate)` newtype over `String`). Constructed via `Etag::try_new(raw)` (rejects empty strings); `as_str()` exposes the raw value. Companions `IfMatch`, `ResolvedIfMatch`, `EtagCheck`, and `IfNoneMatchResult` cover the full RFC 7232 optimistic-locking state machine in pure code. |
+| `OrgRecord` | `store.rs` | Pairs `Organization` + `OrgConfig` + precomputed `Etag` |
 | `OrgStore` trait | `store.rs` | Async trait for org storage backends |
 | `InMemoryOrgStore` | `store.rs` | In-memory HashMap behind `tokio::sync::RwLock` |
 | `DynamoOrgStore` | `dynamo_store.rs` | DynamoDB-backed organization store for production |
@@ -311,6 +312,8 @@ The control plane uses the `Organization` entity from `forgeguard_core` to repre
 ## ETag Caching
 
 Every org config response includes an `ETag` header (xxHash64 of the canonical JSON). Proxies send `If-None-Match` on subsequent polls and receive `304 Not Modified` when nothing has changed, saving bandwidth.
+
+ETag values are represented end-to-end as the typed `Etag` newtype (see `etag.rs`). This eliminates raw-string comparisons in handlers and store implementations — the companion pure functions (`parse_if_match`, `check_etag`, `check_if_none_match`) centralise all comparison logic and guard against accidental equality tests on unquoted strings.
 
 ## Dependencies
 
