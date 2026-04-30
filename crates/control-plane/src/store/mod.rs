@@ -242,6 +242,27 @@ impl InMemoryOrgStore {
             memberships_to_groups: tokio::sync::RwLock::new(BTreeMap::new()),
         }
     }
+
+    /// Test fixture: write a membership row into the in-memory store.
+    ///
+    /// This is intentionally only available under `#[cfg(test)]` — it is a
+    /// seeding helper for integration tests that exercise delete-conflict
+    /// pre-checks (F.4 / `groups_delete.rs`). Production paths write
+    /// memberships only via Group E (DynamoDB).
+    ///
+    /// Calls for the same `(org_id, user_id)` key overwrite (not append).
+    /// Tests that need multiple group memberships for one user must pass them
+    /// all in a single `groups` vector.
+    #[cfg(test)]
+    pub(crate) async fn seed_membership(
+        &self,
+        org_id: &OrganizationId,
+        user_id: &str,
+        groups: Vec<String>,
+    ) {
+        let mut m = self.memberships_to_groups.write().await;
+        m.insert((org_id.clone(), user_id.to_owned()), groups);
+    }
 }
 
 impl OrgStore for InMemoryOrgStore {

@@ -462,18 +462,40 @@ pub(super) mod test_support {
     use std::collections::HashMap;
     use std::sync::Arc;
 
+    use axum::extract::{Path, State};
+    use axum::http::StatusCode;
+    use axum::response::{IntoResponse, Response};
     use axum::Router;
     use forgeguard_authn_core::static_api_key::{ApiKeyEntry, StaticApiKeyResolver};
     use forgeguard_authn_core::IdentityChain;
     use forgeguard_authz_core::{PolicyDecision, PolicyEngine, StaticPolicyEngine};
     use forgeguard_axum::{forgeguard_layer, ForgeGuard};
-    use forgeguard_core::{FlagConfig, GroupName, ProjectId, TenantId, UserId};
+    use forgeguard_core::{FlagConfig, GroupName, OrganizationId, ProjectId, TenantId, UserId};
     use forgeguard_http::{
         DefaultPolicy, PublicAuthMode, PublicRoute, PublicRouteMatcher, RouteMatcher,
     };
     use forgeguard_proxy_core::{PipelineConfig, PipelineConfigParams};
 
-    use crate::store::{build_org_store, InMemoryOrgStore};
+    use crate::store::{build_org_store, InMemoryOrgStore, OrgStore};
+
+    /// Test-only handler that probes whether a group name is declared for an org.
+    ///
+    /// Mounted only by `test_app` at `GET /test/declared-group/{org_id}/{name}`.
+    /// This route is **never** compiled into production binaries — it is gated
+    /// by `#[cfg(test)]` and only wired inside `test_app`.
+    pub(crate) async fn declared_group_handler<S: OrgStore>(
+        Path((org_id, name)): Path<(String, String)>,
+        State(store): State<Arc<S>>,
+    ) -> Response {
+        let Ok(o) = OrganizationId::new(&org_id) else {
+            return StatusCode::NOT_FOUND.into_response();
+        };
+        match store.is_declared_group(&o, &name).await {
+            Ok(true) => StatusCode::OK.into_response(),
+            Ok(false) => StatusCode::NOT_FOUND.into_response(),
+            Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        }
+    }
 
     pub const TEST_API_KEY: &str = "test-key";
 
@@ -579,6 +601,13 @@ pub(super) mod test_support {
                     .delete(super::groups::delete_handler::<InMemoryOrgStore>),
             )
             .route("/metrics", axum::routing::get(super::metrics_handler))
+            // Test-only probe route — never compiled into production binaries.
+            // Allows tests to check `is_declared_group` via HTTP without
+            // exposing the predicate through the real API surface.
+            .route(
+                "/test/declared-group/{org_id}/{name}",
+                axum::routing::get(declared_group_handler::<InMemoryOrgStore>),
+            )
             .with_state(store)
             .layer(axum::middleware::from_fn_with_state(fg, forgeguard_layer))
     }

@@ -415,7 +415,10 @@ pub(crate) async fn update_handler<S: OrgStore>(
     let resolved = etag::resolve_if_match(if_match_raw, Some(existing.etag()));
     let expected_etag: Option<String> = match &resolved {
         etag::ResolvedIfMatch::Strong(e) => Some(e.clone()),
-        etag::ResolvedIfMatch::WildcardMatched => None, // unconditional write
+        // `If-Match: *` on an existing row — pass the stored etag so that
+        // `put_group` takes the conditional-update path rather than the
+        // create-only path (which rejects `(Some(_), None)` as Conflict).
+        etag::ResolvedIfMatch::WildcardMatched => Some(existing.etag().to_owned()),
         // Wildcard on absent row — fail closed (404 already returned above)
         etag::ResolvedIfMatch::WildcardOnDraft => {
             return shape_group_error_response(&GroupHandlerError::NotFound);
