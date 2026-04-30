@@ -1824,6 +1824,7 @@ name = "forgeguard_authz_core"
 version = "0.0.0"
 dependencies = [
  "forgeguard_core",
+ "regex",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

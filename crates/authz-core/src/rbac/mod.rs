@@ -213,5 +213,12 @@ impl<'a> InheritanceWalker<'a> {
     }
 }
 
+pub mod validation;
+
+pub use validation::{
+    validate_action_format, validate_group_name, validate_rbac_entry, GroupValidationError,
+    ValidatedRbacEntry,
+};
+
 #[cfg(test)]
 mod tests;
