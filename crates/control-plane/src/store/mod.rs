@@ -144,7 +144,7 @@ pub(crate) trait OrgStore: Send + Sync {
 
     /// Return `true` iff `name` is a declared (written) group for the org.
     ///
-    /// Reserved for Group E (Cedar sync validation). Not yet called by Group D handlers.
+    /// Reserved for issue #100's POST /users membership validator.
     #[allow(dead_code)]
     fn is_declared_group(
         &self,

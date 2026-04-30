@@ -2,7 +2,7 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use super::{resolve_inherits, RbacEntry};
+use super::{resolve_inherits, RbacEntry, CYCLE_PREFIX};
 
 /// Stable parsed form of a group write request.
 ///
@@ -104,7 +104,7 @@ pub fn validate_rbac_entry(
 }
 
 fn map_resolve_err(s: String) -> GroupValidationError {
-    if s.starts_with("cycle detected") {
+    if s.starts_with(CYCLE_PREFIX) {
         GroupValidationError::InheritCycle(s)
     } else {
         // resolve_inherits returns "RBAC role 'X' not found ..." for missing inherits

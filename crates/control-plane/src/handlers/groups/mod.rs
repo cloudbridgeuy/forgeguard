@@ -509,7 +509,7 @@ pub(crate) async fn delete_handler<S: OrgStore>(
         return crate::handlers::not_found();
     };
 
-    // Org lookup + Active gate (record needed for the V3 todo! branch after delete)
+    // Org lookup + Active gate — must fire BEFORE any mutation.
     let record = match require_org(
         store.as_ref(),
         &org_id,
@@ -521,6 +521,10 @@ pub(crate) async fn delete_handler<S: OrgStore>(
         Ok(r) => r,
         Err(resp) => return resp,
     };
+    if record.org().status() == OrgStatus::Active {
+        // V2: Active orgs are unsupported. V3 lands the VP delete branch.
+        return StatusCode::NOT_IMPLEMENTED.into_response();
+    }
 
     // If-Match is required for DELETE
     let if_match_raw = parse_if_match_header(&headers);
@@ -592,12 +596,7 @@ pub(crate) async fn delete_handler<S: OrgStore>(
     }
 
     match store.delete_group(&org_id, &name, &expected_etag).await {
-        Ok(()) => {
-            if record.org().status() == OrgStatus::Active {
-                todo!("V3 DeletePolicy + rollback semantics");
-            }
-            StatusCode::NO_CONTENT.into_response()
-        }
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(crate::error::Error::PreconditionFailed { current_etag }) => {
             crate::metrics::record_precondition_failed(PreconditionReason::StaleEtag);
             shape_group_error_response(&GroupHandlerError::PreconditionFailed {

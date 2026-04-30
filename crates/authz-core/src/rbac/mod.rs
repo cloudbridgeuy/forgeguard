@@ -1,6 +1,14 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 
+/// Prefix emitted by [`resolve_inherits`] (and [`InheritanceWalker::collect`])
+/// when a cycle is detected in the role-inheritance graph.
+///
+/// [`map_resolve_err`](crate::rbac::validation) uses this constant as the
+/// single source of truth so error classification cannot silently drift if the
+/// wording changes.
+pub(crate) const CYCLE_PREFIX: &str = "cycle detected";
+
 fn default_true() -> bool {
     true
 }
@@ -177,7 +185,7 @@ impl<'a> InheritanceWalker<'a> {
     /// Recursively collect actions for a role, detecting cycles.
     fn collect(&mut self, role: &'a str) -> Result<(), String> {
         if self.visiting.contains(role) {
-            return Err(format!("cycle detected in role inheritance: '{role}'"));
+            return Err(format!("{CYCLE_PREFIX} in role inheritance: '{role}'"));
         }
         if self.visited.contains(role) {
             // Already fully processed (handles diamond inheritance).

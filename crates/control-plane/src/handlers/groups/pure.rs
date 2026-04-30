@@ -176,10 +176,6 @@ pub(crate) enum GroupHandlerError {
         blocking_inheritors: Vec<String>,
         memberships_count: BTreeMap<String, u32>,
     },
-    /// An unexpected internal error occurred (logged separately).
-    #[error("internal error")]
-    #[allow(dead_code)] // will be constructed by Group E / F error-propagation paths
-    Internal,
 }
 
 /// Map the `reason` field for a `GroupValidationError` to its snake_case label
@@ -208,7 +204,6 @@ fn validation_label(err: &GroupValidationError) -> (&'static str, &'static str) 
 /// | `AlreadyExists`        | 409    | `{"error": "already_exists"}`      |
 /// | `PreconditionFailed`   | 412    | `PreconditionFailedBody`           |
 /// | `DeleteConflict`       | 409    | `DeleteConflictBody`               |
-/// | `Internal`             | 500    | empty body                         |
 pub(crate) fn shape_group_error_response(err: &GroupHandlerError) -> Response {
     match err {
         GroupHandlerError::Validation(v_err) => {
@@ -265,7 +260,6 @@ pub(crate) fn shape_group_error_response(err: &GroupHandlerError) -> Response {
             }),
         )
             .into_response(),
-        GroupHandlerError::Internal => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
 
@@ -518,12 +512,6 @@ mod tests {
         assert_eq!(json["error"], "delete_conflict");
         assert!(json["blocking_inheritors"].is_array());
         assert!(json["memberships_count"].is_object());
-    }
-
-    #[tokio::test]
-    async fn shape_error_internal_yields_500_empty_body() {
-        let resp = shape_group_error_response(&GroupHandlerError::Internal);
-        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     // -----------------------------------------------------------------------
