@@ -16,13 +16,10 @@ const PK_PREFIX: &str = "SAGA#";
 pub struct SagaId(String);
 
 impl SagaId {
-    /// Construct from a bare id (no prefix). Rejects empty input.
+    /// Construct from a bare id (no prefix). Rejects empty input and ids that contain `#`.
     pub fn try_new(raw: impl Into<String>) -> Result<Self> {
         let raw = raw.into();
-        if raw.is_empty() {
-            return Err(Error::InvalidSagaId { raw });
-        }
-        if raw.contains('#') {
+        if raw.is_empty() || raw.contains('#') {
             return Err(Error::InvalidSagaId { raw });
         }
         Ok(Self(raw))
@@ -35,7 +32,7 @@ impl SagaId {
             .ok_or_else(|| Error::InvalidSagaId {
                 raw: pk.to_string(),
             })?;
-        Self::try_new(bare.to_string())
+        Self::try_new(bare)
     }
 
     /// The bare id (suitable for AWS Step Functions execution name).
@@ -53,7 +50,7 @@ impl fmt::Display for SagaId {
 impl FromStr for SagaId {
     type Err = Error;
     fn from_str(s: &str) -> Result<Self> {
-        Self::try_new(s.to_string())
+        Self::try_new(s)
     }
 }
 
