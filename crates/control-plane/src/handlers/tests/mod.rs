@@ -1,7 +1,12 @@
+mod active_support;
 mod basic;
 mod conditional_get;
 mod crud;
 mod draft;
+mod groups_active_create;
+mod groups_active_delete;
+mod groups_active_failure_modes;
+mod groups_active_update;
 mod groups_crud;
 mod groups_delete;
 mod groups_etag;
