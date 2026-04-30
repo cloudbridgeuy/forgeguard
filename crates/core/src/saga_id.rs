@@ -110,8 +110,8 @@ mod tests {
 
     #[test]
     fn from_str_accepts_bare_id() {
-        let id: SagaId = "abc-123".parse().unwrap();
-        assert_eq!(id.as_str(), "abc-123");
+        let id: SagaId = "saga-from-parse-id".parse().unwrap();
+        assert_eq!(id.as_str(), "saga-from-parse-id");
     }
 
     #[test]
