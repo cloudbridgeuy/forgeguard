@@ -172,7 +172,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 url = "2.5"
 
 # UUID
-uuid = { version = "1.0", features = ["v4", "v7", "serde"] }
+uuid = { version = "1.23", features = ["v4", "v7", "serde"] }
 
 # Hashing (stable, portable — used for feature flag rollout bucketing)
 xxhash-rust = { version = "0.8", features = ["xxh64"] }
