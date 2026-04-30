@@ -10,6 +10,28 @@ use super::super::test_support::{build_test_store, test_app, TEST_API_KEY};
 // GET /organizations/{id}/proxy-config
 // -----------------------------------------------------------------
 
+/// Fetch the stored ETag for org-acme by performing an unconditional GET.
+async fn get_stored_etag(app: axum::Router) -> String {
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/v1/organizations/org-acme/proxy-config")
+                .header("x-api-key", TEST_API_KEY)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    res.headers()
+        .get(axum::http::header::ETAG)
+        .expect("initial GET must include ETag")
+        .to_str()
+        .unwrap()
+        .to_string()
+}
+
 /// Smoke: GET proxy-config without any `If-None-Match` header.
 /// Expects 200 + JSON body + ETag response header.
 #[tokio::test]
@@ -40,34 +62,12 @@ async fn proxy_config_no_if_none_match_returns_200_with_body_and_etag() {
 }
 
 /// Wildcard `If-None-Match: *` against a Configured org.
-/// Expects 304 + ETag header echoing the stored etag (W1 fix, R1).
+/// Expects 304 + ETag header echoing the stored etag.
 #[tokio::test]
 async fn proxy_config_wildcard_if_none_match_on_configured_returns_304_with_etag() {
     let app = test_app(build_test_store());
+    let stored_etag = get_stored_etag(app.clone()).await;
 
-    // First: get the stored ETag so we can assert it is echoed.
-    let first_res = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri("/api/v1/organizations/org-acme/proxy-config")
-                .header("x-api-key", TEST_API_KEY)
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(first_res.status(), StatusCode::OK);
-    let stored_etag = first_res
-        .headers()
-        .get(axum::http::header::ETAG)
-        .expect("initial GET must include ETag")
-        .to_str()
-        .unwrap()
-        .to_string();
-
-    // Second: wildcard If-None-Match.
     let res = app
         .oneshot(
             Request::builder()
@@ -89,45 +89,20 @@ async fn proxy_config_wildcard_if_none_match_on_configured_returns_304_with_etag
         .to_str()
         .unwrap()
         .to_string();
-    assert_eq!(
-        response_etag, stored_etag,
-        "304 ETag must echo the stored etag"
-    );
+    assert_eq!(response_etag, stored_etag, "304 ETag must echo the stored etag");
 
     let body_bytes = res.into_body().collect().await.unwrap().to_bytes();
     assert!(body_bytes.is_empty(), "304 body must be empty");
 }
 
 /// Strong `If-None-Match: <stored etag>` against a Configured org.
-/// Expects 304 (R8 — strong-match still works after the refactor).
+/// Expects 304 — strong-match still works after the refactor.
 #[tokio::test]
 async fn proxy_config_strong_matching_if_none_match_returns_304() {
     let app = test_app(build_test_store());
+    let etag = get_stored_etag(app.clone()).await;
 
-    // First GET: capture the current ETag.
-    let first_res = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri("/api/v1/organizations/org-acme/proxy-config")
-                .header("x-api-key", TEST_API_KEY)
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(first_res.status(), StatusCode::OK);
-    let etag = first_res
-        .headers()
-        .get(axum::http::header::ETAG)
-        .expect("first GET must include ETag")
-        .to_str()
-        .unwrap()
-        .to_string();
-
-    // Second GET: send the captured ETag as If-None-Match.
-    let second_res = app
+    let res = app
         .oneshot(
             Request::builder()
                 .method("GET")
@@ -140,8 +115,8 @@ async fn proxy_config_strong_matching_if_none_match_returns_304() {
         .await
         .unwrap();
 
-    assert_eq!(second_res.status(), StatusCode::NOT_MODIFIED);
-    let response_etag = second_res
+    assert_eq!(res.status(), StatusCode::NOT_MODIFIED);
+    let response_etag = res
         .headers()
         .get(axum::http::header::ETAG)
         .expect("304 must include ETag header")
@@ -150,7 +125,7 @@ async fn proxy_config_strong_matching_if_none_match_returns_304() {
         .to_string();
     assert_eq!(response_etag, etag, "304 ETag must match the original");
 
-    let body_bytes = second_res.into_body().collect().await.unwrap().to_bytes();
+    let body_bytes = res.into_body().collect().await.unwrap().to_bytes();
     assert!(body_bytes.is_empty(), "304 body must be empty");
 }
 

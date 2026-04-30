@@ -244,10 +244,8 @@ pub(crate) async fn proxy_config_handler<S: OrgStore>(
             )
                 .into_response()
         }
-        // NotMatched: header absent, stale etag, or strong match against a
-        // Draft org — return the full config.
-        // WildcardOnDraft: unreachable here because the Draft branch above
-        // already returned 409; matched exhaustively to keep the call site total.
+        // WildcardOnDraft is unreachable: the Draft 409 branch fires above.
+        // Matched exhaustively to keep the call site total.
         IfNoneMatchResult::NotMatched | IfNoneMatchResult::WildcardOnDraft => (
             StatusCode::OK,
             response_headers,
