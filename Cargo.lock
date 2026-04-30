@@ -1982,6 +1982,7 @@ dependencies = [
  "forgeguard_core",
  "forgeguard_http",
  "forgeguard_proxy_core",
+ "http 1.4.0",
  "pingora-core",
  "pingora-http",
  "pingora-proxy",

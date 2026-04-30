@@ -109,7 +109,7 @@ pub(crate) struct RequestCtx {
     flags: Option<ResolvedFlags>,
     matched_route: Option<MatchedRoute>,
     request_start: Instant,
-    method: String,
+    method: http::Method,
     path: String,
     client_ip: Option<IpAddr>,
     /// Captured Origin header — used by later CORS tasks.
@@ -126,7 +126,7 @@ impl ProxyHttp for ForgeGuardProxy {
             flags: None,
             matched_route: None,
             request_start: Instant::now(),
-            method: String::new(),
+            method: http::Method::GET,
             path: String::new(),
             client_ip: None,
             cors_origin: None,
@@ -135,7 +135,7 @@ impl ProxyHttp for ForgeGuardProxy {
 
     async fn request_filter(&self, session: &mut Session, ctx: &mut Self::CTX) -> Result<bool> {
         let req = session.downstream_session.req_header();
-        ctx.method = req.method.to_string();
+        ctx.method = req.method.clone();
         ctx.path = req.uri.path().to_string();
         ctx.client_ip = extract_client_ip(session, self.client_ip_source);
 
@@ -146,7 +146,7 @@ impl ProxyHttp for ForgeGuardProxy {
             .and_then(|v| v.to_str().ok())
             .map(str::to_string);
 
-        if ctx.method == "OPTIONS" {
+        if ctx.method == http::Method::OPTIONS {
             if let Some(cors) = &self.cors {
                 let has_acrm = req.headers.get("access-control-request-method").is_some();
 
@@ -362,10 +362,10 @@ impl ProxyHttp for ForgeGuardProxy {
 
         // Record Prometheus metrics
         REQUEST_TOTAL
-            .with_label_values(&[&ctx.method, &status.to_string()])
+            .with_label_values(&[ctx.method.as_str(), &status.to_string()])
             .inc();
         REQUEST_DURATION
-            .with_label_values(&[&ctx.method])
+            .with_label_values(&[ctx.method.as_str()])
             .observe(ctx.request_start.elapsed().as_secs_f64());
     }
 }
