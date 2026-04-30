@@ -380,3 +380,7 @@ curl -s -X DELETE \
 
 - CORS middleware (no browser clients -- deferred to #40 dashboard)
 - Hot-reload of config file
+
+## V2 of #102 — Groups CRUD (Draft only)
+
+Endpoints under `/api/v1/organizations/{org_id}/groups[/{name}]`. ETag/`If-Match` is mandatory on PUT/DELETE (omitting it returns 422). DELETE pre-checks for both live memberships (`count_memberships_for_group`) and inheriting groups (`list_inheritors`); either non-empty set blocks deletion. The Active-org branch that pushes compiled Cedar policies to Verified Permissions is `todo!("V3")` until VP push lands. The `is_declared_group(org_id, name)` predicate is exposed on `OrgStore` for issue #100's `POST /users` validator, which must confirm that a referenced group name is actually declared before accepting a membership assignment.

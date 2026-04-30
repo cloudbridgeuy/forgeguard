@@ -29,6 +29,11 @@ Authentication and authorization are handled by the `forgeguard-axum` middleware
 | `POST` | `/api/v1/organizations/{org_id}/keys` | Generate Ed25519 signing key |
 | `GET` | `/api/v1/organizations/{org_id}/keys` | List signing keys for an org |
 | `DELETE` | `/api/v1/organizations/{org_id}/keys/{key_id}` | Revoke a signing key |
+| `POST` | `/api/v1/organizations/{org_id}/groups` | Create a group (V2) |
+| `GET` | `/api/v1/organizations/{org_id}/groups` | List groups, sorted by name (V2) |
+| `GET` | `/api/v1/organizations/{org_id}/groups/{name}` | Get a group (V2) |
+| `PUT` | `/api/v1/organizations/{org_id}/groups/{name}` | Update a group — `If-Match` required (V2) |
+| `DELETE` | `/api/v1/organizations/{org_id}/groups/{name}` | Delete a group — `If-Match` required (V2) |
 
 ### Response Codes (proxy-config)
 
@@ -37,6 +42,64 @@ Authentication and authorization are handled by the `forgeguard-axum` middleware
 | 200 | Config returned with `ETag` header |
 | 304 | Config unchanged (`If-None-Match` matched) |
 | 404 | Organization not found |
+
+### Groups sub-resource (V2)
+
+Groups are RBAC role definitions stored per-org. Full request/response shapes and
+validation rules are defined in the design doc (§A.1 / §B.x):
+[`.claude/plans/2026-04-30-issue-102-cp-groups-v2/v2-plan.md`](../../.claude/plans/2026-04-30-issue-102-cp-groups-v2/v2-plan.md).
+
+**Error codes:**
+
+| Code | Meaning |
+|------|---------|
+| 201 | Group created; `ETag` header included |
+| 200 | Group updated; `ETag` header included |
+| 204 | Group deleted |
+| 404 | Group or org not found |
+| 409 | Conflict — group name already exists on create |
+| 412 | Precondition Failed — `If-Match` etag mismatch on PUT/DELETE |
+| 422 | Unprocessable Entity — validation error (bad name, empty allow, bad action format, etc.) |
+| 501 | Not Implemented — Active-org VP push (lands in V3) |
+
+**Caveats:**
+
+- **Draft-only** — the Active-org branch that pushes compiled Cedar policies to
+  Verified Permissions is `todo!("V3")` until that work lands.
+- `PUT` and `DELETE` require an `If-Match` header; omitting it returns `412`.
+- `DELETE` pre-checks for live memberships and inheriting groups; either
+  blocks deletion with an appropriate error.
+
+**`is_declared_group` predicate:** exposed as
+`OrgStore::is_declared_group(org_id, name) -> Result<bool>`. Consumed by
+`POST /api/v1/organizations/{org_id}/users` (issue #100) to validate that a
+group name referenced in a user membership request is an actual declared group.
+
+#### Storage layout
+
+Groups share the org's DynamoDB partition (`PK=ORG#{org_id}`):
+
+Top-level DynamoDB attributes:
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `PK` | `S` | `ORG#{org_id}` — same partition as the org `META` row |
+| `SK` | `S` | `GROUP#{name}` — sort key prefix distinguishes group rows from `META` |
+| `config` | `S` | JSON-serialized `RbacEntry` (`name`, `description?`, `inherits`, `allow`, `tenant_scoped`) |
+| `etag` | `S` | Content-addressed etag (xxHash64 of canonical entry JSON, quoted) |
+
+The full entry shape encoded inside `config`:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Group name (mirrors the SK suffix) |
+| `description` | string? | Optional human-readable description |
+| `inherits` | list of strings | Parent group names |
+| `allow` | list of strings | Directly granted actions (`{namespace}:{action}` format) |
+| `tenant_scoped` | bool | When `true`, Cedar permit appends a tenant-equality clause |
+
+`etag` is a separate top-level attribute so it can be used in DynamoDB condition
+expressions without deserialising `config`.
 
 ## Quick Start
 

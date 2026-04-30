@@ -888,3 +888,5 @@ async fn dynamo_draft_put_with_any_if_match_returns_412() {
         other => panic!("expected PreconditionFailed with no current_etag, got {other:?}"),
     }
 }
+
+mod groups;
