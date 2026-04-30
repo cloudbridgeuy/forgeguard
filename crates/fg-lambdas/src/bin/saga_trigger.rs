@@ -7,6 +7,7 @@
 //! See saga.md section 5.6.
 
 use aws_lambda_events::event::dynamodb::Event;
+use forgeguard_core::SagaId;
 use lambda_runtime::{service_fn, Error, LambdaEvent};
 
 #[tokio::main]
@@ -38,7 +39,7 @@ async fn handler(event: LambdaEvent<Event>) -> Result<(), Error> {
             tracing::warn!("PK is not a string, skipping");
             continue;
         };
-        let Some(saga_id) = pk_value.strip_prefix("SAGA#") else {
+        let Ok(saga_id) = SagaId::from_pk(pk_value) else {
             tracing::debug!(pk = %pk_value, "not a saga intent record, skipping");
             continue;
         };
@@ -50,7 +51,7 @@ async fn handler(event: LambdaEvent<Event>) -> Result<(), Error> {
 
         sfn.start_execution()
             .state_machine_arn(&arn)
-            .name(saga_id)
+            .name(saga_id.as_str())
             .input(&input)
             .send()
             .await

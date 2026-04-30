@@ -23,6 +23,7 @@ aws-sdk-sfn = { workspace = true }
 aws_lambda_events = { workspace = true }
 color-eyre = { workspace = true }
 forgeguard_control_plane = { workspace = true } #unified
+forgeguard_core = { workspace = true }
 lambda_http = { workspace = true }
 lambda_runtime = { workspace = true }
 serde_dynamo = { workspace = true }
