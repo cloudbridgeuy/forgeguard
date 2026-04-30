@@ -134,6 +134,7 @@ async fn proxy_config_strong_matching_if_none_match_returns_304() {
 #[tokio::test]
 async fn proxy_config_stale_if_none_match_returns_200_with_body_and_etag() {
     let app = test_app(build_test_store());
+    let stored_etag = get_stored_etag(app.clone()).await;
 
     let stale_value = "\"definitely-not-the-etag\"";
 
@@ -158,9 +159,9 @@ async fn proxy_config_stale_if_none_match_returns_200_with_body_and_etag() {
         .to_str()
         .unwrap()
         .to_string();
-    assert_ne!(
-        etag_header, stale_value,
-        "response ETag must be the stored etag, not the stale request value"
+    assert_eq!(
+        etag_header, stored_etag,
+        "200 ETag must echo the stored value"
     );
 
     let bytes = res.into_body().collect().await.unwrap().to_bytes();
