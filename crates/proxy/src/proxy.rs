@@ -126,6 +126,9 @@ impl ProxyHttp for ForgeGuardProxy {
             flags: None,
             matched_route: None,
             request_start: Instant::now(),
+            // Pingora always calls `request_filter` before any other lifecycle hook,
+            // so this placeholder is overwritten with the real method before any
+            // consumer (`logging`, `fail_to_proxy`) can observe it.
             method: http::Method::GET,
             path: String::new(),
             client_ip: None,
