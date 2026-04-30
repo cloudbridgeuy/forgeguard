@@ -12,3 +12,4 @@ pub(crate) mod metrics;
 mod signing_key;
 mod signing_key_store;
 mod store;
+pub(crate) mod vp_client;
