@@ -5,10 +5,6 @@
 //! `active.rs` drives them, and `pure.rs::shape_group_error_response` consumes
 //! the wire-body types defined at the bottom of this module.
 
-// Wave 1B introduces the pure surface area; Wave 3 wires it into the Active
-// handler. Items are intentionally unused until then.
-#![allow(dead_code)]
-
 use std::collections::{BTreeSet, VecDeque};
 
 use forgeguard_authz_core::{compile_rbac_to_cedar, GroupValidationError, RbacEntry, TenantConfig};

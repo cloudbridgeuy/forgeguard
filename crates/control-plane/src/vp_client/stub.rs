@@ -69,6 +69,8 @@ impl StubVpClient {
 
     /// Cause the next `delete_policy_by_name` call with `name` to fail with
     /// `Error::Other`. Cleared once it fires.
+    // Test-support injection knob; consumers added in Wave 3A integration tests.
+    #[allow(dead_code)]
     pub(crate) fn fail_on_delete(&self, name: &str) {
         let mut s = self.state.lock().expect("StubVpClient mutex poisoned");
         s.fail_on_delete = Some(name.to_owned());

@@ -3,7 +3,7 @@ mod keys;
 
 use std::sync::Arc;
 
-use axum::extract::{Path, Query, State};
+use axum::extract::{FromRef, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -14,6 +14,37 @@ use serde::{Deserialize, Serialize};
 use crate::config::OrgConfig;
 use crate::etag::{self, Etag, IfNoneMatchResult, ResolvedIfMatch};
 use crate::store::{OrgRecord, OrgStore};
+
+/// Shared router state for the control-plane Axum app.
+///
+/// Carries the [`OrgStore`] and the [`VpClient`] used by the V3 Active
+/// write path. Non-group handlers extract `State<Arc<S>>` via the `FromRef`
+/// impl below; group handlers extract the full [`AppState<S, V>`] (axum
+/// auto-derives `FromRef<T> for T` whenever `T: Clone`).
+///
+/// We deliberately do NOT add a `FromRef<AppState<S, V>> for Arc<V>` impl
+/// because the compiler can't disambiguate it from the `Arc<S>` impl when
+/// `S == V`, which yields E0119. Group handlers reach `vp` through the
+/// `AppState` extraction.
+pub(crate) struct AppState<S, V> {
+    pub(crate) store: Arc<S>,
+    pub(crate) vp: Arc<V>,
+}
+
+impl<S, V> Clone for AppState<S, V> {
+    fn clone(&self) -> Self {
+        Self {
+            store: Arc::clone(&self.store),
+            vp: Arc::clone(&self.vp),
+        }
+    }
+}
+
+impl<S, V> FromRef<AppState<S, V>> for Arc<S> {
+    fn from_ref(input: &AppState<S, V>) -> Arc<S> {
+        Arc::clone(&input.store)
+    }
+}
 
 pub(crate) use keys::{
     generate_key_handler, list_keys_handler, revoke_key_handler, rotate_key_handler,
@@ -477,6 +508,7 @@ pub(super) mod test_support {
     use forgeguard_proxy_core::{PipelineConfig, PipelineConfigParams};
 
     use crate::store::{build_org_store, InMemoryOrgStore, OrgStore};
+    use crate::vp_client::stub::{happy_stub, StubVpClient};
 
     /// Test-only handler that probes whether a group name is declared for an org.
     ///
@@ -520,6 +552,10 @@ pub(super) mod test_support {
     }
 
     pub fn test_app(store: Arc<InMemoryOrgStore>) -> Router {
+        test_app_with_stub(store, happy_stub())
+    }
+
+    pub fn test_app_with_stub(store: Arc<InMemoryOrgStore>, vp: Arc<StubVpClient>) -> Router {
         let route_matcher = RouteMatcher::new(&[]).unwrap();
         let public_routes = vec![
             PublicRoute::new(
@@ -560,6 +596,7 @@ pub(super) mod test_support {
             Arc::new(StaticPolicyEngine::new(PolicyDecision::Allow));
         let fg = Arc::new(ForgeGuard::new(config, chain, engine));
 
+        let state = super::AppState { store, vp };
         Router::new()
             .route(
                 "/api/v1/organizations",
@@ -591,14 +628,16 @@ pub(super) mod test_support {
             )
             .route(
                 "/api/v1/organizations/{org_id}/groups",
-                axum::routing::post(super::groups::create_handler::<InMemoryOrgStore>)
-                    .get(super::groups::list_handler::<InMemoryOrgStore>),
+                axum::routing::post(
+                    super::groups::create_handler::<InMemoryOrgStore, StubVpClient>,
+                )
+                .get(super::groups::list_handler::<InMemoryOrgStore>),
             )
             .route(
                 "/api/v1/organizations/{org_id}/groups/{name}",
                 axum::routing::get(super::groups::get_handler::<InMemoryOrgStore>)
-                    .put(super::groups::update_handler::<InMemoryOrgStore>)
-                    .delete(super::groups::delete_handler::<InMemoryOrgStore>),
+                    .put(super::groups::update_handler::<InMemoryOrgStore, StubVpClient>)
+                    .delete(super::groups::delete_handler::<InMemoryOrgStore, StubVpClient>),
             )
             .route("/metrics", axum::routing::get(super::metrics_handler))
             // Test-only probe route — never compiled into production binaries.
@@ -608,7 +647,7 @@ pub(super) mod test_support {
                 "/test/declared-group/{org_id}/{name}",
                 axum::routing::get(declared_group_handler::<InMemoryOrgStore>),
             )
-            .with_state(store)
+            .with_state(state)
             .layer(axum::middleware::from_fn_with_state(fg, forgeguard_layer))
     }
 

@@ -27,9 +27,12 @@ use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::dynamo_store::DynamoOrgStore;
+use crate::handlers::AppState;
 use crate::membership_store::DynamoMembershipResolver;
 use crate::signing_key_store::DynamoSigningKeyStore;
 use crate::store::{self, AnyOrgStore, OrgStore};
+use crate::vp_client::aws::AwsVpClient;
+use crate::vp_client::VpClient;
 
 /// Authentication configuration for the control plane.
 ///
@@ -84,11 +87,12 @@ pub async fn dynamodb_router(
         "AWS SDK configuration loaded for control plane"
     );
     let dynamo_client = aws_sdk_dynamodb::Client::new(&sdk_config);
-    let vp_client = aws_sdk_verifiedpermissions::Client::new(&sdk_config);
+    let vp_sdk_client = aws_sdk_verifiedpermissions::Client::new(&sdk_config);
     let s = Arc::new(AnyOrgStore::DynamoDb(DynamoOrgStore::new(
         dynamo_client.clone(),
         table_name.to_string(),
     )));
+    let vp = Arc::new(AwsVpClient::new(vp_sdk_client.clone()));
     let membership_resolver: Option<Arc<dyn MembershipResolver>> = if auth.is_some() {
         Some(Arc::new(DynamoMembershipResolver::new(
             dynamo_client.clone(),
@@ -103,21 +107,38 @@ pub async fn dynamodb_router(
     } else {
         None
     };
-    let fg = build_forgeguard(auth, ed25519_resolver, Some(vp_client), membership_resolver)?;
-    Ok(build_router(s, fg))
+    let fg = build_forgeguard(
+        auth,
+        ed25519_resolver,
+        Some(vp_sdk_client),
+        membership_resolver,
+    )?;
+    Ok(build_router(AppState { store: s, vp }, fg))
 }
 
 /// Build a control-plane `Router` backed by an in-memory JSON config file.
 ///
 /// Loads organizations from the JSON file at `config_path`. Used by the
-/// standalone binary with `--store=memory`.
-pub fn memory_router(config_path: &Path, auth: Option<&AuthConfig>) -> color_eyre::Result<Router> {
+/// standalone binary with `--store=memory`. Async because the V3 Active-org
+/// path needs an `AwsVpClient`, whose SDK config load is async; in dev mode
+/// the client is built but only invoked when an org's status flips to
+/// `Active`, so missing AWS credentials don't crash the dev workflow.
+pub async fn memory_router(
+    config_path: &Path,
+    auth: Option<&AuthConfig>,
+) -> color_eyre::Result<Router> {
     let inner = store::load_config_file(config_path)?;
     let s = Arc::new(AnyOrgStore::Memory(inner));
+    let sdk_config = aws_config::defaults(aws_config::BehaviorVersion::latest())
+        .load()
+        .await;
+    let vp = Arc::new(AwsVpClient::new(aws_sdk_verifiedpermissions::Client::new(
+        &sdk_config,
+    )));
     // Ed25519 resolver requires DynamoDB for key lookup; memory mode has no DynamoDB client.
     // VP engine is also unavailable in memory mode — StaticPolicyEngine(Allow) is used instead.
     let fg = build_forgeguard(auth, None, None, None)?;
-    Ok(build_router(s, fg))
+    Ok(build_router(AppState { store: s, vp }, fg))
 }
 
 /// Build an anonymous public route from method and path strings.
@@ -363,7 +384,10 @@ fn build_forgeguard(
     Ok(Arc::new(ForgeGuard::new(pipeline_config, chain, engine)))
 }
 
-fn build_router<S: OrgStore + 'static>(store: Arc<S>, fg: Arc<ForgeGuard>) -> Router {
+fn build_router<S: OrgStore + 'static, V: VpClient + 'static>(
+    state: AppState<S, V>,
+    fg: Arc<ForgeGuard>,
+) -> Router {
     use crate::handlers;
 
     Router::new()
@@ -397,15 +421,15 @@ fn build_router<S: OrgStore + 'static>(store: Arc<S>, fg: Arc<ForgeGuard>) -> Ro
         )
         .route(
             "/api/v1/organizations/{org_id}/groups",
-            post(handlers::groups::create_handler::<S>).get(handlers::groups::list_handler::<S>),
+            post(handlers::groups::create_handler::<S, V>).get(handlers::groups::list_handler::<S>),
         )
         .route(
             "/api/v1/organizations/{org_id}/groups/{name}",
             get(handlers::groups::get_handler::<S>)
-                .put(handlers::groups::update_handler::<S>)
-                .delete(handlers::groups::delete_handler::<S>),
+                .put(handlers::groups::update_handler::<S, V>)
+                .delete(handlers::groups::delete_handler::<S, V>),
         )
-        .with_state(store)
+        .with_state(state)
         .layer(axum::middleware::from_fn_with_state(fg, forgeguard_layer))
         .layer(TraceLayer::new_for_http())
         .layer(TimeoutLayer::with_status_code(

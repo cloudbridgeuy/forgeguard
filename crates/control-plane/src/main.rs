@@ -67,7 +67,7 @@ async fn run(cli: Cli) -> color_eyre::Result<()> {
                 color_eyre::eyre::eyre!("--config is required when --store=memory")
             })?;
             tracing::info!(path = %config_path.display(), "loading organization config from file");
-            forgeguard_control_plane::app::memory_router(&config_path, auth.as_ref())?
+            forgeguard_control_plane::app::memory_router(&config_path, auth.as_ref()).await?
         }
         StoreBackend::DynamoDb => {
             let table_name = cli

@@ -16,10 +16,6 @@
 //! call sites are kept byte-compatible by sharing the encode/decode helpers
 //! defined below — V6 will swap the xtask copy out for these.
 
-// Wave 1A introduces the surface area; Waves 2/3 wire it into handlers and
-// tests. Items are intentionally unused until then.
-#![allow(dead_code)]
-
 pub(crate) mod aws;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) mod stub;
@@ -100,19 +96,19 @@ pub(crate) fn decode_name_from_description(
 /// Abstraction over the VP operations the V3 Active-org write path needs.
 ///
 /// Three operations only — anything more complex belongs in a different
-/// abstraction. The trait is `Send + Sync` so handlers can hold an
-/// `Arc<dyn VpClient>` in `AppState`.
-#[allow(async_fn_in_trait)]
+/// abstraction. The trait is `Send + Sync` and each method returns a
+/// `Send` future so axum handlers using a `VpClient` produce `Send`
+/// futures (required by the `tower::Service` impl axum builds).
 pub(crate) trait VpClient: Send + Sync {
     /// Create a static policy in `store_id` with the given `name`, `description`,
     /// and Cedar `statement`. Returns the VP-assigned policy id.
-    async fn create_policy(
+    fn create_policy(
         &self,
         store_id: &str,
         name: &str,
         description: Option<&str>,
         statement: &str,
-    ) -> Result<String>;
+    ) -> impl std::future::Future<Output = Result<String>> + Send;
 
     /// Resolve `name` to a policy id (via `list_policy_ids`), then delete it.
     /// Returns `Error::NotFound` if no policy with that encoded name exists.
@@ -123,11 +119,18 @@ pub(crate) trait VpClient: Send + Sync {
     /// `NotFound` from this method as "no policy is currently present under
     /// this name" and decide whether that is success (idempotent delete) or
     /// a conflict.
-    async fn delete_policy_by_name(&self, store_id: &str, name: &str) -> Result<()>;
+    fn delete_policy_by_name(
+        &self,
+        store_id: &str,
+        name: &str,
+    ) -> impl std::future::Future<Output = Result<()>> + Send;
 
     /// List every static policy in `store_id`, decoding the `[name]` prefix
     /// from the description field.
-    async fn list_policy_ids(&self, store_id: &str) -> Result<Vec<NamedPolicy>>;
+    fn list_policy_ids(
+        &self,
+        store_id: &str,
+    ) -> impl std::future::Future<Output = Result<Vec<NamedPolicy>>> + Send;
 }
 
 #[cfg(test)]

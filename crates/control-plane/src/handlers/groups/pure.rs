@@ -181,8 +181,6 @@ pub(crate) enum GroupHandlerError {
     /// VP push failed after the DDB write. `completed`/`failed`/`remaining`
     /// describe how far through the parent + fanout sequence the orchestrator
     /// got before the failure. Mapped to 503.
-    // Constructed by the Wave 3 Active handler; unused until then.
-    #[allow(dead_code)]
     #[error("vp push failed (stage: {stage:?})")]
     VpPushFailed {
         stage: VpStage,
@@ -192,13 +190,16 @@ pub(crate) enum GroupHandlerError {
     },
     /// DDB and VP have diverged: the DDB write committed but the rollback
     /// after a VP failure could not be undone. Mapped to 500.
-    // Constructed by the Wave 3 Active handler; unused until then.
-    #[allow(dead_code)]
     #[error("inconsistent state (ddb_committed: {ddb_committed}, vp_committed: {vp_committed})")]
     InconsistentState {
         ddb_committed: bool,
         vp_committed: bool,
     },
+    /// Generic internal/store error that doesn't fit a more specific bucket.
+    /// The actual error is logged via `tracing::error!` at the call site;
+    /// this variant carries no payload and shapes as a bare 500.
+    #[error("internal error")]
+    Internal,
 }
 
 /// Map the `reason` field for a `GroupValidationError` to its snake_case label
@@ -229,6 +230,7 @@ fn validation_label(err: &GroupValidationError) -> (&'static str, &'static str) 
 /// | `DeleteConflict`       | 409    | `DeleteConflictBody`               |
 /// | `VpPushFailed`         | 503    | `VpPushFailedBody`                 |
 /// | `InconsistentState`    | 500    | `InconsistentStateBody`            |
+/// | `Internal`             | 500    | `{"error": "internal"}`            |
 pub(crate) fn shape_group_error_response(err: &GroupHandlerError) -> Response {
     match err {
         GroupHandlerError::Validation(v_err) => {
@@ -311,6 +313,11 @@ pub(crate) fn shape_group_error_response(err: &GroupHandlerError) -> Response {
                 ddb_committed: *ddb_committed,
                 vp_committed: *vp_committed,
             }),
+        )
+            .into_response(),
+        GroupHandlerError::Internal => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "internal"})),
         )
             .into_response(),
     }
@@ -603,6 +610,14 @@ mod tests {
         let json_none = body_json(resp_none).await;
         assert_eq!(json_none["stage"], "parent");
         assert!(json_none["failed"].is_null());
+    }
+
+    #[tokio::test]
+    async fn shape_error_internal_yields_500() {
+        let resp = shape_group_error_response(&GroupHandlerError::Internal);
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let json = body_json(resp).await;
+        assert_eq!(json["error"], "internal");
     }
 
     #[tokio::test]

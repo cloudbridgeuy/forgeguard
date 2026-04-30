@@ -11,6 +11,7 @@
 //! - `mod` (this file) — request DTOs, `pub(crate)` re-exports, and handler
 //!   bodies (imperative shell calling into `pure` and the `OrgStore` trait).
 
+pub(crate) mod active;
 pub(crate) mod active_pure;
 pub(crate) mod codec;
 pub(crate) mod pure;
@@ -24,12 +25,15 @@ use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use axum::{http::StatusCode, Json};
 use forgeguard_authz_core::{validate_rbac_entry, RbacEntry};
-use forgeguard_core::{OrgStatus, OrganizationId};
+use forgeguard_core::OrganizationId;
 use serde::Deserialize;
 
+use self::active_pure::{compile_for_active, ActiveStateError, OrgWriteContext, VpStage};
 use crate::etag;
+use crate::handlers::AppState;
 use crate::metrics::PreconditionReason;
 use crate::store::{EtagedGroup, OrgStore};
+use crate::vp_client::VpClient;
 
 // ---------------------------------------------------------------------------
 // Helper: default for serde
@@ -61,26 +65,54 @@ async fn require_org<S: OrgStore>(
     }
 }
 
-/// List groups and build the mutable `all_after` vec (existing entries with
-/// `proposed_name` removed, ready for the caller to push the proposed entry).
-async fn all_after_without<S: OrgStore>(
+/// List groups and project them down to plain `RbacEntry`s. Callers derive
+/// both `all_after` (with the proposed entry replacing any same-name row) and,
+/// for UPDATE/DELETE, the prior-validation set from this single fetch.
+async fn list_existing_entries<S: OrgStore>(
     store: &S,
     org_id: &OrganizationId,
     raw_org_id: &str,
-    proposed_name: &str,
     ctx: &str,
 ) -> Result<Vec<RbacEntry>, Response> {
     match store.list_groups(org_id).await {
-        Ok(gs) => {
-            let mut entries: Vec<RbacEntry> = gs.into_iter().map(|g| g.entry().clone()).collect();
-            entries.retain(|e| e.name != proposed_name);
-            Ok(entries)
-        }
+        Ok(gs) => Ok(gs.into_iter().map(|g| g.entry().clone()).collect()),
         Err(e) => {
             tracing::error!(org_id = %raw_org_id, error = %e, "{ctx}");
             Err(StatusCode::INTERNAL_SERVER_ERROR.into_response())
         }
     }
+}
+
+/// Build the post-write entry set: existing rows with `proposed_name` removed,
+/// followed by the caller's proposed entry.
+fn all_after_with_proposed(existing: &[RbacEntry], proposed: &RbacEntry) -> Vec<RbacEntry> {
+    let mut out: Vec<RbacEntry> = existing
+        .iter()
+        .filter(|e| e.name != proposed.name)
+        .cloned()
+        .collect();
+    out.push(proposed.clone());
+    out
+}
+
+/// Shape `OrgWriteContext::from_record` parse failures into the wire response.
+///
+/// Today the only failure mode is `ActiveWithoutVpStore`. Per Risk #5 in the
+/// implementation plan, this surfaces as 503 `vp_push_failed` with
+/// `stage="parent"` so operators page the same way they would for a real F3.
+fn shape_active_state_error(err: &ActiveStateError, raw_org_id: &str, group: &str) -> Response {
+    tracing::error!(
+        org_id = %raw_org_id,
+        group = %group,
+        error = ?err,
+        "active org has no vp_store_id; saga invariant violated",
+    );
+    shape_group_error_response(&GroupHandlerError::VpPushFailed {
+        stage: VpStage::Parent,
+        completed: vec![],
+        failed: None,
+        remaining: vec![],
+    })
 }
 
 /// Build a [`HeaderMap`] containing a single strong `ETag` header.
@@ -165,16 +197,23 @@ pub(crate) struct UpdateGroupRequest {
 /// Create a new RBAC group for the organisation. Returns `201 Created` with
 /// `GroupResource` and an `ETag` header.
 ///
-/// - V2 (Draft orgs only): Active org returns `501 Not Implemented`.
-/// - Duplicate name returns `409 Conflict`.
-pub(crate) async fn create_handler<S: OrgStore>(
+/// Active-org behaviour (V3): the DDB write is paired with a VP `CreatePolicy`
+/// for `cp-rbac-{name}`. F3 (VP push fails after DDB commit) triggers a
+/// compensating DDB delete and surfaces 503 `vp_push_failed`. F3' (rollback
+/// also fails) increments `forgeguard_cp_group_rollback_failed_total{stage="parent"}`
+/// and surfaces 500 `inconsistent_state`.
+///
+/// Duplicate name returns `409 Conflict`.
+pub(crate) async fn create_handler<S: OrgStore + 'static, V: VpClient + 'static>(
     Path(raw_org_id): Path<String>,
-    State(store): State<Arc<S>>,
+    State(state): State<AppState<S, V>>,
     Json(body): Json<CreateGroupRequest>,
 ) -> Response {
     let Ok(org_id) = OrganizationId::new(&raw_org_id) else {
         return crate::handlers::not_found();
     };
+    let store = &state.store;
+    let vp = &state.vp;
 
     let record = match require_org(
         store.as_ref(),
@@ -187,19 +226,12 @@ pub(crate) async fn create_handler<S: OrgStore>(
         Ok(r) => r,
         Err(resp) => return resp,
     };
-    if record.org().status() == OrgStatus::Active {
-        // V2: Active orgs are unsupported. V3 lands the VP push branch.
-        return StatusCode::NOT_IMPLEMENTED.into_response();
-    }
-
-    // Build `all_after`: existing groups with the proposed name removed (upsert
-    // semantics for create means we need the full post-write set to detect cycles).
     let proposed = pure::rbac_from_create(body);
-    let mut all_after = match all_after_without(
+    let proposed_name = proposed.name.clone();
+    let existing = match list_existing_entries(
         store.as_ref(),
         &org_id,
         &raw_org_id,
-        &proposed.name,
         "create group: list failed",
     )
     .await
@@ -207,27 +239,56 @@ pub(crate) async fn create_handler<S: OrgStore>(
         Ok(v) => v,
         Err(resp) => return resp,
     };
-    all_after.push(proposed.clone());
+    let all_after = all_after_with_proposed(&existing, &proposed);
     let validated = match validate_rbac_entry(proposed, &all_after) {
         Ok(v) => v,
         Err(reason) => return shape_group_error_response(&GroupHandlerError::Validation(reason)),
     };
 
-    // Conditional write (imperative shell): None expected_etag = create-only
-    match store.put_group(&org_id, validated, None).await {
+    let write_ctx = match OrgWriteContext::from_record(&record) {
+        Ok(c) => c,
+        Err(err) => return shape_active_state_error(&err, &raw_org_id, &proposed_name),
+    };
+
+    let result = match write_ctx {
+        OrgWriteContext::Draft => store
+            .put_group(&org_id, validated, None)
+            .await
+            .map_err(|e| match e {
+                crate::error::Error::Conflict(_) => GroupHandlerError::AlreadyExists,
+                other => {
+                    tracing::error!(org_id = %raw_org_id, error = %other, "create group failed");
+                    GroupHandlerError::Internal
+                }
+            }),
+        OrgWriteContext::Active(vp_ctx) => {
+            let compiled = match compile_for_active(validated.entry(), &all_after, &vp_ctx) {
+                Ok(c) => c,
+                Err(reason) => {
+                    return shape_group_error_response(&GroupHandlerError::Validation(reason));
+                }
+            };
+            active::apply_create(active::CreateParams {
+                store: store.as_ref(),
+                vp: vp.as_ref(),
+                vp_ctx: &vp_ctx,
+                org_id: &org_id,
+                raw_org_id: &raw_org_id,
+                validated,
+                compiled,
+            })
+            .await
+        }
+    };
+
+    match result {
         Ok(eg) => (
             StatusCode::CREATED,
             etag_header(eg.etag()),
             Json(pure::group_resource_from(eg.entry(), eg.etag())),
         )
             .into_response(),
-        Err(crate::error::Error::Conflict(_)) => {
-            shape_group_error_response(&GroupHandlerError::AlreadyExists)
-        }
-        Err(e) => {
-            tracing::error!(org_id = %raw_org_id, error = %e, "create group failed");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
+        Err(err) => shape_group_error_response(&err),
     }
 }
 
@@ -364,18 +425,27 @@ pub(crate) async fn get_handler<S: OrgStore>(
 /// RFC 7232 §3.1 — on a non-existent row this is treated as a 404 (fail
 /// closed, no row to match against).
 ///
+/// Active-org behaviour (V3): the DDB put is paired with a VP delete-then-create
+/// of the parent permit, then the same delete-then-create fanned out across
+/// every transitive dependent in deterministic order. F3 (parent VP push fail
+/// after DDB commit) triggers a compensating put_back. F3' (rollback also
+/// fails) increments `forgeguard_cp_group_rollback_failed_total{stage="parent"}`.
+/// F4 (mid-fanout fail) returns 503 with `{completed, failed, remaining}` and
+/// no rollback.
+///
 /// Returns `200 OK` with updated `GroupResource` and an `ETag` header.
-pub(crate) async fn update_handler<S: OrgStore>(
+pub(crate) async fn update_handler<S: OrgStore + 'static, V: VpClient + 'static>(
     Path((raw_org_id, name)): Path<(String, String)>,
-    State(store): State<Arc<S>>,
+    State(state): State<AppState<S, V>>,
     headers: HeaderMap,
     Json(body): Json<UpdateGroupRequest>,
 ) -> Response {
     let Ok(org_id) = OrganizationId::new(&raw_org_id) else {
         return crate::handlers::not_found();
     };
+    let store = &state.store;
+    let vp = &state.vp;
 
-    // Org lookup + Active gate
     let record = match require_org(
         store.as_ref(),
         &org_id,
@@ -387,9 +457,6 @@ pub(crate) async fn update_handler<S: OrgStore>(
         Ok(r) => r,
         Err(resp) => return resp,
     };
-    if record.org().status() == OrgStatus::Active {
-        return StatusCode::NOT_IMPLEMENTED.into_response();
-    }
 
     // If-Match is required for PUT
     let if_match_raw = parse_if_match_header(&headers);
@@ -417,22 +484,20 @@ pub(crate) async fn update_handler<S: OrgStore>(
 
     // Resolve If-Match against the stored etag
     let resolved = etag::resolve_if_match(if_match_raw, Some(existing.etag()));
-    let expected_etag: Option<String> = match &resolved {
-        etag::ResolvedIfMatch::Strong(e) => Some(e.clone()),
+    let expected_etag: String = match &resolved {
+        etag::ResolvedIfMatch::Strong(e) => e.clone(),
         // `If-Match: *` on an existing row — pass the stored etag so that
         // `put_group` takes the conditional-update path rather than the
         // create-only path (which rejects `(Some(_), None)` as Conflict).
-        etag::ResolvedIfMatch::WildcardMatched => Some(existing.etag().to_owned()),
+        etag::ResolvedIfMatch::WildcardMatched => existing.etag().to_owned(),
         // Wildcard on absent row — fail closed (404 already returned above)
         etag::ResolvedIfMatch::WildcardOnDraft => {
             return shape_group_error_response(&GroupHandlerError::NotFound);
         }
+        // INVARIANT: if_match_raw.is_none() is checked above and returns 412
+        // before we reach resolve_if_match, so Absent is unreachable here.
         etag::ResolvedIfMatch::Absent => {
-            // Already handled above (if_match_raw.is_none() => 412)
-            return shape_group_error_response(&GroupHandlerError::PreconditionFailed {
-                current_etag: String::new(),
-                reason: PreconditionReason::MissingIfMatch,
-            });
+            unreachable!("if_match_raw.is_none() already guarded above");
         }
     };
 
@@ -441,13 +506,12 @@ pub(crate) async fn update_handler<S: OrgStore>(
         Ok(e) => e,
         Err(reason) => return shape_group_error_response(&GroupHandlerError::Validation(reason)),
     };
+    let proposed_name = proposed.name.clone();
 
-    // Build post-write set: replace existing entry for `name` with proposed
-    let mut all_after = match all_after_without(
+    let existing_entries = match list_existing_entries(
         store.as_ref(),
         &org_id,
         &raw_org_id,
-        &proposed.name,
         "update group: list failed",
     )
     .await
@@ -455,37 +519,82 @@ pub(crate) async fn update_handler<S: OrgStore>(
         Ok(v) => v,
         Err(resp) => return resp,
     };
-    all_after.push(proposed.clone());
+    let all_after = all_after_with_proposed(&existing_entries, &proposed);
 
     let validated = match validate_rbac_entry(proposed, &all_after) {
         Ok(v) => v,
         Err(reason) => return shape_group_error_response(&GroupHandlerError::Validation(reason)),
     };
 
-    match store
-        .put_group(&org_id, validated, expected_etag.as_deref())
-        .await
-    {
+    let write_ctx = match OrgWriteContext::from_record(&record) {
+        Ok(c) => c,
+        Err(err) => return shape_active_state_error(&err, &raw_org_id, &proposed_name),
+    };
+
+    let result = match write_ctx {
+        OrgWriteContext::Draft => store
+            .put_group(&org_id, validated, Some(&expected_etag))
+            .await
+            .map_err(|e| match e {
+                crate::error::Error::PreconditionFailed { current_etag } => {
+                    crate::metrics::record_precondition_failed(PreconditionReason::StaleEtag);
+                    GroupHandlerError::PreconditionFailed {
+                        current_etag,
+                        reason: PreconditionReason::StaleEtag,
+                    }
+                }
+                crate::error::Error::NotFound(_) => GroupHandlerError::NotFound,
+                other => {
+                    tracing::error!(org_id = %raw_org_id, group = %proposed_name, error = %other, "update group failed");
+                    GroupHandlerError::Internal
+                }
+            }),
+        OrgWriteContext::Active(vp_ctx) => {
+            let prior_for_rollback =
+                match validate_rbac_entry(existing.entry().clone(), &existing_entries) {
+                    Ok(v) => v,
+                    Err(reason) => {
+                        // A concurrent delete on an inherited group invalidated
+                        // an entry that was already stored. This is a store-state
+                        // inconsistency, not a client error — surface 500 and log.
+                        tracing::error!(
+                            org_id = %raw_org_id,
+                            group = %proposed_name,
+                            error = %reason,
+                            "update group: prior entry failed re-validation; store is inconsistent",
+                        );
+                        return shape_group_error_response(&GroupHandlerError::Internal);
+                    }
+                };
+            let compiled = match compile_for_active(validated.entry(), &all_after, &vp_ctx) {
+                Ok(c) => c,
+                Err(reason) => {
+                    return shape_group_error_response(&GroupHandlerError::Validation(reason));
+                }
+            };
+            active::apply_update(active::UpdateParams {
+                store: store.as_ref(),
+                vp: vp.as_ref(),
+                vp_ctx: &vp_ctx,
+                org_id: &org_id,
+                raw_org_id: &raw_org_id,
+                validated,
+                compiled,
+                prior_for_rollback,
+                expected_etag,
+            })
+            .await
+        }
+    };
+
+    match result {
         Ok(eg) => (
             StatusCode::OK,
             etag_header(eg.etag()),
             Json(pure::group_resource_from(eg.entry(), eg.etag())),
         )
             .into_response(),
-        Err(crate::error::Error::PreconditionFailed { current_etag }) => {
-            crate::metrics::record_precondition_failed(PreconditionReason::StaleEtag);
-            shape_group_error_response(&GroupHandlerError::PreconditionFailed {
-                current_etag,
-                reason: PreconditionReason::StaleEtag,
-            })
-        }
-        Err(crate::error::Error::NotFound(_)) => {
-            shape_group_error_response(&GroupHandlerError::NotFound)
-        }
-        Err(e) => {
-            tracing::error!(org_id = %raw_org_id, group = %name, error = %e, "update group failed");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
+        Err(err) => shape_group_error_response(&err),
     }
 }
 
@@ -504,16 +613,22 @@ pub(crate) async fn update_handler<S: OrgStore>(
 /// between the concurrent pre-check reads and the conditional delete; this is
 /// acceptable for V2 (Draft-only orgs, low concurrency), and the etag
 /// pre-condition still protects against blind overwrite of the group row itself.
-pub(crate) async fn delete_handler<S: OrgStore>(
+///
+/// Active-org behaviour (V3): the DDB delete is paired with a VP `DeletePolicy`
+/// for the parent permit; a VP `NotFound` is treated as idempotent success.
+/// On other VP failures the prior DDB row is restored; F3' (rollback fail)
+/// increments `forgeguard_cp_group_rollback_failed_total{stage="parent"}`.
+pub(crate) async fn delete_handler<S: OrgStore + 'static, V: VpClient + 'static>(
     Path((raw_org_id, name)): Path<(String, String)>,
-    State(store): State<Arc<S>>,
+    State(state): State<AppState<S, V>>,
     headers: HeaderMap,
 ) -> Response {
     let Ok(org_id) = OrganizationId::new(&raw_org_id) else {
         return crate::handlers::not_found();
     };
+    let store = &state.store;
+    let vp = &state.vp;
 
-    // Org lookup + Active gate — must fire BEFORE any mutation.
     let record = match require_org(
         store.as_ref(),
         &org_id,
@@ -525,10 +640,6 @@ pub(crate) async fn delete_handler<S: OrgStore>(
         Ok(r) => r,
         Err(resp) => return resp,
     };
-    if record.org().status() == OrgStatus::Active {
-        // V2: Active orgs are unsupported. V3 lands the VP delete branch.
-        return StatusCode::NOT_IMPLEMENTED.into_response();
-    }
 
     // If-Match is required for DELETE
     let if_match_raw = parse_if_match_header(&headers);
@@ -563,12 +674,10 @@ pub(crate) async fn delete_handler<S: OrgStore>(
         etag::ResolvedIfMatch::WildcardOnDraft => {
             return shape_group_error_response(&GroupHandlerError::NotFound);
         }
+        // INVARIANT: if_match_raw.is_none() is checked above and returns 412
+        // before we reach resolve_if_match, so Absent is unreachable here.
         etag::ResolvedIfMatch::Absent => {
-            // Already handled above (if_match_raw.is_none() => 412)
-            return shape_group_error_response(&GroupHandlerError::PreconditionFailed {
-                current_etag: String::new(),
-                reason: PreconditionReason::MissingIfMatch,
-            });
+            unreachable!("if_match_raw.is_none() already guarded above");
         }
     };
 
@@ -599,21 +708,73 @@ pub(crate) async fn delete_handler<S: OrgStore>(
         });
     }
 
-    match store.delete_group(&org_id, &name, &expected_etag).await {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(crate::error::Error::PreconditionFailed { current_etag }) => {
-            crate::metrics::record_precondition_failed(PreconditionReason::StaleEtag);
-            shape_group_error_response(&GroupHandlerError::PreconditionFailed {
-                current_etag,
-                reason: PreconditionReason::StaleEtag,
+    let write_ctx = match OrgWriteContext::from_record(&record) {
+        Ok(c) => c,
+        Err(err) => return shape_active_state_error(&err, &raw_org_id, &name),
+    };
+
+    let result: Result<(), GroupHandlerError> = match write_ctx {
+        OrgWriteContext::Draft => store
+            .delete_group(&org_id, &name, &expected_etag)
+            .await
+            .map_err(|e| match e {
+                crate::error::Error::PreconditionFailed { current_etag } => {
+                    crate::metrics::record_precondition_failed(PreconditionReason::StaleEtag);
+                    GroupHandlerError::PreconditionFailed {
+                        current_etag,
+                        reason: PreconditionReason::StaleEtag,
+                    }
+                }
+                crate::error::Error::NotFound(_) => GroupHandlerError::NotFound,
+                other => {
+                    tracing::error!(org_id = %raw_org_id, group = %name, error = %other, "delete group failed");
+                    GroupHandlerError::Internal
+                }
+            }),
+        OrgWriteContext::Active(vp_ctx) => {
+            let existing_entries = match list_existing_entries(
+                store.as_ref(),
+                &org_id,
+                &raw_org_id,
+                "delete group: list failed",
+            )
+            .await
+            {
+                Ok(v) => v,
+                Err(resp) => return resp,
+            };
+            let prior_for_rollback =
+                match validate_rbac_entry(existing.entry().clone(), &existing_entries) {
+                    Ok(v) => v,
+                    Err(reason) => {
+                        // A concurrent delete on an inherited group invalidated
+                        // an entry that was already stored. This is a store-state
+                        // inconsistency, not a client error — surface 500 and log.
+                        tracing::error!(
+                            org_id = %raw_org_id,
+                            group = %name,
+                            error = %reason,
+                            "delete group: prior entry failed re-validation; store is inconsistent",
+                        );
+                        return shape_group_error_response(&GroupHandlerError::Internal);
+                    }
+                };
+            active::apply_delete(active::DeleteParams {
+                store: store.as_ref(),
+                vp: vp.as_ref(),
+                vp_ctx: &vp_ctx,
+                org_id: &org_id,
+                raw_org_id: &raw_org_id,
+                name: name.clone(),
+                expected_etag,
+                prior_for_rollback,
             })
+            .await
         }
-        Err(crate::error::Error::NotFound(_)) => {
-            shape_group_error_response(&GroupHandlerError::NotFound)
-        }
-        Err(e) => {
-            tracing::error!(org_id = %raw_org_id, group = %name, error = %e, "delete group failed");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
+    };
+
+    match result {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(err) => shape_group_error_response(&err),
     }
 }

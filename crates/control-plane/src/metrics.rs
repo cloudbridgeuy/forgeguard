@@ -98,7 +98,6 @@ pub(crate) fn record_precondition_failed(reason: PreconditionReason) {
 // Naming note: `forgeguard_cp_*` is the canonical prefix for new
 // control-plane metrics; `PUT_ORG_412_TOTAL` above predates this and keeps
 // `forgeguard_control_plane_*` for stability of existing dashboards.
-#[allow(dead_code)]
 pub(crate) static GROUP_ROLLBACK_FAILED_TOTAL: LazyLock<prometheus::IntCounterVec> = LazyLock::new(
     || {
         prometheus::register_int_counter_vec!(
@@ -117,7 +116,6 @@ pub(crate) static GROUP_ROLLBACK_FAILED_TOTAL: LazyLock<prometheus::IntCounterVe
 /// `stage_label` must come from `VpStage::as_label()` so the label set stays
 /// closed. The argument is `&'static str` rather than `VpStage` to keep
 /// `metrics.rs` independent of `handlers/groups/active_pure.rs`.
-#[allow(dead_code)]
 pub(crate) fn record_group_rollback_failed(stage_label: &'static str) {
     GROUP_ROLLBACK_FAILED_TOTAL
         .with_label_values(&[stage_label])
