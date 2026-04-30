@@ -89,7 +89,6 @@ pub(crate) fn record_precondition_failed(reason: PreconditionReason) {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use crate::etag::Etag;
 
     #[test]
     fn reason_wildcard_on_draft() {

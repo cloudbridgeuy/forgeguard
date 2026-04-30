@@ -376,16 +376,15 @@ pub(crate) async fn update_handler<S: OrgStore>(
             let mut response_headers = HeaderMap::new();
             // Only emit ETag when `current_etag` is `Some`. `None` signals a
             // Draft org (no config yet) — there is no etag to include.
-            let current_etag_str = current_etag
-                .as_ref()
-                .map(Etag::as_str)
-                .unwrap_or_default()
-                .to_string();
-            if let Some(ref etag) = current_etag {
-                if let Ok(val) = etag.as_str().parse() {
-                    response_headers.insert(axum::http::header::ETAG, val);
+            let current_etag_str = match current_etag {
+                Some(ref etag) => {
+                    if let Ok(val) = etag.as_str().parse() {
+                        response_headers.insert(axum::http::header::ETAG, val);
+                    }
+                    etag.as_str().to_string()
                 }
-            }
+                None => String::new(),
+            };
             (
                 StatusCode::PRECONDITION_FAILED,
                 response_headers,

@@ -9,17 +9,20 @@
 
 /// RFC 7232 entity tag value.
 ///
-/// Stores the etag value **without** surrounding quotes. The optional
-/// `W/` weak-validator prefix is preserved as part of the value.
+/// Stores the raw etag string exactly as supplied by the caller. For values
+/// produced by [`crate::store::compute_etag`] the string includes surrounding
+/// double-quotes (e.g. `"\"a1b2c3d4e5f60708\"`). The optional `W/` weak-validator
+/// prefix is preserved. The only invariant enforced here is that the value is
+/// non-empty.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct Etag(String);
 
 impl Etag {
-    /// Construct, validating the input is a non-empty etag value.
+    /// Construct an `Etag`, validating that the input is non-empty.
     ///
-    /// Accepts the bare value (e.g. `"abc123"` or `W/"abc123"`).
-    /// Does not require surrounding quotes — quotes belong to the wire
-    /// format, not the value.
+    /// Accepts any non-empty string. Callers may pass a quoted wire value
+    /// (e.g. `"\"abc123\""`) or an unquoted identifier — the struct stores
+    /// the string verbatim. Returns `Error::InvalidEtag` on empty input.
     pub(crate) fn try_new(raw: impl Into<String>) -> crate::error::Result<Self> {
         let raw = raw.into();
         if raw.is_empty() {
@@ -28,6 +31,7 @@ impl Etag {
         Ok(Self(raw))
     }
 
+    /// Return the raw etag string (the value passed to [`Self::try_new`]).
     pub(crate) fn as_str(&self) -> &str {
         &self.0
     }
@@ -121,12 +125,10 @@ pub(crate) enum IfNoneMatchResult {
 /// - Trims surrounding whitespace.
 /// - Empty / whitespace-only → `None` (header absent).
 /// - Exactly `*` → `Some(IfMatch::Wildcard)`.
-/// - Anything else → `Some(IfMatch::Strong(etag))`, or `None` if the
-///   trimmed value is empty (which cannot happen after the earlier check,
-///   but we guard defensively).
+/// - Anything else → `Some(IfMatch::Strong(etag))`.
 ///
-/// Stored etags are already stored with their surrounding quotes (see
-/// the `compute_etag` helper in `crate::store`), so strong comparison is byte-exact with no
+/// Stored etags include their surrounding quotes (produced by `compute_etag`),
+/// so strong comparison is byte-exact against the trimmed header value with no
 /// unquoting needed.
 pub(crate) fn parse_if_match(raw: &str) -> Option<IfMatch> {
     let trimmed = raw.trim();

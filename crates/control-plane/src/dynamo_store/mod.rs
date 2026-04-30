@@ -604,10 +604,7 @@ fn build_update_condition(expected_etag: Option<&Etag>) -> ConditionParts {
         Some(etag) => ConditionParts {
             expression: "attribute_exists(#pk) AND #etag = :expected_etag".to_string(),
             names: vec![("#pk", pk()), ("#etag", "etag")],
-            values: vec![(
-                ":expected_etag",
-                AttributeValue::S(etag.as_str().to_string()),
-            )],
+            values: vec![(":expected_etag", AttributeValue::S(etag.to_string()))],
         },
     }
 }
