@@ -754,3 +754,9 @@ async fn rotate_signing_key_rotating_target_returns_conflict() {
         .unwrap_err();
     assert!(matches!(err, Error::Conflict(_)), "got: {err:?}");
 }
+
+// =============================================================================
+// Group CRUD tests (V2) — see tests/groups.rs
+// =============================================================================
+
+mod groups;

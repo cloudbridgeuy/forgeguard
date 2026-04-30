@@ -1,3 +1,7 @@
+pub(crate) mod groups;
+
+pub(crate) use groups::EtagedGroup;
+
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
@@ -5,6 +9,7 @@ use chrono::Utc;
 use ed25519_dalek::pkcs8::spki::der::pem::LineEnding;
 use ed25519_dalek::pkcs8::EncodePrivateKey as _;
 use ed25519_dalek::pkcs8::EncodePublicKey as _;
+use forgeguard_authz_core::ValidatedRbacEntry;
 use forgeguard_core::{OrgStatus, Organization, OrganizationId};
 use serde::Deserialize;
 
@@ -77,6 +82,79 @@ pub(crate) trait OrgStore: Send + Sync {
         org_id: &OrganizationId,
         key_id: &str,
     ) -> impl std::future::Future<Output = Result<GenerateKeyResult>> + Send;
+
+    // -----------------------------------------------------------------------
+    // Group CRUD (V2) — consumed by Group D handler bodies
+    // -----------------------------------------------------------------------
+
+    /// Retrieve a single group by name, or `None` if it does not exist.
+    #[allow(dead_code)] // consumed by Group D handler bodies
+    fn get_group(
+        &self,
+        org_id: &OrganizationId,
+        name: &str,
+    ) -> impl std::future::Future<Output = Result<Option<EtagedGroup>>> + Send;
+
+    /// Create or update a group with optimistic-locking semantics.
+    ///
+    /// | `(existing, expected_etag)` | Behaviour |
+    /// |-----------------------------|-----------|
+    /// | `(None, None)`              | Create    |
+    /// | `(Some(_), None)`           | `Conflict` — group already exists |
+    /// | `(Some(e), Some(t))` where `e.etag() == t` | Update |
+    /// | `(Some(e), Some(t))` where `e.etag() != t` | `PreconditionFailed` |
+    /// | `(None, Some(_))`           | `PreconditionFailed { current_etag: "" }` |
+    #[allow(dead_code)] // consumed by Group D handler bodies
+    fn put_group(
+        &self,
+        org_id: &OrganizationId,
+        entry: ValidatedRbacEntry,
+        expected_etag: Option<&str>,
+    ) -> impl std::future::Future<Output = Result<EtagedGroup>> + Send;
+
+    /// List all groups for an org, sorted ascending by name.
+    #[allow(dead_code)] // consumed by Group D handler bodies
+    fn list_groups(
+        &self,
+        org_id: &OrganizationId,
+    ) -> impl std::future::Future<Output = Result<Vec<EtagedGroup>>> + Send;
+
+    /// Delete a group by name, checking the etag for optimistic locking.
+    ///
+    /// Callers MUST verify no live memberships (via `count_memberships_for_group`)
+    /// and no inheritors (via `list_inheritors`) exist before calling this method;
+    /// `delete_group` does not re-check these constraints.
+    #[allow(dead_code)] // consumed by Group D handler bodies
+    fn delete_group(
+        &self,
+        org_id: &OrganizationId,
+        name: &str,
+        expected_etag: &str,
+    ) -> impl std::future::Future<Output = Result<()>> + Send;
+
+    /// Return the names of groups that list `name` in their `inherits` field.
+    #[allow(dead_code)] // consumed by Group D handler bodies
+    fn list_inheritors(
+        &self,
+        org_id: &OrganizationId,
+        name: &str,
+    ) -> impl std::future::Future<Output = Result<Vec<String>>> + Send;
+
+    /// Return the count of users in the given group, keyed by user id.
+    #[allow(dead_code)] // consumed by Group D handler bodies
+    fn count_memberships_for_group(
+        &self,
+        org_id: &OrganizationId,
+        name: &str,
+    ) -> impl std::future::Future<Output = Result<BTreeMap<String, u32>>> + Send;
+
+    /// Return `true` iff `name` is a declared (written) group for the org.
+    #[allow(dead_code)] // consumed by Group D handler bodies
+    fn is_declared_group(
+        &self,
+        org_id: &OrganizationId,
+        name: &str,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
 }
 
 /// A configured (`OrgConfig` + matching etag) pair.
@@ -150,6 +228,17 @@ impl OrgRecord {
 pub(crate) struct InMemoryOrgStore {
     orgs: tokio::sync::RwLock<BTreeMap<OrganizationId, OrgRecord>>,
     signing_keys: tokio::sync::RwLock<BTreeMap<OrganizationId, Vec<SigningKeyEntry>>>,
+    /// `(org_id, group_name)` → stored group + etag.
+    // consumed by group-method impls and test helper (Group D)
+    #[allow(dead_code)]
+    groups: tokio::sync::RwLock<BTreeMap<(OrganizationId, String), EtagedGroup>>,
+    /// `(org_id, user_id)` → group names the user belongs to.
+    ///
+    /// Added in V2 to allow delete-conflict pre-checks to be exercised in
+    /// InMemory tests. Production memberships live in DynamoDB only (Group E).
+    // consumed by count_memberships_for_group (Group D)
+    #[allow(dead_code)]
+    memberships_to_groups: tokio::sync::RwLock<BTreeMap<(OrganizationId, String), Vec<String>>>,
 }
 
 impl InMemoryOrgStore {
@@ -157,6 +246,8 @@ impl InMemoryOrgStore {
         Self {
             orgs: tokio::sync::RwLock::new(orgs),
             signing_keys: tokio::sync::RwLock::new(BTreeMap::new()),
+            groups: tokio::sync::RwLock::new(BTreeMap::new()),
+            memberships_to_groups: tokio::sync::RwLock::new(BTreeMap::new()),
         }
     }
 }
@@ -300,6 +391,119 @@ impl OrgStore for InMemoryOrgStore {
         guard.insert(org_id.clone(), updated);
         Ok(result)
     }
+
+    // -----------------------------------------------------------------------
+    // Group CRUD (V2)
+    // -----------------------------------------------------------------------
+
+    async fn get_group(&self, org_id: &OrganizationId, name: &str) -> Result<Option<EtagedGroup>> {
+        let g = self.groups.read().await;
+        Ok(g.get(&(org_id.clone(), name.to_string())).cloned())
+    }
+
+    async fn put_group(
+        &self,
+        org_id: &OrganizationId,
+        entry: ValidatedRbacEntry,
+        expected_etag: Option<&str>,
+    ) -> Result<EtagedGroup> {
+        let mut g = self.groups.write().await;
+        let key = (org_id.clone(), entry.entry().name.clone());
+        match (g.get(&key), expected_etag) {
+            // Create path: row absent and no etag provided.
+            (None, None) => { /* proceed to insert below */ }
+            // Conflict: row exists but caller did not provide an etag (POST semantics).
+            (Some(_), None) => {
+                return Err(Error::Conflict(format!(
+                    "group '{}' already exists",
+                    entry.entry().name
+                )));
+            }
+            // Conditional put on a non-existent row — etag can never match.
+            (None, Some(_)) => {
+                return Err(Error::PreconditionFailed {
+                    current_etag: String::new(),
+                });
+            }
+            // Stale etag: row exists but etags differ.
+            (Some(existing), Some(t)) if existing.etag() != t => {
+                return Err(Error::PreconditionFailed {
+                    current_etag: existing.etag().to_string(),
+                });
+            }
+            // Matched — overwrite.
+            (Some(_), Some(_)) => { /* proceed to insert below */ }
+        }
+        let next = EtagedGroup::compute(entry.into_inner())?;
+        g.insert(key, next.clone());
+        Ok(next)
+    }
+
+    async fn list_groups(&self, org_id: &OrganizationId) -> Result<Vec<EtagedGroup>> {
+        let g = self.groups.read().await;
+        // BTreeMap is already sorted by key; the key is `(org_id, name)` so
+        // filtering on `org_id` yields entries in ascending `name` order.
+        let result = g
+            .range((org_id.clone(), String::new())..)
+            .take_while(|((oid, _), _)| oid == org_id)
+            .map(|(_, v)| v.clone())
+            .collect();
+        Ok(result)
+    }
+
+    async fn delete_group(
+        &self,
+        org_id: &OrganizationId,
+        name: &str,
+        expected_etag: &str,
+    ) -> Result<()> {
+        let mut g = self.groups.write().await;
+        let key = (org_id.clone(), name.to_string());
+        match g.get(&key) {
+            Some(existing) if existing.etag() == expected_etag => {
+                g.remove(&key);
+                Ok(())
+            }
+            Some(existing) => Err(Error::PreconditionFailed {
+                current_etag: existing.etag().to_string(),
+            }),
+            None => Err(Error::NotFound(format!("group '{name}' not found"))),
+        }
+    }
+
+    async fn list_inheritors(&self, org_id: &OrganizationId, name: &str) -> Result<Vec<String>> {
+        let g = self.groups.read().await;
+        let inheritors = g
+            .range((org_id.clone(), String::new())..)
+            .take_while(|((oid, _), _)| oid == org_id)
+            .filter(|(_, eg)| eg.entry().inherits.iter().any(|i| i == name))
+            .map(|((_, group_name), _)| group_name.clone())
+            .collect();
+        Ok(inheritors)
+    }
+
+    async fn count_memberships_for_group(
+        &self,
+        org_id: &OrganizationId,
+        name: &str,
+    ) -> Result<BTreeMap<String, u32>> {
+        let m = self.memberships_to_groups.read().await;
+        let mut counts: BTreeMap<String, u32> = BTreeMap::new();
+        for ((oid, user_id), groups) in m.iter() {
+            if oid == org_id && groups.iter().any(|g| g == name) {
+                *counts.entry(user_id.clone()).or_insert(0) += 1;
+            }
+        }
+        Ok(counts)
+    }
+
+    async fn is_declared_group(&self, org_id: &OrganizationId, name: &str) -> Result<bool> {
+        Ok(self
+            .groups
+            .read()
+            .await
+            .contains_key(&(org_id.clone(), name.to_string())))
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -397,6 +601,12 @@ pub(crate) fn load_config_file(path: &Path) -> color_eyre::Result<InMemoryOrgSto
 ///
 /// The `OrgStore` trait uses RPITIT (`impl Future` in return position), making
 /// it not object-safe. This enum provides static dispatch instead of `dyn`.
+///
+/// `InMemoryOrgStore` is larger than `DynamoOrgStore` because it embeds its
+/// data in-process (four `RwLock<BTreeMap<…>>` fields). Boxing would add
+/// an indirection with no benefit — the enum is always heap-allocated in
+/// an `Arc<AnyOrgStore>` at the call site.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum AnyOrgStore {
     Memory(InMemoryOrgStore),
     DynamoDb(DynamoOrgStore),
@@ -473,6 +683,69 @@ impl OrgStore for AnyOrgStore {
         match self {
             Self::Memory(s) => s.rotate_signing_key(org_id, key_id).await,
             Self::DynamoDb(s) => s.rotate_signing_key(org_id, key_id).await,
+        }
+    }
+
+    async fn get_group(&self, org_id: &OrganizationId, name: &str) -> Result<Option<EtagedGroup>> {
+        match self {
+            Self::Memory(s) => s.get_group(org_id, name).await,
+            Self::DynamoDb(s) => s.get_group(org_id, name).await,
+        }
+    }
+
+    async fn put_group(
+        &self,
+        org_id: &OrganizationId,
+        entry: ValidatedRbacEntry,
+        expected_etag: Option<&str>,
+    ) -> Result<EtagedGroup> {
+        match self {
+            Self::Memory(s) => s.put_group(org_id, entry, expected_etag).await,
+            Self::DynamoDb(s) => s.put_group(org_id, entry, expected_etag).await,
+        }
+    }
+
+    async fn list_groups(&self, org_id: &OrganizationId) -> Result<Vec<EtagedGroup>> {
+        match self {
+            Self::Memory(s) => s.list_groups(org_id).await,
+            Self::DynamoDb(s) => s.list_groups(org_id).await,
+        }
+    }
+
+    async fn delete_group(
+        &self,
+        org_id: &OrganizationId,
+        name: &str,
+        expected_etag: &str,
+    ) -> Result<()> {
+        match self {
+            Self::Memory(s) => s.delete_group(org_id, name, expected_etag).await,
+            Self::DynamoDb(s) => s.delete_group(org_id, name, expected_etag).await,
+        }
+    }
+
+    async fn list_inheritors(&self, org_id: &OrganizationId, name: &str) -> Result<Vec<String>> {
+        match self {
+            Self::Memory(s) => s.list_inheritors(org_id, name).await,
+            Self::DynamoDb(s) => s.list_inheritors(org_id, name).await,
+        }
+    }
+
+    async fn count_memberships_for_group(
+        &self,
+        org_id: &OrganizationId,
+        name: &str,
+    ) -> Result<BTreeMap<String, u32>> {
+        match self {
+            Self::Memory(s) => s.count_memberships_for_group(org_id, name).await,
+            Self::DynamoDb(s) => s.count_memberships_for_group(org_id, name).await,
+        }
+    }
+
+    async fn is_declared_group(&self, org_id: &OrganizationId, name: &str) -> Result<bool> {
+        match self {
+            Self::Memory(s) => s.is_declared_group(org_id, name).await,
+            Self::DynamoDb(s) => s.is_declared_group(org_id, name).await,
         }
     }
 }

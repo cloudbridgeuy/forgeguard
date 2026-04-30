@@ -17,7 +17,7 @@ use crate::config::OrgConfig;
 use crate::error::{Error, Result};
 use crate::etag::Etag;
 use crate::signing_key::{GenerateKeyResult, SigningKeyEntry};
-use crate::store::{generate_key_material, ConfiguredConfig, OrgRecord, OrgStore};
+use crate::store::{generate_key_material, ConfiguredConfig, EtagedGroup, OrgRecord, OrgStore};
 
 // ---------------------------------------------------------------------------
 // Key schema — single source of truth from shared JSON
@@ -572,6 +572,56 @@ impl OrgStore for DynamoOrgStore {
         self.write_signing_keys(org_id, &updated).await?;
 
         Ok(result)
+    }
+
+    // -----------------------------------------------------------------------
+    // Group CRUD stubs — to be replaced by Group E
+    // -----------------------------------------------------------------------
+
+    async fn get_group(
+        &self,
+        _org_id: &OrganizationId,
+        _name: &str,
+    ) -> Result<Option<EtagedGroup>> {
+        todo!("Group E: DynamoDB get_group")
+    }
+
+    async fn put_group(
+        &self,
+        _org_id: &OrganizationId,
+        _entry: forgeguard_authz_core::ValidatedRbacEntry,
+        _expected_etag: Option<&str>,
+    ) -> Result<EtagedGroup> {
+        todo!("Group E: DynamoDB put_group")
+    }
+
+    async fn list_groups(&self, _org_id: &OrganizationId) -> Result<Vec<EtagedGroup>> {
+        todo!("Group E: DynamoDB list_groups")
+    }
+
+    async fn delete_group(
+        &self,
+        _org_id: &OrganizationId,
+        _name: &str,
+        _expected_etag: &str,
+    ) -> Result<()> {
+        todo!("Group E: DynamoDB delete_group")
+    }
+
+    async fn list_inheritors(&self, _org_id: &OrganizationId, _name: &str) -> Result<Vec<String>> {
+        todo!("Group E: DynamoDB list_inheritors")
+    }
+
+    async fn count_memberships_for_group(
+        &self,
+        _org_id: &OrganizationId,
+        _name: &str,
+    ) -> Result<std::collections::BTreeMap<String, u32>> {
+        todo!("Group E: DynamoDB count_memberships_for_group")
+    }
+
+    async fn is_declared_group(&self, _org_id: &OrganizationId, _name: &str) -> Result<bool> {
+        todo!("Group E: DynamoDB is_declared_group")
     }
 }
 
