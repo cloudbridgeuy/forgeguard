@@ -151,52 +151,8 @@ Each crate's `README.md` describes what it owns and its pure/I/O classification.
 - **Published `crates/` deps** (`core`, `authn-core`, `authz-core`, `proxy-core`) — lock-step versioning (all share the same version). Published only when a `lib/` crate releases. Not promoted as standalone products.
 - **Unpublished `crates/`** — `publish = false`, `version = "0.0.0"`. Everything else.
 
-## Glossary
-
-| Term | Definition |
-| --- | --- |
-| **Organization** | A ForgeGuard customer — the company that subscribes to ForgeGuard to protect their application. Each organization gets its own Cognito user pool and VP policy store. Identified by `OrganizationId`. |
-| **Tenant** | An end-user partition within an organization's application. ForgeGuard helps organizations enforce tenant isolation via Cedar policies. Identified by `TenantId`. |
-| **Control Plane** | ForgeGuard-operated SaaS: organization management, policy authoring, dashboard, billing. Contains no customer user data. |
-| **Data Plane** | The runtime enforcement layer: proxy, identity resolution, authorization decisions. In SaaS mode, operated by ForgeGuard. In BYOC mode, deployed in the organization's AWS account. |
-| **BYOC (Bring Your Own Cloud)** | Deployment model where the data plane runs in the organization's AWS account while the control plane remains ForgeGuard SaaS. |
-| **Proxy (local — static)** | Single-organization proxy binary in static mode. Reads TOML config, fully self-contained. No control plane dependency. |
-| **Proxy (local — connected)** | Single-organization proxy binary in connected mode. Fetches routes, flags, and upstream config from the control plane. Organization provides local AWS resource IDs (Cognito pool, VP store) at startup. The control plane syncs Cedar policies to the org's VP store. |
-| **Proxy (SaaS)** | Multi-organization proxy binary operated by ForgeGuard. Resolves organization from request, lazy-loads per-org config via L1 in-memory cache, L2 CloudFront/S3 (SaaS) or authenticated Lambda API (BYOC). |
-| **Worker** | Background Lambda binary (`forgeguard_worker`). Dispatches jobs by `FORGEGUARD_WORKER_JOB` env var. Currently: `reconciler` (sync pending DynamoDB records to S3). |
-
 ## Context Documents
 
-| Document                                                           | Purpose                                                                 |
-| ------------------------------------------------------------------ | ----------------------------------------------------------------------- |
-| [Linting and Clippy](./.claude/context/linting-and-clippy.md)      | Clippy thresholds, workspace lints, and how they map to design patterns |
-| [Params Struct Rule](./.claude/context/params-struct-rule.md)      | Why we ban `#[allow(clippy::too_many_arguments)]` and how the lint enforces it |
-| [Visibility Conventions](./.claude/context/visibility-conventions.md) | `pub(crate)` default, constructor + accessor shape, `testing` Cargo feature for cross-crate fixtures, Axum tuple-struct PDV exception |
-| [Newtypes](./.claude/context/newtypes.md)                          | Newtype anatomy, wire-format vs. domain split, validation-at-deserialize, project catalog, lessons from issue-74 |
-| [Commit and Release](./.claude/context/commit-and-release.md)      | Conventional commits, version bump logic, release flow                  |
-| [xtask lint](./.claude/context/xtask-lint.md)                      | Lint pipeline checks, flags, architecture, adding new checks            |
-| [xtask Wrapper](./.claude/context/xtask-wrapper.md)                | `cargo-xtask` mtime staleness, FCIS module split, hot/cold paths, `--rebuild` |
-| [Feature Flags](./.claude/context/feature-flags.md)                | Flag types, evaluation order, overrides, debug endpoint, proxy wiring   |
-| [Verified Permissions](./.claude/context/verified-permissions.md)   | VP integration: action format, Cedar types, CLI, config, infrastructure |
-| [Container Builds](./.claude/context/container-builds.md)          | Distroless images, multi-stage builds, SSL strategy, health checks      |
-| [CORS](./.claude/context/cors.md)                                  | CORS config, origin matching, request flow, crate placement             |
-| [Proxy Shaping](./.claude/designs/proxy-shaping.md)                | Proxy design: requirements, shape, breadboard, slices                   |
-| [SaaS Architecture](./.claude/context/saas-architecture.md)        | Control/data plane split, infra stack, worker saga, org domain model    |
-| [Authn Wiring](./.claude/context/authn-wiring.md)                  | JWT + API key config, resolver construction, PrincipalKind routing, FCIS split |
-| [CLI](./.claude/context/cli.md)                                    | `check`, `routes`, `policies`, `keygen` subcommands, FCIS architecture  |
-| [xtask CP Tools](./.claude/context/xtask-control-plane-tools.md)   | `seed`, `token`, `curl` subcommands for end-to-end manual QA            |
-| [xtask CP Dev Stack](./.claude/context/xtask-control-plane-dev.md) | `dev` subcommand: dynamodb-local container, AWS env wiring, SSO prerequisite |
-| [Request Signing](./.claude/context/request-signing.md)            | Ed25519 signing: canonical payload, config, key rotation, crate layout  |
-| [Demo App](./.claude/context/demo-app.md)                          | E2E demo: Python TODO app, native proxy, demo config, running instructions |
-| [Control Plane](./.claude/context/control-plane.md)                | CP scaffold, proxy-config endpoint, OrgStore trait, auth, VP authorization (V4), ETag, Draft / `ConfiguredConfig` lifecycle, testing |
-| [Optimistic Locking](./.claude/context/optimistic-locking.md)      | `If-Match` / 412 on `PUT /organizations/{id}`: semantics, pure `etag.rs` core, error variant, V3 memory + Dynamo parity, V4 wildcard + POST ETag + 412 metrics, V5 conditional GET + typed 412 |
-| [Infra: Control Plane](./.claude/context/infra-control-plane.md)   | CDK project, 1Password integration, DynamoDB Global Table, xtask infra  |
-| [AWS ARN Formats](./.claude/context/aws-arn-formats.md)            | Per-service ARN gotchas (VP empty region, etc.) and the rule to prefer `attrArn` over `formatArn` |
-| [Cluster Mode](./.claude/context/cluster.md)                       | TieredCache, Redis wiring, config, health stats, future slices          |
-| [Dependency Constraints](./.claude/context/dependency-constraints.md) | Pingora version pins (rand, prometheus), jsonwebtoken crypto, reqwest TLS |
-| [CI](./.claude/context/ci.md)                                      | GH Actions jobs, toolchain pinning rules, typos / cargo-deny / cargo-rail allowlists |
-| [Design Documents](./.claude/context/)                             | Full ForgeGuard architecture and technical specifications               |
+See [CONTEXT.md](./CONTEXT.md) for the project-wide agentic context index.
 
-### Local-Only Documents (MUST NOT commit)
-
-Plans (`.claude/plans/`) and designs (`.claude/designs/`) are **local-only** working documents. They are gitignored and must never be pushed to origin. Only `.claude/context/` and `.claude/commands/` are tracked in git.
+**ALL** context references MUST be included in `CONTEXT.md`, not duplicated here. Actual agentic context documents MUST be kept under `.claude/context/`.

@@ -2,7 +2,36 @@ use super::*;
 use aws_sdk_dynamodb::types::{
     AttributeDefinition, KeySchemaElement, KeyType, ProvisionedThroughput, ScalarAttributeType,
 };
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::sync::OnceCell;
+
+/// DynamoDB Local accepts TCP connections before its SQLite engine is fully
+/// warm, so the first burst of parallel requests can fail with
+/// `Connection reset by peer`. This probe runs once per process and retries an
+/// idempotent `ListTables` until it succeeds.
+async fn warm_engine_once(client: &aws_sdk_dynamodb::Client) {
+    static WARMED: OnceCell<()> = OnceCell::const_new();
+    WARMED
+        .get_or_init(|| async {
+            const MAX_ATTEMPTS: u32 = 25;
+            const BACKOFF: Duration = Duration::from_millis(200);
+            let mut last_err = None;
+            for _ in 0..MAX_ATTEMPTS {
+                match client.list_tables().send().await {
+                    Ok(_) => return,
+                    Err(e) => {
+                        last_err = Some(e);
+                        tokio::time::sleep(BACKOFF).await;
+                    }
+                }
+            }
+            panic!(
+                "DynamoDB Local did not become ready after {MAX_ATTEMPTS} attempts: {:?}",
+                last_err
+            );
+        })
+        .await;
+}
 
 /// Build a DynamoDB client pointing at a local DynamoDB-compatible endpoint.
 ///
@@ -16,7 +45,9 @@ async fn test_client() -> aws_sdk_dynamodb::Client {
         .test_credentials()
         .load()
         .await;
-    aws_sdk_dynamodb::Client::new(&config)
+    let client = aws_sdk_dynamodb::Client::new(&config);
+    warm_engine_once(&client).await;
+    client
 }
 
 /// Generate a unique table name per test run.
