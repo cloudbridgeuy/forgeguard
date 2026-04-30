@@ -223,9 +223,7 @@ fn from_item(item: &HashMap<String, AttributeValue>) -> Result<OrgRecord> {
             let etag = Etag::try_new(etag_raw).map_err(|e| {
                 Error::Store(format!("invalid stored etag for org '{org_id}': {e}"))
             })?;
-            Some(ConfiguredConfig::from_stored(config, etag).map_err(|e| {
-                Error::Store(format!("reconstitute config for org '{org_id}': {e}"))
-            })?)
+            Some(ConfiguredConfig::from_stored(config, etag))
         }
         (None, None) => None,
         (Some(_), None) => {

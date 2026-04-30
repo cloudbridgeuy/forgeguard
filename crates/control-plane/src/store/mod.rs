@@ -100,8 +100,8 @@ impl ConfiguredConfig {
 
     /// Build from an already-paired (config, etag) — e.g. when
     /// reconstituting an `OrgRecord` from a DynamoDB item.
-    pub(crate) fn from_stored(config: OrgConfig, etag: Etag) -> Result<Self> {
-        Ok(Self { config, etag })
+    pub(crate) fn from_stored(config: OrgConfig, etag: Etag) -> Self {
+        Self { config, etag }
     }
 
     pub(crate) fn config(&self) -> &OrgConfig {
