@@ -48,7 +48,7 @@ impl fmt::Display for ConfigVersion {
 impl FromStr for ConfigVersion {
     type Err = Error;
     fn from_str(s: &str) -> Result<Self> {
-        Self::try_new(s.to_string())
+        Self::try_new(s)
     }
 }
 
