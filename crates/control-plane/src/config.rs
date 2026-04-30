@@ -55,17 +55,14 @@ impl OrgConfig {
         self.default_policy
     }
 
-    #[cfg(test)]
     pub(crate) fn namespace(&self) -> &str {
         &self.namespace
     }
 
-    #[cfg(test)]
     pub(crate) fn tenant(&self) -> &TenantConfig {
         &self.tenant
     }
 
-    #[cfg(test)]
     pub(crate) fn vp_store_id(&self) -> Option<&str> {
         self.vp_store_id.as_deref()
     }

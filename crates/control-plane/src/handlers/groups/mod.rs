@@ -4,10 +4,14 @@
 //!
 //! - `pure` — functional core: DTOs, conversions, etag computation, error ADT,
 //!   error shaper. No I/O. Fully unit-tested.
+//! - `active_pure` — functional core for the V3 Active-org write path:
+//!   `OrgWriteContext` parsing, dependent walking, Cedar compilation, and the
+//!   wire-body types for the V3 error variants. No I/O.
 //! - `codec` — pure DynamoDB item encoder/decoder. No I/O.
 //! - `mod` (this file) — request DTOs, `pub(crate)` re-exports, and handler
 //!   bodies (imperative shell calling into `pure` and the `OrgStore` trait).
 
+pub(crate) mod active_pure;
 pub(crate) mod codec;
 pub(crate) mod pure;
 
