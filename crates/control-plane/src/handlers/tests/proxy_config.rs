@@ -89,7 +89,10 @@ async fn proxy_config_wildcard_if_none_match_on_configured_returns_304_with_etag
         .to_str()
         .unwrap()
         .to_string();
-    assert_eq!(response_etag, stored_etag, "304 ETag must echo the stored etag");
+    assert_eq!(
+        response_etag, stored_etag,
+        "304 ETag must echo the stored etag"
+    );
 
     let body_bytes = res.into_body().collect().await.unwrap().to_bytes();
     assert!(body_bytes.is_empty(), "304 body must be empty");
