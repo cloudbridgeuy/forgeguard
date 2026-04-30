@@ -8,7 +8,7 @@ use std::sync::LazyLock;
 
 use crate::etag::{Etag, ResolvedIfMatch};
 
-/// Why a `PUT /organizations/{id}` responded 412.
+/// Why a `PUT /organizations/{id}` (or a group `PUT`/`DELETE`) responded 412.
 ///
 /// The label set is closed — we never emit `org_id` as a label (cardinality).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,6 +20,11 @@ pub(crate) enum PreconditionReason {
     DraftFailClosed,
     /// Caller sent `If-Match: *` on a Draft org (no stored representation).
     WildcardOnDraft,
+    /// `PUT`/`DELETE` on a group requires `If-Match`, but the header was absent.
+    ///
+    /// Constructed by Group D handlers. The allow below is removed when Group D lands.
+    #[allow(dead_code)]
+    MissingIfMatch,
 }
 
 impl PreconditionReason {
@@ -28,6 +33,7 @@ impl PreconditionReason {
             Self::StaleEtag => "stale_etag",
             Self::DraftFailClosed => "draft_fail_closed",
             Self::WildcardOnDraft => "wildcard_on_draft",
+            Self::MissingIfMatch => "missing_if_match",
         }
     }
 }
@@ -131,6 +137,10 @@ mod tests {
         assert_eq!(
             PreconditionReason::WildcardOnDraft.as_label(),
             "wildcard_on_draft"
+        );
+        assert_eq!(
+            PreconditionReason::MissingIfMatch.as_label(),
+            "missing_if_match"
         );
     }
 }

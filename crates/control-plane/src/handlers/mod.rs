@@ -1,3 +1,4 @@
+pub(crate) mod groups;
 mod keys;
 
 use std::sync::Arc;
@@ -431,7 +432,7 @@ pub(crate) async fn delete_handler<S: OrgStore>(
     }
 }
 
-fn not_found() -> Response {
+pub(crate) fn not_found() -> Response {
     (
         StatusCode::NOT_FOUND,
         Json(serde_json::json!({"error": "not found"})),

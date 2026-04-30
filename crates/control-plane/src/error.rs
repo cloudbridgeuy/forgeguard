@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use crate::etag::Etag;
 
 /// Control plane errors.
@@ -24,6 +26,26 @@ pub(crate) enum Error {
     /// Storage backend error (DynamoDB SDK, serialization, etc.).
     #[error("store error: {0}")]
     Store(String),
+    /// A group write was rejected by field-level validation.
+    ///
+    /// Constructed by Group D handlers. The allow below is removed when Group D lands.
+    #[allow(dead_code)]
+    #[error("group validation failed: {reason}")]
+    Validation {
+        reason: forgeguard_authz_core::GroupValidationError,
+    },
+    /// A group cannot be deleted because it is still referenced by inheritors
+    /// or has active memberships.
+    ///
+    /// Constructed by Group D handlers. The allow below is removed when Group D lands.
+    #[allow(dead_code)]
+    #[error(
+        "delete conflict: blocking_inheritors={blocking_inheritors:?}, memberships_count={memberships_count:?}"
+    )]
+    DeleteConflict {
+        blocking_inheritors: Vec<String>,
+        memberships_count: BTreeMap<String, u32>,
+    },
 }
 
 pub(crate) type Result<T> = std::result::Result<T, Error>;
