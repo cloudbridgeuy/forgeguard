@@ -9,6 +9,7 @@
 - **Dev watcher:** `bacon` — see `bacon.toml`
 - **Pre-commit hooks:** `cargo xtask lint --install-hooks`
 - **Commits:** Conventional Commits — see [commit-and-release.md](./.claude/context/commit-and-release.md)
+- **Newtypes:** wrap primitives at deserialize boundaries (`Percentage`, `ConfigVersion`, `SagaId`, `Etag`, `KeyId`, `UserId`, `TenantId`, …) — never `etag: String` / `version: String` / `rollout_percentage: u8` in domain types. See [newtypes.md](./.claude/context/newtypes.md)
 - **Releases:** `cargo xtask release` — see [commit-and-release.md](./.claude/context/commit-and-release.md)
 - **Rust toolchain:** pinned in `rust-toolchain.toml` (channel + required `components`) — see [ci.md](./.claude/context/ci.md)
 - **CI:** GitHub Actions in `.github/workflows/ci.yml` — see [ci.md](./.claude/context/ci.md) for toolchain/typos/deny/rail rules
@@ -101,7 +102,7 @@ See `~/.claude/patterns/` for architectural patterns:
 - **Functional Core / Imperative Shell** — enforced at crate boundaries
 - **Type-Driven Development** — types are the spec; typestate for auth flows
 - **Make Impossible States Impossible** — enum variants, not boolean flags
-- **Parse Don't Validate** — at system boundaries
+- **Parse Don't Validate** — at system boundaries; project-specific catalog and conventions in [newtypes.md](./.claude/context/newtypes.md)
 - **CQRS** — command/query separation
 
 ## Workspace Structure
@@ -170,6 +171,7 @@ Each crate's `README.md` describes what it owns and its pure/I/O classification.
 | [Linting and Clippy](./.claude/context/linting-and-clippy.md)      | Clippy thresholds, workspace lints, and how they map to design patterns |
 | [Params Struct Rule](./.claude/context/params-struct-rule.md)      | Why we ban `#[allow(clippy::too_many_arguments)]` and how the lint enforces it |
 | [Visibility Conventions](./.claude/context/visibility-conventions.md) | `pub(crate)` default, constructor + accessor shape, `testing` Cargo feature for cross-crate fixtures, Axum tuple-struct PDV exception |
+| [Newtypes](./.claude/context/newtypes.md)                          | Newtype anatomy, wire-format vs. domain split, validation-at-deserialize, project catalog, lessons from issue-74 |
 | [Commit and Release](./.claude/context/commit-and-release.md)      | Conventional commits, version bump logic, release flow                  |
 | [xtask lint](./.claude/context/xtask-lint.md)                      | Lint pipeline checks, flags, architecture, adding new checks            |
 | [xtask Wrapper](./.claude/context/xtask-wrapper.md)                | `cargo-xtask` mtime staleness, FCIS module split, hot/cold paths, `--rebuild` |
