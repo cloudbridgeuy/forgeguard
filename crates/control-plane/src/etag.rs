@@ -47,17 +47,6 @@ impl Etag {
     pub(crate) fn as_str(&self) -> &str {
         &self.0
     }
-
-    /// Returns `true` when this is a weak validator (starts with `W/`).
-    ///
-    /// Weak validators are accepted in the `If-Match` header but are not used
-    /// for strong comparison (RFC 7232 §3). Currently exercised by the
-    /// `etag_value_tests::try_new_accepts_weak` test only — `#[allow(dead_code)]`
-    /// suppresses the in-crate dead-code lint until production code consumes it.
-    #[allow(dead_code)]
-    pub(crate) fn is_weak(&self) -> bool {
-        self.0.starts_with("W/")
-    }
 }
 
 impl std::fmt::Display for Etag {
@@ -223,13 +212,6 @@ mod etag_value_tests {
     fn try_new_accepts_strong() {
         let e = Etag::try_new("abc123").unwrap();
         assert_eq!(e.as_str(), "abc123");
-        assert!(!e.is_weak());
-    }
-
-    #[test]
-    fn try_new_accepts_weak() {
-        let e = Etag::try_new("W/abc123").unwrap();
-        assert!(e.is_weak());
     }
 
     #[test]
