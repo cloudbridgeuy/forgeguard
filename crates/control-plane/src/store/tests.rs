@@ -120,8 +120,8 @@ fn compute_etag_deterministic() {
     let record = guard.get(&org_id).unwrap();
     let config = record.config().unwrap();
 
-    let etag1 = compute_etag(config).unwrap();
-    let etag2 = compute_etag(config).unwrap();
+    let etag1 = compute_etag(config);
+    let etag2 = compute_etag(config);
     assert_eq!(etag1, etag2);
 }
 
@@ -154,7 +154,7 @@ fn compute_etag_quoted_hex_format() {
     let record = guard.get(&org_id).unwrap();
     let config = record.config().unwrap();
 
-    let etag = compute_etag(config).unwrap();
+    let etag = compute_etag(config);
     let etag_str = etag.as_str();
     // 16 hex chars + 2 quote chars = 18
     assert_eq!(
@@ -464,7 +464,7 @@ fn make_store_with_org(org_id_str: &str) -> InMemoryOrgStore {
         "default_policy": "deny"
     }))
     .unwrap();
-    let configured = ConfiguredConfig::compute(config).unwrap();
+    let configured = ConfiguredConfig::compute(config);
     let record = OrgRecord::new(org, Some(configured));
     store
         .orgs

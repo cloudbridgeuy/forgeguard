@@ -93,9 +93,9 @@ pub(crate) struct ConfiguredConfig {
 
 impl ConfiguredConfig {
     /// Build from a config alone, computing the etag from its contents.
-    pub(crate) fn compute(config: OrgConfig) -> Result<Self> {
-        let etag = compute_etag(&config)?;
-        Ok(Self { config, etag })
+    pub(crate) fn compute(config: OrgConfig) -> Self {
+        let etag = compute_etag(&config);
+        Self { config, etag }
     }
 
     /// Build from an already-paired (config, etag) — e.g. when
@@ -175,7 +175,7 @@ impl OrgStore for InMemoryOrgStore {
                 "organization '{org_id}' already exists"
             )));
         }
-        let configured = config.map(ConfiguredConfig::compute).transpose()?;
+        let configured = config.map(ConfiguredConfig::compute);
         let record = OrgRecord::new(org, configured);
         guard.insert(org_id, record.clone());
         Ok(record)
@@ -215,7 +215,7 @@ impl OrgStore for InMemoryOrgStore {
             return Err(Error::PreconditionFailed { current_etag });
         }
 
-        let configured = config.map(ConfiguredConfig::compute).transpose()?;
+        let configured = config.map(ConfiguredConfig::compute);
         let record = OrgRecord::new(org, configured);
         guard.insert(org_id.clone(), record.clone());
         Ok(record)
@@ -343,11 +343,15 @@ pub(crate) fn generate_key_material() -> Result<GenerateKeyResult> {
     Ok(GenerateKeyResult::new(key_id, private_pem, public_pem, now))
 }
 
-pub(crate) fn compute_etag(config: &OrgConfig) -> Result<Etag> {
-    let json = serde_json::to_string(config).map_err(|e| Error::Config(e.to_string()))?;
+pub(crate) fn compute_etag(config: &OrgConfig) -> Etag {
+    // serde_json::to_string is infallible for a well-typed struct with no
+    // non-string map keys; fall back to an empty slice so the hash is still
+    // deterministic on the (unreachable) error branch.
+    let json = serde_json::to_string(config).unwrap_or_default();
     let hash = xxhash_rust::xxh64::xxh64(json.as_bytes(), 0);
-    let raw = format!("\"{hash:016x}\"");
-    Etag::try_new(raw).map_err(|e| Error::Config(e.to_string()))
+    // The formatted string is always 18 bytes ("hex16" + two quote chars),
+    // so from_validated's non-empty invariant is always satisfied.
+    Etag::from_validated(format!("\"{hash:016x}\""))
 }
 
 pub(crate) fn build_org_store(json_str: &str) -> Result<InMemoryOrgStore> {
@@ -363,10 +367,7 @@ pub(crate) fn build_org_store(json_str: &str) -> Result<InMemoryOrgStore> {
 
         // Seeded orgs are Active when configured, Draft when not — matches
         // the semantic of "this org needs onboarding to receive traffic".
-        let configured = raw_entry
-            .config
-            .map(ConfiguredConfig::compute)
-            .transpose()?;
+        let configured = raw_entry.config.map(ConfiguredConfig::compute);
         let status = if configured.is_some() {
             OrgStatus::Active
         } else {

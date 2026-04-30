@@ -346,7 +346,7 @@ pub(crate) fn signing_keys_from_item(
 
 impl OrgStore for DynamoOrgStore {
     async fn create(&self, org: Organization, config: Option<OrgConfig>) -> Result<OrgRecord> {
-        let configured = config.map(ConfiguredConfig::compute).transpose()?;
+        let configured = config.map(ConfiguredConfig::compute);
         let item = to_item(&org, configured.as_ref(), &[])?;
 
         let result = self
@@ -442,7 +442,7 @@ impl OrgStore for DynamoOrgStore {
             .ok_or_else(|| Error::NotFound(format!("organization '{org_id}' not found")))?;
         let existing_keys = signing_keys_from_item(&existing)?;
 
-        let configured = config.map(ConfiguredConfig::compute).transpose()?;
+        let configured = config.map(ConfiguredConfig::compute);
         let item = to_item(&org, configured.as_ref(), &existing_keys)?;
 
         let parts = build_update_condition(expected_etag);

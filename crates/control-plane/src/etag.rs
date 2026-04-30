@@ -20,15 +20,27 @@ pub(crate) struct Etag(String);
 impl Etag {
     /// Construct an `Etag`, validating that the input is non-empty.
     ///
-    /// Accepts any non-empty string. Callers may pass a quoted wire value
-    /// (e.g. `"\"abc123\""`) or an unquoted identifier — the struct stores
-    /// the string verbatim. Returns `Error::InvalidEtag` on empty input.
+    /// Accepts any non-empty string. The string is stored verbatim — this
+    /// constructor does not strip or add surrounding quotes. Etags produced by
+    /// `compute_etag` include double-quotes (per RFC 7232 wire format) and are
+    /// stored that way. Returns `Error::InvalidEtag` on empty input.
     pub(crate) fn try_new(raw: impl Into<String>) -> crate::error::Result<Self> {
         let raw = raw.into();
         if raw.is_empty() {
             return Err(crate::error::Error::InvalidEtag { raw });
         }
         Ok(Self(raw))
+    }
+
+    /// Construct from a string the caller has already proven non-empty.
+    ///
+    /// Internal-only helper for cases where validation is statically clear
+    /// (e.g., constructed from a fixed-length hash format such as the one
+    /// produced by `compute_etag`). Prefer [`Self::try_new`] at untrusted
+    /// boundaries.
+    pub(crate) fn from_validated(raw: String) -> Self {
+        debug_assert!(!raw.is_empty(), "from_validated called with empty string");
+        Self(raw)
     }
 
     /// Return the raw etag string (the value passed to [`Self::try_new`]).
@@ -38,8 +50,10 @@ impl Etag {
 
     /// Returns `true` when this is a weak validator (starts with `W/`).
     ///
-    /// Weak validators are accepted in the `If-Match` header but are not
-    /// used for strong comparison (RFC 7232 §3). Kept for future use.
+    /// Weak validators are accepted in the `If-Match` header but are not used
+    /// for strong comparison (RFC 7232 §3). Currently exercised by the
+    /// `etag_value_tests::try_new_accepts_weak` test only — `#[allow(dead_code)]`
+    /// suppresses the in-crate dead-code lint until production code consumes it.
     #[allow(dead_code)]
     pub(crate) fn is_weak(&self) -> bool {
         self.0.starts_with("W/")
