@@ -221,8 +221,10 @@ impl<'a> InheritanceWalker<'a> {
     }
 }
 
+pub mod permits;
 pub mod validation;
 
+pub use permits::{groups_to_permits, policy_name_for_group, MaterializeCompileError, NamedPermit};
 pub use validation::{
     validate_action_format, validate_group_name, validate_rbac_entry, GroupValidationError,
     ValidatedRbacEntry,

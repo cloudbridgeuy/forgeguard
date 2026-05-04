@@ -16,8 +16,9 @@ pub use engine::{CacheStats, PolicyEngine};
 pub use error::{Error, Result};
 pub use query::PolicyQuery;
 pub use rbac::{
-    compile_rbac_to_cedar, resolve_inherits, validate_action_format, validate_cedar_ident,
-    validate_group_name, validate_rbac_entry, GroupValidationError, RbacEntry, TenantConfig,
+    compile_rbac_to_cedar, groups_to_permits, policy_name_for_group, resolve_inherits,
+    validate_action_format, validate_cedar_ident, validate_group_name, validate_rbac_entry,
+    GroupValidationError, MaterializeCompileError, NamedPermit, RbacEntry, TenantConfig,
     ValidatedRbacEntry,
 };
 
