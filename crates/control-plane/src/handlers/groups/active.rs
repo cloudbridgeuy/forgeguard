@@ -410,7 +410,11 @@ async fn rollback_delete<S: OrgStore>(
 /// `NotFound` as idempotent success) and then create the new one. Any other
 /// error from delete is surfaced because the subsequent create would conflict
 /// with the still-present old policy.
-async fn push_permit<V: VpClient>(
+///
+/// Reused by the V4 saga stub (`super::saga`) so the per-permit push semantics
+/// stay identical between the per-request write path (V3) and the
+/// Draft → Active materialization path (V4).
+pub(super) async fn push_permit<V: VpClient>(
     vp: &V,
     store_id: &str,
     permit: &NamedPermit,

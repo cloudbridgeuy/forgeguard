@@ -15,6 +15,7 @@ pub(crate) mod active;
 pub(crate) mod active_pure;
 pub(crate) mod codec;
 pub(crate) mod pure;
+pub(crate) mod saga;
 
 pub(crate) use pure::{shape_group_error_response, GroupHandlerError};
 

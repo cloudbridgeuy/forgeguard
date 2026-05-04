@@ -11,6 +11,7 @@ mod groups_crud;
 mod groups_delete;
 mod groups_etag;
 mod groups_predicate;
+mod groups_saga;
 mod groups_validation;
 mod metrics_412;
 mod metrics_endpoint;
