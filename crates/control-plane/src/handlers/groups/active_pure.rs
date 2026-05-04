@@ -7,7 +7,10 @@
 
 use std::collections::{BTreeSet, VecDeque};
 
-use forgeguard_authz_core::{compile_rbac_to_cedar, GroupValidationError, RbacEntry, TenantConfig};
+use forgeguard_authz_core::{
+    compile_rbac_to_cedar, policy_name_for_group, GroupValidationError, NamedPermit, RbacEntry,
+    TenantConfig,
+};
 use forgeguard_core::OrgStatus;
 use serde::Serialize;
 
@@ -80,14 +83,6 @@ impl OrgWriteContext {
     }
 }
 
-/// A single Cedar permit destined for VP, with the canonical `cp-rbac-{name}`
-/// policy name already applied.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct NamedPermit {
-    pub(crate) name: String,
-    pub(crate) statement: String,
-}
-
 /// The result of compiling an `RbacEntry` plus its transitive dependents into
 /// VP-ready permits.
 ///
@@ -119,19 +114,6 @@ impl VpStage {
             Self::Fanout => "fanout",
         }
     }
-}
-
-// ---------------------------------------------------------------------------
-// Policy-name canonicalisation
-// ---------------------------------------------------------------------------
-
-/// The VP policy name for a group. Format: `cp-rbac-{group_name}`.
-///
-/// Canonical mapping shared between the Active write path (this crate) and
-/// `xtask cedar sync` — both must produce identical names so policies survive
-/// across reconciler runs.
-pub(crate) fn policy_name_for_group(group_name: &str) -> String {
-    format!("cp-rbac-{group_name}")
 }
 
 // ---------------------------------------------------------------------------
@@ -278,23 +260,6 @@ mod tests {
     #[test]
     fn vp_stage_fanout_label() {
         assert_eq!(VpStage::Fanout.as_label(), "fanout");
-    }
-
-    // -----------------------------------------------------------------------
-    // policy_name_for_group
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn policy_name_simple() {
-        assert_eq!(policy_name_for_group("admin"), "cp-rbac-admin");
-    }
-
-    #[test]
-    fn policy_name_preserves_dashes() {
-        assert_eq!(
-            policy_name_for_group("billing-readonly"),
-            "cp-rbac-billing-readonly"
-        );
     }
 
     // -----------------------------------------------------------------------

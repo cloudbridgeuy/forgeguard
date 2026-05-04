@@ -18,10 +18,10 @@
 //! - **F4** — Mid-fanout failure during UPDATE. No rollback; the caller
 //!   surfaces 503 with `{completed, failed, remaining}`.
 
-use forgeguard_authz_core::ValidatedRbacEntry;
+use forgeguard_authz_core::{policy_name_for_group, NamedPermit, ValidatedRbacEntry};
 use forgeguard_core::OrganizationId;
 
-use super::active_pure::{policy_name_for_group, CompiledPermits, NamedPermit, VpContext, VpStage};
+use super::active_pure::{CompiledPermits, VpContext, VpStage};
 use super::pure::GroupHandlerError;
 use crate::error::Error;
 use crate::metrics::{
