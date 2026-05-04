@@ -45,3 +45,18 @@ consumed by the control-plane Groups handlers before any I/O:
 
 V2 of issue #102 consumes these from the control-plane Groups handler to
 validate create and update requests before writing to DynamoDB or memory.
+
+#### Permit compilation (V4)
+
+For the saga handoff stub (`materialize_groups_to_vp` in
+`crates/control-plane`), this crate exposes:
+
+| Symbol | Purpose |
+|---|---|
+| `NamedPermit { name, statement }` | A single Cedar permit with its canonical `cp-rbac-{group}` policy name already applied. |
+| `policy_name_for_group(name)` | Canonical mapping from group name to VP policy name. Shared with `xtask cedar sync` and the V3 Active write path. |
+| `groups_to_permits(entries, namespace, tenant)` | Pure compile-many: turns a slice of `RbacEntry` into a `Vec<NamedPermit>` sorted alphabetically by group name. Stops at the first compile failure (`MaterializeCompileError`). |
+
+The V3 Active write path (`crates/control-plane/src/handlers/groups/active*.rs`)
+also imports `NamedPermit` and `policy_name_for_group` from here so all three
+codepaths produce byte-identical names and statements.

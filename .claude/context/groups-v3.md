@@ -189,3 +189,68 @@ project schema is V4. V3 is end-to-end exercised through the stub today; the
 production hot path stays Draft until V4 ships. F3'/F4 reconciliation work is
 also a V4 concern (the alert points operators at it; nothing automated runs
 yet).
+
+## V4 saga stub
+
+V4 lands the orchestration boundary the saga ticket will call once it owns
+the Draft → Active transition. It does **not** ship a saga.
+
+**Pure inner** (`forgeguard_authz_core::rbac::permits`):
+
+| Symbol | Purpose |
+|---|---|
+| `NamedPermit { name, statement }` | Single Cedar permit with its `cp-rbac-{group}` policy name. |
+| `policy_name_for_group(name)` | Canonical group → policy name mapping. Shared with V3 Active write path and `xtask cedar sync`. |
+| `MaterializeCompileError { name, reason }` | Compile-stage error variant; `name` identifies the offending group. |
+| `groups_to_permits(entries, namespace, tenant)` | Compile-many: returns `Vec<NamedPermit>` sorted alphabetically by group name. Stops at the first compile failure. |
+
+**Imperative shell** (`crates/control-plane/src/handlers/groups/saga.rs`):
+
+```rust
+pub(crate) struct MaterializeParams<'a, S, V> {
+    pub(crate) store: &'a S,
+    pub(crate) vp: &'a V,
+    pub(crate) org_id: &'a OrganizationId,
+    pub(crate) raw_org_id: &'a str,
+    pub(crate) vp_store_id: &'a str,
+    pub(crate) namespace: &'a str,
+    pub(crate) tenant: &'a TenantConfig,
+}
+
+pub(crate) async fn materialize_groups_to_vp<S, V>(
+    p: MaterializeParams<'_, S, V>,
+) -> Result<(), MaterializeError>
+where S: OrgStore, V: VpClient;
+```
+
+The function `list_groups → groups_to_permits → push_permit` per entry, in
+alphabetical order. `push_permit` is the same V3 delete-then-create
+primitive used by Active create/update so V3 and V4 produce byte-identical
+VP traffic for the same group set.
+
+**`MaterializeError` variants:**
+
+| Variant | Stage | Meaning |
+|---|---|---|
+| `ListGroupsFailed(crate::error::Error)` | pre-walk | `OrgStore::list_groups` failed |
+| `CompileFailed { compile: MaterializeCompileError }` | pure compile | One entry rejected; `compile.name` identifies it |
+| `PushFailed { name: String, source: vp_client::Error }` | VP push | Push of `cp-rbac-{group}` failed mid-walk |
+
+**What V4 deliberately omits:**
+
+- No DDB rollback on push failure (permits before the failure stay in VP).
+- No `forgeguard_cp_*` Prometheus counter for saga progress.
+- No resume state, retry policy, or partial-failure handling.
+
+Those land with the saga ticket. The shape of `MaterializeParams` and
+`MaterializeError` is the contract that ticket consumes — keep it stable.
+
+**Test coverage** (`crates/control-plane/src/handlers/tests/groups_saga.rs`):
+
+- `empty_groups_no_vp_calls` — no groups → no VP traffic, `Ok(())`.
+- `three_groups_pushed_in_alphabetical_order` — 3 entries → 6 calls (delete + create per permit), names sorted `alpha`, `member`, `zeta`.
+- `push_failure_aborts_with_first_failed_name` — `fail_on_create("cp-rbac-member")` → `Err(PushFailed { name: "cp-rbac-member", .. })`, `zeta` never appears in stub calls.
+- `second_run_against_same_stub_repeats_delete_then_create` — idempotency: re-running pushes the same delete-then-create sequence regardless of prior stub state.
+
+All four tests use `InMemoryOrgStore` + `StubVpClient` — no DynamoDB, no
+AWS, no network.

@@ -87,6 +87,34 @@ shape, and the test scaffolding are documented in
 `POST /api/v1/organizations/{org_id}/users` (issue #100) to validate that a
 group name referenced in a user membership request is an actual declared group.
 
+#### V4 — Saga handoff stub
+
+`crates/control-plane/src/handlers/groups/saga.rs` exposes
+`materialize_groups_to_vp(MaterializeParams)`: a single async function that
+walks every declared group for an org, compiles each via
+`forgeguard_authz_core::groups_to_permits`, and pushes each resulting
+`NamedPermit` into the org's VP store using the V3 `push_permit`
+delete-then-create primitive. Permits push **alphabetically by group name**
+for test reproducibility — Cedar permits are independent so order has no
+semantic effect.
+
+Failure modes (see `MaterializeError`):
+
+| Variant | Stage | When |
+|---|---|---|
+| `ListGroupsFailed(Error)` | pre-walk | `OrgStore::list_groups` failed |
+| `CompileFailed { compile }` | pure compile | `groups_to_permits` rejected an entry; `compile.name` identifies it |
+| `PushFailed { name, source }` | VP push | `push_permit` failed for `cp-rbac-{group}` |
+
+V4 deliberately ships **no rollback, no Prometheus counter, no resume
+state**: at the first push failure the function returns and earlier
+permits remain in VP. Retry semantics, observability, and partial-failure
+recovery are the responsibility of the future saga ticket that owns the
+Draft → Active transition. The stub exists now so that ticket can call
+into a stable orchestration boundary; correctness is covered by
+`handlers::tests::groups_saga` against the in-memory `OrgStore` and
+`StubVpClient`.
+
 #### Storage layout
 
 Groups share the org's DynamoDB partition (`PK=ORG#{org_id}`):
