@@ -74,36 +74,13 @@ The V3 implementation plan lives at
 #### V3: Active-org VP materialization
 
 When an org is in `OrgStatus::Active` (config carries a `vp_store_id`), the
-group write handlers materialize the compiled Cedar permit into the org's
-Verified Permissions (VP) policy store atomically with the DDB write.
-
-**`vp_client` module** (`crates/control-plane/src/vp_client/`) — three pieces:
-
-- The `VpClient` trait (`mod.rs`) — `create_policy`, `delete_policy_by_name`,
-  `list_policy_ids`. The trait centralises the `[name]` description-prefix
-  encoding shared with `cargo xtask control-plane cedar sync` (see
-  [verified-permissions.md](../../.claude/context/verified-permissions.md)).
-- `AwsVpClient` (`aws.rs`) — production impl over the AWS SDK.
-- `StubVpClient` (`stub.rs`, `cfg(any(test, feature = "test-support"))`) —
-  in-process stub with `fail_on_create(name)`, `fail_on_delete(name)`, and
-  `fail_after_n_creates(n)` knobs for failure-mode tests.
-
-**Failure modes:**
-
-| Mode | When | Status | Body shape |
-|------|------|--------|-----------|
-| **F3** | VP parent push fails after DDB write; rollback succeeds | `503` | `{"error":"vp_push_failed","stage":"parent","failed":"<policy>","completed":[],"remaining":[]}` |
-| **F3'** | Same as F3 but the DDB rollback also fails | `500` | `{"error":"inconsistent_state","ddb_committed":true,"vp_committed":false}` |
-| **F4** | Mid-fanout failure on UPDATE (parent succeeded, one dependent fails) | `503` | `{"error":"vp_push_failed","stage":"fanout","completed":[…],"failed":"<policy>","remaining":[…]}` — no rollback |
-
-**Metric:** `forgeguard_cp_group_rollback_failed_total{stage}` (Prometheus
-counter) increments on F3' (`stage="parent"`). Fanout failures (F4) do not
-rollback in V3, so the `stage="fanout"` label is currently never bumped — the
-label exists for forward compatibility.
-
-**Boundary case (Risk #5):** an org with `OrgStatus::Active` but
-`vp_store_id == None` is a saga-invariant violation. The handler surfaces the
-same `503 vp_push_failed{stage="parent"}` shape as F3.
+group write handlers materialise the compiled Cedar permit into the org's
+Verified Permissions policy store as part of the same request. The full
+pipeline (DDB write → VP parent push → alphabetical fanout), failure-mode
+taxonomy (F3 / F3' / F4 with status codes and body shapes), the
+`forgeguard_cp_group_rollback_failed_total` metric, the `vp_client` module
+shape, and the test scaffolding are documented in
+[`.claude/context/groups-v3.md`](../../.claude/context/groups-v3.md).
 
 **`is_declared_group` predicate:** exposed as
 `OrgStore::is_declared_group(org_id, name) -> Result<bool>`. Consumed by

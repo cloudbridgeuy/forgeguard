@@ -38,6 +38,7 @@ Actual agentic context documents MUST be kept under [`.claude/context/`](./.clau
 | [Request Signing](./.claude/context/request-signing.md) | Ed25519 signing: canonical payload, config, key rotation, and crate layout. |
 | [Demo App](./.claude/context/demo-app.md) | E2E demo: Python TODO app, native proxy, demo config, and running instructions. |
 | [Control Plane](./.claude/context/control-plane.md) | CP scaffold, proxy-config endpoint, OrgStore trait, auth, VP authorization, ETag, draft/configured lifecycle, and testing. |
+| [Groups V3](./.claude/context/groups-v3.md) | Active-org VP materialization: `vp_client` module, `OrgWriteContext`/`VpStage` ADTs, F3/F3'/F4 failure-mode taxonomy, rollback metric, and test scaffolding. |
 | [Optimistic Locking](./.claude/context/optimistic-locking.md) | `If-Match` / `412` semantics for organization updates, ETags, conditional GETs, and metrics. |
 | [Infra: Control Plane](./.claude/context/infra-control-plane.md) | CDK project, 1Password integration, DynamoDB Global Table, and xtask infra commands. |
 | [AWS ARN Formats](./.claude/context/aws-arn-formats.md) | Per-service ARN gotchas and the rule to prefer CDK CFN attribute getters. |
