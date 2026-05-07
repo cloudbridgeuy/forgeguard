@@ -36,7 +36,7 @@ enum ControlPlaneCommands {
     Infra(infra::InfraArgs),
     /// Lambda build and deployment
     Lambda(lambda::LambdaArgs),
-    /// Seed organizations and test users into DynamoDB and Cognito
+    /// Seed organizations as Draft into DynamoDB (user provisioning lives in #100)
     Seed(seed::SeedArgs),
     /// Run DynamoDB integration tests with automatic container management
     Test(test::TestArgs),

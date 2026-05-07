@@ -1,36 +1,38 @@
 //! Pure types for the `seed` command configuration.
 //!
 //! Parsed from `xtask/seed.toml` — defines organizations to seed into
-//! DynamoDB and Cognito users to create for testing. Also contains
+//! DynamoDB along with their RBAC group declarations. Also contains
 //! `DynamoTarget`, a pure ADT that parses the CLI flag selecting between
 //! prod and local DynamoDB.
+//!
+//! User provisioning lives in issue #100 and is not the seed's
+//! responsibility — every seeded org lands as `OrgStatus::Draft`.
 
 use serde::Deserialize;
 
 /// Top-level seed configuration.
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 pub(crate) struct SeedConfig {
     #[serde(rename = "organization")]
     organizations: Vec<SeedOrg>,
-    #[serde(rename = "user")]
-    users: Vec<SeedUser>,
 }
 
 impl SeedConfig {
     pub(crate) fn organizations(&self) -> &[SeedOrg] {
         &self.organizations
     }
-
-    pub(crate) fn users(&self) -> &[SeedUser] {
-        &self.users
-    }
 }
 
-/// An organization to seed into DynamoDB.
-#[derive(Deserialize)]
+/// An organization to seed into DynamoDB along with its RBAC groups.
+#[derive(Deserialize, Debug)]
 pub(crate) struct SeedOrg {
     org_id: String,
     name: String,
+    // Consumed by `seed::pure` (Task 3 of the V5 plan) and the group-write
+    // shell (Task 5). The transitional shim in `seed.rs` does not yet read it.
+    #[allow(dead_code)]
+    #[serde(default, rename = "group")]
+    groups: Vec<SeedGroup>,
 }
 
 impl SeedOrg {
@@ -41,62 +43,56 @@ impl SeedOrg {
     pub(crate) fn name(&self) -> &str {
         &self.name
     }
-}
 
-/// A Cognito user to create for testing.
-///
-/// Each user may belong to multiple organizations via [`SeedMembership`].
-/// `default_org` is a UI/fixture hint (the user's preferred startup org) and
-/// is not persisted to Cognito or DynamoDB. `memberships` lists all
-/// organizations the user belongs to, each with one or more group roles.
-#[derive(Deserialize)]
-pub(crate) struct SeedUser {
-    username: String,
-    email: String,
-    // Validated by serde to guard against typos in seed.toml, but never
-    // written to Cognito or DynamoDB — it is a UI startup hint only.
     #[allow(dead_code)]
-    default_org: String,
-    memberships: Vec<SeedMembership>,
-}
-
-impl SeedUser {
-    pub(crate) fn username(&self) -> &str {
-        &self.username
-    }
-
-    pub(crate) fn email(&self) -> &str {
-        &self.email
-    }
-
-    #[cfg(test)]
-    pub(crate) fn default_org(&self) -> &str {
-        &self.default_org
-    }
-
-    pub(crate) fn memberships(&self) -> &[SeedMembership] {
-        &self.memberships
-    }
-}
-
-/// A single organization membership for a user, with one or more group roles.
-///
-/// Written to DynamoDB as `PK=USER#{sub}`, `SK=ORG#{org_id}` so the proxy
-/// can resolve group roles from the `X-ForgeGuard-Org-Id` header at request
-/// time rather than embedding them in the JWT.
-#[derive(Deserialize)]
-pub(crate) struct SeedMembership {
-    org_id: String,
-    groups: Vec<String>,
-}
-
-impl SeedMembership {
-    pub(crate) fn org_id(&self) -> &str {
-        &self.org_id
-    }
-
-    pub(crate) fn groups(&self) -> &[String] {
+    pub(crate) fn groups(&self) -> &[SeedGroup] {
         &self.groups
+    }
+}
+
+/// A single RBAC role declaration for a seeded organization.
+///
+/// Mirrors `forgeguard_authz_core::RbacEntry` 1:1; a `From<&SeedGroup>`-style
+/// adapter lives in `seed::pure` and is the only way to produce an `RbacEntry`
+/// from this type.
+#[allow(dead_code)] // consumed by `seed::pure` (Task 3 of V5 plan)
+#[derive(Deserialize, Debug, Clone)]
+pub(crate) struct SeedGroup {
+    name: String,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    inherits: Vec<String>,
+    #[serde(default)]
+    allow: Vec<String>,
+    #[serde(default = "default_tenant_scoped")]
+    tenant_scoped: bool,
+}
+
+fn default_tenant_scoped() -> bool {
+    true
+}
+
+#[allow(dead_code)] // consumed by `seed::pure` (Task 3 of V5 plan)
+impl SeedGroup {
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub(crate) fn description(&self) -> Option<&str> {
+        self.description.as_deref()
+    }
+
+    pub(crate) fn inherits(&self) -> &[String] {
+        &self.inherits
+    }
+
+    pub(crate) fn allow(&self) -> &[String] {
+        &self.allow
+    }
+
+    pub(crate) fn tenant_scoped(&self) -> bool {
+        self.tenant_scoped
     }
 }
 
@@ -105,8 +101,7 @@ impl SeedMembership {
 /// `Prod` reads the table name from 1Password (`op://<vault>/dynamodb/table-name`)
 /// and hits real AWS. `Local` targets a `dynamodb-local` instance — typically
 /// the one started by `cargo xtask control-plane dev` — with an explicit table
-/// name. Cognito is untouched by this split; users are always provisioned in
-/// real Cognito regardless of which path is chosen.
+/// name.
 #[derive(Debug, Clone)]
 pub(crate) enum DynamoTarget {
     Prod,
@@ -182,66 +177,78 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_seed_config() {
+    fn parse_seed_config_with_groups() {
         let toml_str = r#"
 [[organization]]
 org_id = "org-acme"
 name = "Acme Corp"
 
+[[organization.group]]
+name = "member"
+description = "Read-only org access"
+allow = ["cp-organization-read"]
+
+[[organization.group]]
+name = "admin"
+description = "Org management"
+inherits = ["member"]
+allow = ["cp-organization-update"]
+
+[[organization.group]]
+name = "owner"
+inherits = ["admin"]
+allow = ["cp-organization-delete"]
+
 [[organization]]
 org_id = "org-globex"
 name = "Globex Corporation"
-
-[[user]]
-username = "acme-admin"
-email = "admin@acme.forgeguard.dev"
-default_org = "org-acme"
-
-[[user.memberships]]
-org_id = "org-acme"
-groups = ["admin"]
-
-[[user.memberships]]
-org_id = "org-globex"
-groups = ["member"]
-
-[[user]]
-username = "acme-member"
-email = "member@acme.forgeguard.dev"
-default_org = "org-acme"
-
-[[user.memberships]]
-org_id = "org-acme"
-groups = ["member"]
 "#;
 
         let config: SeedConfig = toml::from_str(toml_str).unwrap();
 
-        // Organizations
         assert_eq!(config.organizations().len(), 2);
-        assert_eq!(config.organizations()[0].org_id(), "org-acme");
-        assert_eq!(config.organizations()[1].name(), "Globex Corporation");
+        let acme = &config.organizations()[0];
+        assert_eq!(acme.org_id(), "org-acme");
+        assert_eq!(acme.name(), "Acme Corp");
+        assert_eq!(acme.groups().len(), 3);
 
-        // Users
-        assert_eq!(config.users().len(), 2);
+        let member = &acme.groups()[0];
+        assert_eq!(member.name(), "member");
+        assert_eq!(member.description(), Some("Read-only org access"));
+        assert!(member.inherits().is_empty());
+        assert_eq!(member.allow(), &["cp-organization-read"]);
+        assert!(member.tenant_scoped(), "tenant_scoped defaults to true");
 
-        // acme-admin: multi-org membership
-        let admin = &config.users()[0];
-        assert_eq!(admin.username(), "acme-admin");
-        assert_eq!(admin.email(), "admin@acme.forgeguard.dev");
-        assert_eq!(admin.default_org(), "org-acme");
-        assert_eq!(admin.memberships().len(), 2);
-        assert_eq!(admin.memberships()[0].org_id(), "org-acme");
-        assert_eq!(admin.memberships()[0].groups(), &["admin"]);
-        assert_eq!(admin.memberships()[1].org_id(), "org-globex");
-        assert_eq!(admin.memberships()[1].groups(), &["member"]);
+        let admin = &acme.groups()[1];
+        assert_eq!(admin.inherits(), &["member"]);
+        assert_eq!(admin.allow(), &["cp-organization-update"]);
 
-        // acme-member: single-org membership
-        let member = &config.users()[1];
-        assert_eq!(member.username(), "acme-member");
-        assert_eq!(member.default_org(), "org-acme");
-        assert_eq!(member.memberships().len(), 1);
-        assert_eq!(member.memberships()[0].org_id(), "org-acme");
-        assert_eq!(member.memberships()[0].groups(), &["member"]);
+        let owner = &acme.groups()[2];
+        assert_eq!(owner.inherits(), &["admin"]);
+        assert_eq!(owner.description(), None);
+
+        let globex = &config.organizations()[1];
+        assert_eq!(globex.org_id(), "org-globex");
+        assert!(
+            globex.groups().is_empty(),
+            "missing [[organization.group]] yields empty Vec via #[serde(default)]"
+        );
+    }
+
+    #[test]
+    fn parse_seed_config_tenant_scoped_explicit_false() {
+        let toml_str = r#"
+[[organization]]
+org_id = "org-acme"
+name = "Acme"
+
+[[organization.group]]
+name = "global"
+allow = ["x:y:z"]
+tenant_scoped = false
+"#;
+        let config: SeedConfig = toml::from_str(toml_str).unwrap();
+        let group = &config.organizations()[0].groups()[0];
+        assert!(!group.tenant_scoped());
     }
 }
