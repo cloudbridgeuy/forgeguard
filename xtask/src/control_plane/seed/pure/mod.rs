@@ -222,5 +222,43 @@ pub(crate) fn membership_pk_for_user(sub: &str) -> String {
     format!("USER#{sub}")
 }
 
+/// Decode the canonical policy name from a VP `description` field that uses
+/// the shared `[name] description` encoding produced by
+/// `forgeguard_control_plane::vp_client::encode_name_in_description`.
+///
+/// Returns `None` when the description is missing or does not start with the
+/// `[name]` prefix. Mirrored here (instead of imported) because the CP crate
+/// is an I/O crate and xtask only consumes pure leaves.
+pub(crate) fn decode_policy_name(description: Option<&str>) -> Option<String> {
+    let desc = description?;
+    let rest = desc.strip_prefix('[')?;
+    let end = rest.find(']')?;
+    let name = &rest[..end];
+    if name.is_empty() {
+        None
+    } else {
+        Some(name.to_owned())
+    }
+}
+
+/// Return `true` when `description` identifies a V0 `cp-rbac-{org}-{role}`
+/// policy that belongs to one of the orgs in `scope`.
+///
+/// Conservative: requires the description's encoded name to start with
+/// `cp-rbac-` AND the org-id segment to be in `scope`, AND a non-empty role
+/// suffix. Hand-authored policies and ambiguous names are left untouched.
+pub(crate) fn is_seeded_cp_rbac_policy(description: Option<&str>, scope: &SeededOrgScope) -> bool {
+    let Some(name) = decode_policy_name(description) else {
+        return false;
+    };
+    let Some(rest) = name.strip_prefix("cp-rbac-") else {
+        return false;
+    };
+    scope.org_ids().iter().any(|org_id| {
+        rest.strip_prefix(&format!("{org_id}-"))
+            .is_some_and(|role| !role.is_empty())
+    })
+}
+
 #[cfg(test)]
 mod tests;

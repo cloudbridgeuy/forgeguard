@@ -7,6 +7,7 @@
 
 use aws_sdk_dynamodb::config::{BehaviorVersion, Credentials, Region};
 use aws_sdk_dynamodb::types::AttributeValue;
+use chrono::{DateTime, Utc};
 use clap::Args;
 use color_eyre::eyre::{self, Context, Result};
 
@@ -17,6 +18,26 @@ use super::seed_core::{DynamoTarget, SeedConfig};
 
 #[allow(dead_code)] // consumers land in Tasks 4–6 of the V5 plan
 mod pure;
+#[allow(dead_code)] // consumed by the orchestrator in Task 6 of the V5 plan
+mod teardown;
+
+use pure::SeededOrgScope;
+
+/// Wiring carried into every imperative-shell helper. Only the fields a given
+/// helper needs are read; Task 6 will narrow this back down once the
+/// orchestrator moves into `seed/mod.rs`.
+#[allow(dead_code)] // populated by Task 6's `build_seed_context`
+pub(crate) struct SeedContext<'a> {
+    pub(crate) dynamo: &'a aws_sdk_dynamodb::Client,
+    pub(crate) cognito: &'a aws_sdk_cognitoidentityprovider::Client,
+    pub(crate) vp: &'a aws_sdk_verifiedpermissions::Client,
+    pub(crate) table_name: String,
+    pub(crate) pool_id: String,
+    pub(crate) cp_dogfood_policy_store_id: String,
+    pub(crate) config: &'a SeedConfig,
+    pub(crate) scope: SeededOrgScope,
+    pub(crate) now: DateTime<Utc>,
+}
 
 /// CLI arguments for the seed subcommand.
 #[derive(Args)]
