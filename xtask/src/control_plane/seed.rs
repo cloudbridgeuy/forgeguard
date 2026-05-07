@@ -16,7 +16,11 @@ use super::op_core::{build_vault_name, ForgeguardEnv};
 use super::schema::orgs_schema;
 use super::seed_core::{DynamoTarget, SeedConfig};
 
-#[allow(dead_code)] // consumers land in Tasks 4–6 of the V5 plan
+#[allow(dead_code)] // consumed by the orchestrator in Task 6 of the V5 plan
+mod groups;
+#[allow(dead_code)] // consumed by the orchestrator in Task 6 of the V5 plan
+mod orgs;
+#[allow(dead_code)] // consumers land in Task 6 of the V5 plan
 mod pure;
 #[allow(dead_code)] // consumed by the orchestrator in Task 6 of the V5 plan
 mod teardown;
