@@ -78,8 +78,10 @@ An org is created `Draft` (no config) and stays `Draft` until the onboarding sag
 |-------------|-------------------|--------|
 | `POST /api/v1/organizations` (no body `config`) | `Draft` | absent |
 | `POST /api/v1/organizations` (with body `config`) | `Draft` | present |
-| File loader entry without `"config"` | `Draft` | absent |
-| File loader entry with `"config"` | `Active` | present (legacy: file-seeded orgs are pre-onboarded) |
+| File loader entry (omitted `"status"`) | `Draft` | absent or present |
+| File loader entry with `"status": "active"` | `Active` | absent or present |
+
+The file loader respects the declared `status` field on `RawOrgEntry`, defaulting to `Draft` when omitted. The previous heuristic (`configured.is_some() → Active`) was dropped in V5 of issue #102 — the seed flow no longer pre-promotes orgs and a config-bearing entry no longer implies Active.
 
 `PUT /api/v1/organizations/{org_id}` with a `config` body attaches config to a Draft org but does **not** auto-promote to Active — that transition is the saga's responsibility.
 
@@ -116,7 +118,7 @@ but does not enforce it until a later slice.
 
 ## Config File Format
 
-JSON file mapping `org_id` to its org entry. Each entry has a `name` (display name); the nested `config` object (`OrgConfig`) is **optional** — entries without `config` seed as Draft orgs:
+JSON file mapping `org_id` to its org entry. Each entry has a `name` (display name); the nested `config` object (`OrgConfig`) and the `status` field are both **optional**. Status defaults to `"draft"`; entries that need to start `Active` must declare `"status": "active"` explicitly:
 
 ```json
 {
@@ -126,6 +128,7 @@ JSON file mapping `org_id` to its org entry. Each entry has a `name` (display na
     },
     "org-acme": {
       "name": "Acme Corp",
+      "status": "active",
       "config": {
         "version": "2026-04-07",
         "project_id": "todo-demo",
@@ -146,7 +149,7 @@ JSON file mapping `org_id` to its org entry. Each entry has a `name` (display na
 
 **Validation at load time (Parse Don't Validate):**
 - `OrganizationId` validated via `forgeguard_core::OrganizationId::new()`
-- Entries with `config` parse into `Organization` with `OrgStatus::Active`; entries without `config` parse with `OrgStatus::Draft`
+- `OrgStatus` parsed from the entry's `status` field; defaults to `Draft` when the field is omitted (V5 of #102 dropped the V0 `configured.is_some() → Active` heuristic)
 - ETag precomputed as xxHash64 of canonical JSON (deterministic, uses `BTreeMap` for `features`)
 - Unknown fields are ignored by serde for forward compatibility
 

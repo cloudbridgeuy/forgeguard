@@ -328,7 +328,7 @@ JSON file mapping `org_id` to its organization entry. Each entry has a `name` (d
 }
 ```
 
-At load time, each org entry is parsed into an `Organization` domain entity (from `forgeguard_core`) with `OrgStatus::Active` status, paired with the `OrgConfig`. The `Organization` entity tracks lifecycle state (8-variant `OrgStatus` enum) and timestamps.
+At load time, each org entry is parsed into an `Organization` domain entity (from `forgeguard_core`), paired with the optional `OrgConfig`. The entry's `status` field selects the lifecycle state (defaults to `OrgStatus::Draft` when omitted); the V0 `configured.is_some() → Active` heuristic was dropped in V5 of issue #102 — entries that need to start `Active` must declare `"status": "active"` explicitly. The `Organization` entity tracks lifecycle state (8-variant `OrgStatus` enum) and timestamps.
 
 Unknown fields in the config are ignored by serde, so older config files with extra fields will still parse.
 
@@ -399,7 +399,7 @@ control plane's `IdentityChain` whenever both `--jwks-url` and
 
 ## Domain Model
 
-The control plane uses the `Organization` entity from `forgeguard_core` to represent each org. File-loaded orgs are created with `OrgStatus::Active`. The `OrgStore` trait is object-safe via `#[async_trait]`; the runtime carries an `Arc<dyn OrgStore>` and handlers extract it through Axum state:
+The control plane uses the `Organization` entity from `forgeguard_core` to represent each org. File-loaded orgs default to `OrgStatus::Draft`; entries can declare `"status": "active"` to start Active (V5 of issue #102 dropped the V0 `configured.is_some() → Active` heuristic). The `OrgStore` trait is object-safe via `#[async_trait]`; the runtime carries an `Arc<dyn OrgStore>` and handlers extract it through Axum state:
 
 | Type | Location | Purpose |
 |------|----------|---------|
