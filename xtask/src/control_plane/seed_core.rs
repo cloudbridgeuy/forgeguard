@@ -28,9 +28,6 @@ impl SeedConfig {
 pub(crate) struct SeedOrg {
     org_id: String,
     name: String,
-    // Consumed by `seed::pure` (Task 3 of the V5 plan) and the group-write
-    // shell (Task 5). The transitional shim in `seed.rs` does not yet read it.
-    #[allow(dead_code)]
     #[serde(default, rename = "group")]
     groups: Vec<SeedGroup>,
 }
@@ -44,7 +41,6 @@ impl SeedOrg {
         &self.name
     }
 
-    #[allow(dead_code)]
     pub(crate) fn groups(&self) -> &[SeedGroup] {
         &self.groups
     }
@@ -55,7 +51,6 @@ impl SeedOrg {
 /// Mirrors `forgeguard_authz_core::RbacEntry` 1:1; a `From<&SeedGroup>`-style
 /// adapter lives in `seed::pure` and is the only way to produce an `RbacEntry`
 /// from this type.
-#[allow(dead_code)] // consumed by `seed::pure` (Task 3 of V5 plan)
 #[derive(Deserialize, Debug, Clone)]
 pub(crate) struct SeedGroup {
     name: String,
@@ -73,7 +68,6 @@ fn default_tenant_scoped() -> bool {
     true
 }
 
-#[allow(dead_code)] // consumed by `seed::pure` (Task 3 of V5 plan)
 impl SeedGroup {
     pub(crate) fn name(&self) -> &str {
         &self.name
