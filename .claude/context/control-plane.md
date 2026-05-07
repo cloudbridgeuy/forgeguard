@@ -21,14 +21,13 @@ File (orgs.json)               Control Plane (Axum)           BYOC Proxy
 
 ## OrgStore Trait
 
-The store is trait-based with async methods and generic handlers (no `dyn` dispatch):
+The store is trait-based with `#[async_trait]` async methods, which makes the trait object-safe so the runtime can carry `Arc<dyn OrgStore>` without enum dispatch:
 
 ```rust
+#[async_trait]
 pub(crate) trait OrgStore: Send + Sync {
-    fn get(
-        &self,
-        org_id: &OrganizationId,
-    ) -> impl std::future::Future<Output = Result<Option<OrgRecord>>> + Send;
+    async fn get(&self, org_id: &OrganizationId) -> Result<Option<OrgRecord>>;
+    // ... 15 more methods
 }
 ```
 
@@ -37,9 +36,25 @@ pub(crate) trait OrgStore: Send + Sync {
 | `InMemoryOrgStore` | In-memory HashMap behind `tokio::sync::RwLock` | File-backed dev mode, tests |
 | `DynamoOrgStore` | DynamoDB-backed | Production SaaS |
 
-Runtime dispatch uses `AnyOrgStore`, a dispatch enum (`Memory` / `DynamoDb`) that implements `OrgStore` via static dispatch (the trait uses `impl Future` returns, making it not object-safe).
+`app.rs` builds a single `Arc<dyn OrgStore>` at startup (memory or DynamoDB based on `--store`) and stores it on `AppState<V>`. There is no enum or wrapper — backend selection happens once at construction; every consumer downstream sees the same trait object.
 
-Handlers are generic over `S: OrgStore` and take `State<Arc<S>>`. This avoids `dyn` dispatch while still allowing backend substitution.
+### Handler state extraction
+
+Handlers come in two shapes:
+
+- **No VP needed** (org/key endpoints): take `State<Arc<dyn OrgStore>>` directly. `AppState<V>` exposes the store via a `FromRef<AppState<V>> for Arc<dyn OrgStore>` impl, so Axum derives the sub-state automatically.
+- **VP needed** (group write handlers under `/groups`): take `State<AppState<V>>` and reach `state.store` / `state.vp`. Only this group of handlers carries the `<V: VpClient>` parameter.
+
+The rule when adding a new handler: never introduce `<S: OrgStore>` on a handler signature. If you find yourself wanting it, take `Arc<dyn OrgStore>` instead — it is the same dispatch under the hood with one fewer monomorphization. Per-handler generics over `S: OrgStore` are a removed pattern; do not reintroduce them.
+
+### Test fixtures
+
+Tests live under `handlers::tests::test_support` and `handlers::tests::active_support`:
+
+- `empty_store() -> Arc<dyn OrgStore>` — default helper. Use when the test only needs trait methods.
+- `empty_in_memory_store() -> Arc<InMemoryOrgStore>` — escape hatch when a test needs `InMemoryOrgStore::seed_membership(...)` (a `#[cfg(test)]` inherent method that is intentionally not on the trait). Tests that use this typically shadow with `let store_dyn: Arc<dyn OrgStore> = Arc::clone(&store) as _;` for the request layer.
+- `FailingStore` — non-generic delegating wrapper over `Arc<dyn OrgStore>` that one-shot fails `delete_group` or `put_group` to drive F3' rollback paths. Adding methods to `OrgStore` requires updating `FailingStore` in lock-step.
+- `test_app_for_store(store: Arc<dyn OrgStore>, vp: Arc<StubVpClient>)` — minimal router (group routes only) for the V3 Active-org failure-mode tests.
 
 ### OrgRecord
 
@@ -289,7 +304,7 @@ crates/control-plane/src/
   main.rs             -- binary entry point: CLI parsing, delegates to app:: (shell)
   cli.rs              -- clap CLI: --store, --config, --dynamodb-table, --listen, --log-level, --jwks-url, --issuer, --audience
   config.rs           -- OrgConfig (versioned), RouteEntry, PublicRouteEntry (serde DTOs)
-  store.rs            -- OrgStore trait (async), InMemoryOrgStore, AnyOrgStore, OrgRecord, ConfiguredConfig, build/load/etag
+  store.rs            -- OrgStore trait (object-safe via #[async_trait]), InMemoryOrgStore, OrgRecord, ConfiguredConfig, build/load/etag
   dynamo_store/       -- DynamoOrgStore (DynamoDB-backed OrgStore implementation)
   handlers/
     mod.rs            -- health, CRUD, proxy_config handlers
