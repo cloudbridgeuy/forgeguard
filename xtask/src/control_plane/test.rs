@@ -10,27 +10,27 @@ use super::dynamo_local::{
 pub(crate) struct TestArgs {}
 
 /// Run the DynamoDB integration tests with the endpoint set.
+///
+/// Two test suites share the running container: the control-plane handler
+/// tests and the xtask seed-shell tests, both gated behind their own
+/// `dynamodb-tests` feature.
 fn run_tests(port: u16) -> Result<()> {
     let endpoint = format!("http://127.0.0.1:{port}");
     println!("Running DynamoDB integration tests (endpoint: {endpoint})...");
 
-    let output = duct::cmd(
-        "cargo",
-        [
-            "test",
-            "-p",
-            "forgeguard_control_plane",
-            "--features",
-            "dynamodb-tests",
-        ],
-    )
-    .env("DYNAMODB_ENDPOINT", &endpoint)
-    .unchecked()
-    .run()
-    .context("failed to run cargo test")?;
+    for package in ["forgeguard_control_plane", "xtask"] {
+        let output = duct::cmd(
+            "cargo",
+            ["test", "-p", package, "--features", "dynamodb-tests"],
+        )
+        .env("DYNAMODB_ENDPOINT", &endpoint)
+        .unchecked()
+        .run()
+        .with_context(|| format!("failed to run cargo test for {package}"))?;
 
-    if !output.status.success() {
-        color_eyre::eyre::bail!("DynamoDB integration tests failed");
+        if !output.status.success() {
+            color_eyre::eyre::bail!("DynamoDB integration tests failed for {package}");
+        }
     }
     Ok(())
 }

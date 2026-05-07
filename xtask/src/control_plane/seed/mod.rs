@@ -19,6 +19,9 @@ mod orgs;
 mod pure;
 mod teardown;
 
+#[cfg(all(test, feature = "dynamodb-tests"))]
+mod integration_tests;
+
 use aws_sdk_dynamodb::config::{BehaviorVersion, Credentials, Region};
 use chrono::{DateTime, Utc};
 use clap::Args;
@@ -222,4 +225,103 @@ fn build_local_dynamo_client(endpoint: &str) -> aws_sdk_dynamodb::Client {
         .build();
 
     aws_sdk_dynamodb::Client::from_conf(dynamo_config)
+}
+
+/// Verify the committed `xtask/seed.toml` parses as the V5-shape `SeedConfig`
+/// and that every declared role passes name/inherit/cycle validation. The
+/// orchestrator's pre-flight uses the same pure helper, so a green test here
+/// proves a real `cargo xtask control-plane seed` run will not fail validation
+/// on `xtask/seed.toml`.
+///
+/// Negative cases (dangling inherit, cycle, invalid name) are covered by the
+/// pure unit tests in `seed/pure/tests.rs`. Because `write_groups` runs the
+/// same `validate_seed_groups` up-front before any `PutItem`, those cover the
+/// V5 acceptance criterion ("dangling inherit aborts the seed before any DDB
+/// write happens") without needing `dynamodb-local`.
+#[cfg(test)]
+mod seed_toml_v5_shape_tests {
+    #![allow(clippy::unwrap_used)]
+    use std::fs;
+
+    use crate::control_plane::seed_core::SeedConfig;
+
+    use super::pure::{seed_groups_to_rbac_entries, validate_seed_groups};
+
+    fn load_seed_config() -> SeedConfig {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("seed.toml");
+        let raw = fs::read_to_string(path).unwrap();
+        toml::from_str(&raw).unwrap()
+    }
+
+    #[test]
+    fn seed_toml_parses_into_v5_shape() {
+        let config = load_seed_config();
+        let orgs = config.organizations();
+        assert_eq!(orgs.len(), 2, "expected exactly two seeded orgs");
+
+        let names: Vec<&str> = orgs.iter().map(|o| o.org_id()).collect();
+        assert_eq!(names, ["org-acme", "org-globex"]);
+
+        for org in orgs {
+            let group_names: Vec<&str> = org.groups().iter().map(|g| g.name()).collect();
+            assert_eq!(
+                group_names,
+                ["member", "admin", "owner"],
+                "org '{}' must declare member/admin/owner",
+                org.org_id()
+            );
+
+            let member = org.groups().iter().find(|g| g.name() == "member").unwrap();
+            assert!(member.inherits().is_empty());
+            assert_eq!(
+                member.allow(),
+                &["cp-organization-read", "cp-key-read", "cp-config-read"],
+                "member allow list must match forgeguard.toml for org '{}'",
+                org.org_id()
+            );
+
+            let admin = org.groups().iter().find(|g| g.name() == "admin").unwrap();
+            assert_eq!(admin.inherits(), &["member"]);
+            assert_eq!(
+                admin.allow(),
+                &[
+                    "cp-organization-create",
+                    "cp-organization-update",
+                    "cp-member-invite",
+                    "cp-member-remove",
+                    "cp-member-change-role",
+                    "cp-config-write",
+                    "cp-key-generate",
+                    "cp-key-revoke",
+                    "cp-key-rotate",
+                ],
+                "admin allow list must match forgeguard.toml for org '{}'",
+                org.org_id()
+            );
+
+            let owner = org.groups().iter().find(|g| g.name() == "owner").unwrap();
+            assert_eq!(owner.inherits(), &["admin"]);
+            assert_eq!(
+                owner.allow(),
+                &["cp-organization-delete", "cp-member-promote-owner"],
+                "owner allow list must match forgeguard.toml for org '{}'",
+                org.org_id()
+            );
+        }
+    }
+
+    #[test]
+    fn seed_toml_groups_validate() {
+        let config = load_seed_config();
+        for org in config.organizations() {
+            let entries = seed_groups_to_rbac_entries(org.groups());
+            let result = validate_seed_groups(&entries);
+            assert!(
+                result.is_ok(),
+                "seed.toml groups for '{}' failed validation: {:?}",
+                org.org_id(),
+                result.unwrap_err()
+            );
+        }
+    }
 }

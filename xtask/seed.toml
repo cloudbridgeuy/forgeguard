@@ -1,56 +1,56 @@
+# Seed configuration for `cargo xtask control-plane seed`.
+# All seeded orgs are created as Draft. No users are created here —
+# user provisioning has moved to issue #100 (per-org Cognito pools
+# land via the saga ticket, separate from #102).
+
 [[organization]]
 org_id = "org-acme"
 name = "Acme Corp"
+
+[[organization.group]]
+name = "member"
+description = "Read-only org access"
+allow = ["cp-organization-read", "cp-key-read", "cp-config-read"]
+
+[[organization.group]]
+name = "admin"
+description = "Org management without deletion or owner promotion"
+inherits = ["member"]
+allow = [
+  "cp-organization-create", "cp-organization-update",
+  "cp-member-invite", "cp-member-remove", "cp-member-change-role",
+  "cp-config-write",
+  "cp-key-generate", "cp-key-revoke", "cp-key-rotate",
+]
+
+[[organization.group]]
+name = "owner"
+description = "Full org access including deletion and owner promotion"
+inherits = ["admin"]
+allow = ["cp-organization-delete", "cp-member-promote-owner"]
 
 [[organization]]
 org_id = "org-globex"
 name = "Globex Corporation"
 
-[[user]]
-username = "acme-admin"
-email = "admin@acme.forgeguard.dev"
-default_org = "org-acme"
+[[organization.group]]
+name = "member"
+description = "Read-only org access"
+allow = ["cp-organization-read", "cp-key-read", "cp-config-read"]
 
-[[user.memberships]]
-org_id = "org-acme"
-groups = ["admin"]
+[[organization.group]]
+name = "admin"
+description = "Org management without deletion or owner promotion"
+inherits = ["member"]
+allow = [
+  "cp-organization-create", "cp-organization-update",
+  "cp-member-invite", "cp-member-remove", "cp-member-change-role",
+  "cp-config-write",
+  "cp-key-generate", "cp-key-revoke", "cp-key-rotate",
+]
 
-[[user.memberships]]
-org_id = "org-globex"
-groups = ["member"]
-
-[[user]]
-username = "acme-member"
-email = "member@acme.forgeguard.dev"
-default_org = "org-acme"
-
-[[user.memberships]]
-org_id = "org-acme"
-groups = ["member"]
-
-[[user]]
-username = "acme-owner"
-email = "owner@acme.forgeguard.dev"
-default_org = "org-acme"
-
-[[user.memberships]]
-org_id = "org-acme"
-groups = ["owner"]
-
-[[user]]
-username = "globex-admin"
-email = "admin@globex.forgeguard.dev"
-default_org = "org-globex"
-
-[[user.memberships]]
-org_id = "org-globex"
-groups = ["admin"]
-
-[[user]]
-username = "globex-member"
-email = "member@globex.forgeguard.dev"
-default_org = "org-globex"
-
-[[user.memberships]]
-org_id = "org-globex"
-groups = ["member"]
+[[organization.group]]
+name = "owner"
+description = "Full org access including deletion and owner promotion"
+inherits = ["admin"]
+allow = ["cp-organization-delete", "cp-member-promote-owner"]

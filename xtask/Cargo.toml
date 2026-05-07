@@ -44,3 +44,10 @@ zip = { workspace = true }
 
 [dev-dependencies]
 forgeguard_authn_core = { workspace = true }
+
+[features]
+# Enables `cargo test -p xtask --features dynamodb-tests`, which spins up the
+# seed-shell integration cases against a `dynamodb-local` instance. Driven by
+# `cargo xtask control-plane test`; needs `DYNAMODB_ENDPOINT` set to the local
+# endpoint (or defaults to `http://localhost:8000`).
+dynamodb-tests = []
