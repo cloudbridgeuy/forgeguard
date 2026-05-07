@@ -123,6 +123,7 @@ async fn create_on_active_org_without_vp_store_id_returns_503() {
         "organizations": {
             "org-active-no-vp": {
                 "name": "Misconfigured Active",
+                "status": "active",
                 "config": {
                     "version": "2026-04-07",
                     "project_id": "test-app",

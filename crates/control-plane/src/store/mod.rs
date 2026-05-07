@@ -492,6 +492,12 @@ struct RawOrgEntry {
     name: String,
     #[serde(default)]
     config: Option<OrgConfig>,
+    #[serde(default = "default_raw_status")]
+    status: OrgStatus,
+}
+
+fn default_raw_status() -> OrgStatus {
+    OrgStatus::Draft
 }
 
 fn generate_key_id() -> String {
@@ -545,14 +551,8 @@ pub(crate) fn build_org_store(json_str: &str) -> Result<InMemoryOrgStore> {
         let org_id = OrganizationId::new(&raw_id)
             .map_err(|e| Error::Config(format!("invalid organization id {raw_id:?}: {e}")))?;
 
-        // Seeded orgs are Active when configured, Draft when not — matches
-        // the semantic of "this org needs onboarding to receive traffic".
         let configured = raw_entry.config.map(ConfiguredConfig::compute);
-        let status = if configured.is_some() {
-            OrgStatus::Active
-        } else {
-            OrgStatus::Draft
-        };
+        let status = raw_entry.status;
 
         let org = Organization::new(org_id.clone(), raw_entry.name, status, now);
         let record = OrgRecord::new(org, configured);

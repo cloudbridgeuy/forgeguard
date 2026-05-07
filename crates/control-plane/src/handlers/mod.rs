@@ -531,6 +531,7 @@ pub(super) mod test_support {
             "organizations": {
                 "org-acme": {
                     "name": "Acme Corp",
+                    "status": "active",
                     "config": {
                         "version": "2026-04-07",
                         "project_id": "todo-app",

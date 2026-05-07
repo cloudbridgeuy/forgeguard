@@ -57,6 +57,7 @@ pub(super) fn active_org_store(org_id: &str, vp_store_id: &str) -> Arc<dyn OrgSt
             "organizations": {{
                 "{org_id}": {{
                     "name": "Active Org",
+                    "status": "active",
                     "config": {{
                         "version": "2026-04-07",
                         "project_id": "test-app",

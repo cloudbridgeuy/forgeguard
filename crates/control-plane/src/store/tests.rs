@@ -8,6 +8,7 @@ fn sample_json() -> &'static str {
             "organizations": {
                 "org-acme": {
                     "name": "Acme Corp",
+                    "status": "active",
                     "config": {
                         "version": "2026-04-07",
                         "project_id": "todo-app",
@@ -76,6 +77,7 @@ async fn build_org_store_multiple_orgs() {
             "organizations": {
                 "org-alpha": {
                     "name": "Alpha Inc",
+                    "status": "active",
                     "config": {
                         "version": "2026-04-07",
                         "project_id": "proj-a",
@@ -85,6 +87,7 @@ async fn build_org_store_multiple_orgs() {
                 },
                 "org-beta": {
                     "name": "Beta LLC",
+                    "status": "active",
                     "config": {
                         "version": "2026-04-07",
                         "project_id": "proj-b",
@@ -109,6 +112,8 @@ async fn build_org_store_multiple_orgs() {
         beta_record.config().unwrap().default_policy(),
         forgeguard_core::DefaultPolicy::Passthrough
     );
+    assert_eq!(alpha_record.org().status(), OrgStatus::Active);
+    assert_eq!(beta_record.org().status(), OrgStatus::Active);
 }
 
 #[test]
@@ -143,7 +148,8 @@ async fn build_org_store_ignores_unknown_fields() {
         }"#;
     let store = build_org_store(json).unwrap();
     let org_id = OrganizationId::new("org-acme").unwrap();
-    assert!(store.get(&org_id).await.unwrap().is_some());
+    let record = store.get(&org_id).await.unwrap().unwrap();
+    assert_eq!(record.org().status(), OrgStatus::Draft);
 }
 
 #[test]
@@ -275,6 +281,79 @@ async fn build_org_store_draft_entry_without_config() {
     let org_id = OrganizationId::new("org-seeded-draft").unwrap();
     let record = store.get(&org_id).await.unwrap().unwrap();
     assert!(record.config().is_none());
+    assert_eq!(record.org().status(), OrgStatus::Draft);
+}
+
+#[tokio::test]
+async fn build_org_store_status_omitted_with_config_defaults_to_draft() {
+    // Loader heuristic dropped in V5: config presence no longer implies Active.
+    let json = r#"{
+            "organizations": {
+                "org-no-status": {
+                    "name": "No Status",
+                    "config": {
+                        "version": "2026-04-07",
+                        "project_id": "p",
+                        "upstream_url": "https://example.com",
+                        "default_policy": "deny"
+                    }
+                }
+            }
+        }"#;
+    let store = build_org_store(json).unwrap();
+    let org_id = OrganizationId::new("org-no-status").unwrap();
+    let record = store.get(&org_id).await.unwrap().unwrap();
+    assert!(record.config().is_some(), "config is populated");
+    assert_eq!(
+        record.org().status(),
+        OrgStatus::Draft,
+        "status defaults to Draft when omitted, even with config"
+    );
+}
+
+#[tokio::test]
+async fn build_org_store_status_active_explicit() {
+    let json = r#"{
+            "organizations": {
+                "org-active": {
+                    "name": "Active",
+                    "status": "active",
+                    "config": {
+                        "version": "2026-04-07",
+                        "project_id": "p",
+                        "upstream_url": "https://example.com",
+                        "default_policy": "deny"
+                    }
+                }
+            }
+        }"#;
+    let store = build_org_store(json).unwrap();
+    let org_id = OrganizationId::new("org-active").unwrap();
+    let record = store.get(&org_id).await.unwrap().unwrap();
+    assert_eq!(record.org().status(), OrgStatus::Active);
+}
+
+#[tokio::test]
+async fn build_org_store_status_draft_explicit_with_config() {
+    // The heuristic is gone — declared status is the only source of truth.
+    let json = r#"{
+            "organizations": {
+                "org-draft-with-cfg": {
+                    "name": "Draft With Config",
+                    "status": "draft",
+                    "config": {
+                        "version": "2026-04-07",
+                        "project_id": "p",
+                        "upstream_url": "https://example.com",
+                        "default_policy": "deny"
+                    }
+                }
+            }
+        }"#;
+    let store = build_org_store(json).unwrap();
+    let org_id = OrganizationId::new("org-draft-with-cfg").unwrap();
+    let record = store.get(&org_id).await.unwrap().unwrap();
+    assert!(record.config().is_some());
     assert_eq!(record.org().status(), OrgStatus::Draft);
 }
 
