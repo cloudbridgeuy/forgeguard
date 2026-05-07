@@ -15,6 +15,9 @@ use super::op_core::{build_vault_name, ForgeguardEnv};
 use super::schema::orgs_schema;
 use super::seed_core::{DynamoTarget, SeedConfig};
 
+#[allow(dead_code)] // consumers land in Tasks 4–6 of the V5 plan
+mod pure;
+
 /// CLI arguments for the seed subcommand.
 #[derive(Args)]
 pub(crate) struct SeedArgs {

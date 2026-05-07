@@ -7,7 +7,7 @@ use std::fmt::Write as _;
 /// [`map_resolve_err`](crate::rbac::validation) uses this constant as the
 /// single source of truth so error classification cannot silently drift if the
 /// wording changes.
-pub(crate) const CYCLE_PREFIX: &str = "cycle detected";
+pub const CYCLE_PREFIX: &str = "cycle detected";
 
 fn default_true() -> bool {
     true
