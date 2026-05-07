@@ -11,7 +11,7 @@ use tower::ServiceExt;
 use super::active_support::{active_org_store, create_group, metric_lock};
 use crate::handlers::test_support::{empty_store, test_app_with_stub, TEST_API_KEY};
 use crate::metrics::GROUP_ROLLBACK_FAILED_TOTAL;
-use crate::store::{build_org_store, InMemoryOrgStore};
+use crate::store::build_org_store;
 use crate::vp_client::stub::{happy_stub, StubVpClient};
 use crate::vp_client::VpClient;
 
@@ -135,7 +135,7 @@ async fn create_on_active_org_without_vp_store_id_returns_503() {
             }
         }
     }"#;
-    let store: Arc<InMemoryOrgStore> = Arc::new(build_org_store(json).unwrap());
+    let store: Arc<dyn crate::store::OrgStore> = Arc::new(build_org_store(json).unwrap());
 
     let app = test_app_with_stub(Arc::clone(&store), happy_stub());
     let resp = app

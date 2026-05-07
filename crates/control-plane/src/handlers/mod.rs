@@ -17,21 +17,16 @@ use crate::store::{OrgRecord, OrgStore};
 
 /// Shared router state for the control-plane Axum app.
 ///
-/// Carries the [`OrgStore`] and the [`VpClient`] used by the V3 Active
-/// write path. Non-group handlers extract `State<Arc<S>>` via the `FromRef`
-/// impl below; group handlers extract the full [`AppState<S, V>`] (axum
-/// auto-derives `FromRef<T> for T` whenever `T: Clone`).
-///
-/// We deliberately do NOT add a `FromRef<AppState<S, V>> for Arc<V>` impl
-/// because the compiler can't disambiguate it from the `Arc<S>` impl when
-/// `S == V`, which yields E0119. Group handlers reach `vp` through the
-/// `AppState` extraction.
-pub(crate) struct AppState<S, V> {
-    pub(crate) store: Arc<S>,
+/// Carries the object-safe [`OrgStore`] handle and the [`VpClient`] used by
+/// the V3 Active write path. Non-group handlers extract
+/// `State<Arc<dyn OrgStore>>` via the `FromRef` impl below; group handlers
+/// extract the full [`AppState<V>`].
+pub(crate) struct AppState<V> {
+    pub(crate) store: Arc<dyn OrgStore>,
     pub(crate) vp: Arc<V>,
 }
 
-impl<S, V> Clone for AppState<S, V> {
+impl<V> Clone for AppState<V> {
     fn clone(&self) -> Self {
         Self {
             store: Arc::clone(&self.store),
@@ -40,8 +35,8 @@ impl<S, V> Clone for AppState<S, V> {
     }
 }
 
-impl<S, V> FromRef<AppState<S, V>> for Arc<S> {
-    fn from_ref(input: &AppState<S, V>) -> Arc<S> {
+impl<V> FromRef<AppState<V>> for Arc<dyn OrgStore> {
+    fn from_ref(input: &AppState<V>) -> Arc<dyn OrgStore> {
         Arc::clone(&input.store)
     }
 }
@@ -108,8 +103,8 @@ pub(crate) async fn metrics_handler() -> Response {
         .into_response()
 }
 
-pub(crate) async fn create_handler<S: OrgStore>(
-    State(store): State<Arc<S>>,
+pub(crate) async fn create_handler(
+    State(store): State<Arc<dyn OrgStore>>,
     Json(body): Json<CreateOrgRequest>,
 ) -> Response {
     let Ok(org_id) = OrganizationId::new(&body.org_id) else {
@@ -156,9 +151,9 @@ pub(crate) async fn create_handler<S: OrgStore>(
     skip_all,
     fields(org_id = %raw_org_id, if_none_match_hit = tracing::field::Empty),
 )]
-pub(crate) async fn get_handler<S: OrgStore>(
+pub(crate) async fn get_handler(
     Path(raw_org_id): Path<String>,
-    State(store): State<Arc<S>>,
+    State(store): State<Arc<dyn OrgStore>>,
     headers: HeaderMap,
 ) -> Response {
     let Ok(org_id) = OrganizationId::new(&raw_org_id) else {
@@ -200,9 +195,9 @@ pub(crate) async fn get_handler<S: OrgStore>(
     }
 }
 
-pub(crate) async fn list_handler<S: OrgStore>(
+pub(crate) async fn list_handler(
     Query(params): Query<ListParams>,
-    State(store): State<Arc<S>>,
+    State(store): State<Arc<dyn OrgStore>>,
 ) -> Response {
     let offset = params.offset.unwrap_or(0);
     let limit = params.limit.unwrap_or(20).min(100);
@@ -224,10 +219,10 @@ pub(crate) async fn list_handler<S: OrgStore>(
     skip_all,
     fields(org_id = %raw_org_id, if_none_match_hit = tracing::field::Empty),
 )]
-pub(crate) async fn proxy_config_handler<S: OrgStore>(
+pub(crate) async fn proxy_config_handler(
     ForgeGuardIdentity(_identity): ForgeGuardIdentity,
     Path(raw_org_id): Path<String>,
-    State(store): State<Arc<S>>,
+    State(store): State<Arc<dyn OrgStore>>,
     headers: HeaderMap,
 ) -> Response {
     // Validate org_id format
@@ -309,9 +304,9 @@ pub(crate) struct UpdateOrgRequest {
     skip_all,
     fields(org_id = %raw_org_id, precondition_reason = tracing::field::Empty)
 )]
-pub(crate) async fn update_handler<S: OrgStore>(
+pub(crate) async fn update_handler(
     Path(raw_org_id): Path<String>,
-    State(store): State<Arc<S>>,
+    State(store): State<Arc<dyn OrgStore>>,
     headers: HeaderMap,
     Json(body): Json<UpdateOrgRequest>,
 ) -> Response {
@@ -446,9 +441,9 @@ pub(crate) async fn update_handler<S: OrgStore>(
     }
 }
 
-pub(crate) async fn delete_handler<S: OrgStore>(
+pub(crate) async fn delete_handler(
     Path(raw_org_id): Path<String>,
-    State(store): State<Arc<S>>,
+    State(store): State<Arc<dyn OrgStore>>,
 ) -> Response {
     let Ok(org_id) = OrganizationId::new(&raw_org_id) else {
         return StatusCode::NO_CONTENT.into_response();
@@ -515,9 +510,9 @@ pub(super) mod test_support {
     /// Mounted only by `test_app` at `GET /test/declared-group/{org_id}/{name}`.
     /// This route is **never** compiled into production binaries — it is gated
     /// by `#[cfg(test)]` and only wired inside `test_app`.
-    pub(crate) async fn declared_group_handler<S: OrgStore>(
+    pub(crate) async fn declared_group_handler(
         Path((org_id, name)): Path<(String, String)>,
-        State(store): State<Arc<S>>,
+        State(store): State<Arc<dyn OrgStore>>,
     ) -> Response {
         let Ok(o) = OrganizationId::new(&org_id) else {
             return StatusCode::NOT_FOUND.into_response();
@@ -531,7 +526,7 @@ pub(super) mod test_support {
 
     pub const TEST_API_KEY: &str = "test-key";
 
-    pub fn build_test_store() -> Arc<InMemoryOrgStore> {
+    pub fn build_test_store() -> Arc<dyn OrgStore> {
         let json = r#"{
             "organizations": {
                 "org-acme": {
@@ -551,11 +546,11 @@ pub(super) mod test_support {
         Arc::new(build_org_store(json).unwrap())
     }
 
-    pub fn test_app(store: Arc<InMemoryOrgStore>) -> Router {
+    pub fn test_app(store: Arc<dyn OrgStore>) -> Router {
         test_app_with_stub(store, happy_stub())
     }
 
-    pub fn test_app_with_stub(store: Arc<InMemoryOrgStore>, vp: Arc<StubVpClient>) -> Router {
+    pub fn test_app_with_stub(store: Arc<dyn OrgStore>, vp: Arc<StubVpClient>) -> Router {
         let route_matcher = RouteMatcher::new(&[]).unwrap();
         let public_routes = vec![
             PublicRoute::new(
@@ -600,44 +595,41 @@ pub(super) mod test_support {
         Router::new()
             .route(
                 "/api/v1/organizations",
-                axum::routing::post(super::create_handler::<InMemoryOrgStore>)
-                    .get(super::list_handler::<InMemoryOrgStore>),
+                axum::routing::post(super::create_handler).get(super::list_handler),
             )
             .route(
                 "/api/v1/organizations/{org_id}",
-                axum::routing::get(super::get_handler::<InMemoryOrgStore>)
-                    .put(super::update_handler::<InMemoryOrgStore>)
-                    .delete(super::delete_handler::<InMemoryOrgStore>),
+                axum::routing::get(super::get_handler)
+                    .put(super::update_handler)
+                    .delete(super::delete_handler),
             )
             .route(
                 "/api/v1/organizations/{org_id}/proxy-config",
-                axum::routing::get(super::proxy_config_handler::<InMemoryOrgStore>),
+                axum::routing::get(super::proxy_config_handler),
             )
             .route(
                 "/api/v1/organizations/{org_id}/keys",
-                axum::routing::post(super::keys::generate_key_handler::<InMemoryOrgStore>)
-                    .get(super::keys::list_keys_handler::<InMemoryOrgStore>),
+                axum::routing::post(super::keys::generate_key_handler)
+                    .get(super::keys::list_keys_handler),
             )
             .route(
                 "/api/v1/organizations/{org_id}/keys/{key_id}",
-                axum::routing::delete(super::keys::revoke_key_handler::<InMemoryOrgStore>),
+                axum::routing::delete(super::keys::revoke_key_handler),
             )
             .route(
                 "/api/v1/organizations/{org_id}/keys/{key_id}/rotate",
-                axum::routing::post(super::keys::rotate_key_handler::<InMemoryOrgStore>),
+                axum::routing::post(super::keys::rotate_key_handler),
             )
             .route(
                 "/api/v1/organizations/{org_id}/groups",
-                axum::routing::post(
-                    super::groups::create_handler::<InMemoryOrgStore, StubVpClient>,
-                )
-                .get(super::groups::list_handler::<InMemoryOrgStore>),
+                axum::routing::post(super::groups::create_handler::<StubVpClient>)
+                    .get(super::groups::list_handler),
             )
             .route(
                 "/api/v1/organizations/{org_id}/groups/{name}",
-                axum::routing::get(super::groups::get_handler::<InMemoryOrgStore>)
-                    .put(super::groups::update_handler::<InMemoryOrgStore, StubVpClient>)
-                    .delete(super::groups::delete_handler::<InMemoryOrgStore, StubVpClient>),
+                axum::routing::get(super::groups::get_handler)
+                    .put(super::groups::update_handler::<StubVpClient>)
+                    .delete(super::groups::delete_handler::<StubVpClient>),
             )
             .route("/metrics", axum::routing::get(super::metrics_handler))
             // Test-only probe route — never compiled into production binaries.
@@ -645,7 +637,7 @@ pub(super) mod test_support {
             // exposing the predicate through the real API surface.
             .route(
                 "/test/declared-group/{org_id}/{name}",
-                axum::routing::get(declared_group_handler::<InMemoryOrgStore>),
+                axum::routing::get(declared_group_handler),
             )
             .with_state(state)
             .layer(axum::middleware::from_fn_with_state(fg, forgeguard_layer))
@@ -695,7 +687,15 @@ pub(super) mod test_support {
         })
     }
 
-    pub fn empty_store() -> Arc<InMemoryOrgStore> {
+    pub fn empty_store() -> Arc<dyn OrgStore> {
+        Arc::new(InMemoryOrgStore::new(std::collections::BTreeMap::new()))
+    }
+
+    /// Concrete `Arc<InMemoryOrgStore>` for tests that need access to
+    /// inherent methods (e.g. `seed_membership`) which are intentionally not on
+    /// the `OrgStore` trait. Coerces to `Arc<dyn OrgStore>` at any call site
+    /// that takes the trait object.
+    pub fn empty_in_memory_store() -> Arc<InMemoryOrgStore> {
         Arc::new(InMemoryOrgStore::new(std::collections::BTreeMap::new()))
     }
 }

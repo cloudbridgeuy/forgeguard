@@ -1882,6 +1882,7 @@ dependencies = [
 name = "forgeguard_control_plane"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
  "aws-config",
  "aws-sdk-dynamodb",
  "aws-sdk-verifiedpermissions",

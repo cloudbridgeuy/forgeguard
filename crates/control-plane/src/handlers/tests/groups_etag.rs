@@ -12,7 +12,7 @@ use super::super::test_support::{create_draft_org, empty_store, test_app, TEST_A
 // ---------------------------------------------------------------------------
 
 async fn setup_org_with_group(
-    store: Arc<crate::store::InMemoryOrgStore>,
+    store: Arc<dyn crate::store::OrgStore>,
     org_id: &str,
     group_name: &str,
 ) -> String {

@@ -180,7 +180,7 @@ async fn delete_f3_prime_rollback_fail_returns_500_and_increments_counter() {
         .with_label_values(&["parent"])
         .get();
 
-    let app = test_app_for_store(Arc::clone(&store), Arc::clone(&setup_stub));
+    let app = test_app_for_store(store.clone(), Arc::clone(&setup_stub));
     let resp = app
         .oneshot(
             Request::builder()

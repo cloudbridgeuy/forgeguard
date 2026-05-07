@@ -30,7 +30,7 @@ use crate::dynamo_store::DynamoOrgStore;
 use crate::handlers::AppState;
 use crate::membership_store::DynamoMembershipResolver;
 use crate::signing_key_store::DynamoSigningKeyStore;
-use crate::store::{self, AnyOrgStore, OrgStore};
+use crate::store::{self, OrgStore};
 use crate::vp_client::aws::AwsVpClient;
 use crate::vp_client::VpClient;
 
@@ -88,10 +88,10 @@ pub async fn dynamodb_router(
     );
     let dynamo_client = aws_sdk_dynamodb::Client::new(&sdk_config);
     let vp_sdk_client = aws_sdk_verifiedpermissions::Client::new(&sdk_config);
-    let s = Arc::new(AnyOrgStore::DynamoDb(DynamoOrgStore::new(
+    let s: Arc<dyn OrgStore> = Arc::new(DynamoOrgStore::new(
         dynamo_client.clone(),
         table_name.to_string(),
-    )));
+    ));
     let vp = Arc::new(AwsVpClient::new(vp_sdk_client.clone()));
     let membership_resolver: Option<Arc<dyn MembershipResolver>> = if auth.is_some() {
         Some(Arc::new(DynamoMembershipResolver::new(
@@ -128,7 +128,7 @@ pub async fn memory_router(
     auth: Option<&AuthConfig>,
 ) -> color_eyre::Result<Router> {
     let inner = store::load_config_file(config_path)?;
-    let s = Arc::new(AnyOrgStore::Memory(inner));
+    let s: Arc<dyn OrgStore> = Arc::new(inner);
     let sdk_config = aws_config::defaults(aws_config::BehaviorVersion::latest())
         .load()
         .await;
@@ -384,10 +384,7 @@ fn build_forgeguard(
     Ok(Arc::new(ForgeGuard::new(pipeline_config, chain, engine)))
 }
 
-fn build_router<S: OrgStore + 'static, V: VpClient + 'static>(
-    state: AppState<S, V>,
-    fg: Arc<ForgeGuard>,
-) -> Router {
+fn build_router<V: VpClient + 'static>(state: AppState<V>, fg: Arc<ForgeGuard>) -> Router {
     use crate::handlers;
 
     Router::new()
@@ -395,39 +392,39 @@ fn build_router<S: OrgStore + 'static, V: VpClient + 'static>(
         .route("/metrics", get(handlers::metrics_handler))
         .route(
             "/api/v1/organizations",
-            post(handlers::create_handler::<S>).get(handlers::list_handler::<S>),
+            post(handlers::create_handler).get(handlers::list_handler),
         )
         .route(
             "/api/v1/organizations/{org_id}",
-            get(handlers::get_handler::<S>)
-                .put(handlers::update_handler::<S>)
-                .delete(handlers::delete_handler::<S>),
+            get(handlers::get_handler)
+                .put(handlers::update_handler)
+                .delete(handlers::delete_handler),
         )
         .route(
             "/api/v1/organizations/{org_id}/proxy-config",
-            get(handlers::proxy_config_handler::<S>),
+            get(handlers::proxy_config_handler),
         )
         .route(
             "/api/v1/organizations/{org_id}/keys",
-            post(handlers::generate_key_handler::<S>).get(handlers::list_keys_handler::<S>),
+            post(handlers::generate_key_handler).get(handlers::list_keys_handler),
         )
         .route(
             "/api/v1/organizations/{org_id}/keys/{key_id}",
-            axum::routing::delete(handlers::revoke_key_handler::<S>),
+            axum::routing::delete(handlers::revoke_key_handler),
         )
         .route(
             "/api/v1/organizations/{org_id}/keys/{key_id}/rotate",
-            axum::routing::post(handlers::rotate_key_handler::<S>),
+            axum::routing::post(handlers::rotate_key_handler),
         )
         .route(
             "/api/v1/organizations/{org_id}/groups",
-            post(handlers::groups::create_handler::<S, V>).get(handlers::groups::list_handler::<S>),
+            post(handlers::groups::create_handler::<V>).get(handlers::groups::list_handler),
         )
         .route(
             "/api/v1/organizations/{org_id}/groups/{name}",
-            get(handlers::groups::get_handler::<S>)
-                .put(handlers::groups::update_handler::<S, V>)
-                .delete(handlers::groups::delete_handler::<S, V>),
+            get(handlers::groups::get_handler)
+                .put(handlers::groups::update_handler::<V>)
+                .delete(handlers::groups::delete_handler::<V>),
         )
         .with_state(state)
         .layer(axum::middleware::from_fn_with_state(fg, forgeguard_layer))

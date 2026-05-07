@@ -50,8 +50,8 @@ fn default_true() -> bool {
 
 /// Fetch the org record for `org_id`, returning a ready `Response` on any
 /// failure (404 for missing, 500 for store errors).
-async fn require_org<S: OrgStore>(
-    store: &S,
+async fn require_org(
+    store: &dyn OrgStore,
     org_id: &OrganizationId,
     raw_org_id: &str,
     ctx: &str,
@@ -69,8 +69,8 @@ async fn require_org<S: OrgStore>(
 /// List groups and project them down to plain `RbacEntry`s. Callers derive
 /// both `all_after` (with the proposed entry replacing any same-name row) and,
 /// for UPDATE/DELETE, the prior-validation set from this single fetch.
-async fn list_existing_entries<S: OrgStore>(
-    store: &S,
+async fn list_existing_entries(
+    store: &dyn OrgStore,
     org_id: &OrganizationId,
     raw_org_id: &str,
     ctx: &str,
@@ -135,8 +135,8 @@ fn parse_if_match_header(headers: &HeaderMap) -> Option<etag::IfMatch> {
 }
 
 /// Fetch an existing group or return a shaped 404/500 `Response`.
-async fn require_group<S: OrgStore>(
-    store: &S,
+async fn require_group(
+    store: &dyn OrgStore,
     org_id: &OrganizationId,
     name: &str,
     raw_org_id: &str,
@@ -205,9 +205,9 @@ pub(crate) struct UpdateGroupRequest {
 /// and surfaces 500 `inconsistent_state`.
 ///
 /// Duplicate name returns `409 Conflict`.
-pub(crate) async fn create_handler<S: OrgStore + 'static, V: VpClient + 'static>(
+pub(crate) async fn create_handler<V: VpClient + 'static>(
     Path(raw_org_id): Path<String>,
-    State(state): State<AppState<S, V>>,
+    State(state): State<AppState<V>>,
     Json(body): Json<CreateGroupRequest>,
 ) -> Response {
     let Ok(org_id) = OrganizationId::new(&raw_org_id) else {
@@ -308,9 +308,9 @@ pub(crate) async fn create_handler<S: OrgStore + 'static, V: VpClient + 'static>
 /// callers that cache "empty" get the freshest possible view without a
 /// conditional-request trick, while callers that cache a non-empty snapshot
 /// benefit from the fast path.
-pub(crate) async fn list_handler<S: OrgStore>(
+pub(crate) async fn list_handler(
     Path(raw_org_id): Path<String>,
-    State(store): State<Arc<S>>,
+    State(store): State<Arc<dyn OrgStore>>,
     headers: HeaderMap,
 ) -> Response {
     let Ok(org_id) = OrganizationId::new(&raw_org_id) else {
@@ -365,9 +365,9 @@ pub(crate) async fn list_handler<S: OrgStore>(
 /// Strong ETag comparison: returns `304` when the stored etag equals the
 /// caller's `If-None-Match` value. `If-None-Match: *` returns `304` when the
 /// group exists (i.e. always on a 200 path).
-pub(crate) async fn get_handler<S: OrgStore>(
+pub(crate) async fn get_handler(
     Path((raw_org_id, name)): Path<(String, String)>,
-    State(store): State<Arc<S>>,
+    State(store): State<Arc<dyn OrgStore>>,
     headers: HeaderMap,
 ) -> Response {
     let Ok(org_id) = OrganizationId::new(&raw_org_id) else {
@@ -435,9 +435,9 @@ pub(crate) async fn get_handler<S: OrgStore>(
 /// no rollback.
 ///
 /// Returns `200 OK` with updated `GroupResource` and an `ETag` header.
-pub(crate) async fn update_handler<S: OrgStore + 'static, V: VpClient + 'static>(
+pub(crate) async fn update_handler<V: VpClient + 'static>(
     Path((raw_org_id, name)): Path<(String, String)>,
-    State(state): State<AppState<S, V>>,
+    State(state): State<AppState<V>>,
     headers: HeaderMap,
     Json(body): Json<UpdateGroupRequest>,
 ) -> Response {
@@ -619,9 +619,9 @@ pub(crate) async fn update_handler<S: OrgStore + 'static, V: VpClient + 'static>
 /// for the parent permit; a VP `NotFound` is treated as idempotent success.
 /// On other VP failures the prior DDB row is restored; F3' (rollback fail)
 /// increments `forgeguard_cp_group_rollback_failed_total{stage="parent"}`.
-pub(crate) async fn delete_handler<S: OrgStore + 'static, V: VpClient + 'static>(
+pub(crate) async fn delete_handler<V: VpClient + 'static>(
     Path((raw_org_id, name)): Path<(String, String)>,
-    State(state): State<AppState<S, V>>,
+    State(state): State<AppState<V>>,
     headers: HeaderMap,
 ) -> Response {
     let Ok(org_id) = OrganizationId::new(&raw_org_id) else {

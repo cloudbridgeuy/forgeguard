@@ -5,7 +5,9 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
-use super::super::test_support::{create_draft_org, empty_store, test_app, TEST_API_KEY};
+use super::super::test_support::{
+    create_draft_org, empty_in_memory_store, empty_store, test_app, TEST_API_KEY,
+};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -13,7 +15,7 @@ use super::super::test_support::{create_draft_org, empty_store, test_app, TEST_A
 
 /// Create an org, create a group, and return the group's etag.
 async fn setup_org_with_group(
-    store: Arc<crate::store::InMemoryOrgStore>,
+    store: Arc<dyn crate::store::OrgStore>,
     org_id: &str,
     group_name: &str,
 ) -> String {
@@ -149,8 +151,9 @@ async fn delete_group_with_inheritor_returns_409_blocking_inheritors() {
 
 #[tokio::test]
 async fn delete_group_with_membership_returns_409_memberships_count() {
-    let store = empty_store();
-    let etag = setup_org_with_group(Arc::clone(&store), "org-del-mem", "admin").await;
+    let store = empty_in_memory_store();
+    let store_dyn: Arc<dyn crate::store::OrgStore> = Arc::clone(&store) as _;
+    let etag = setup_org_with_group(Arc::clone(&store_dyn), "org-del-mem", "admin").await;
 
     // Seed a membership so count_memberships_for_group returns a non-empty map.
     use forgeguard_core::OrganizationId;
@@ -159,7 +162,7 @@ async fn delete_group_with_membership_returns_409_memberships_count() {
         .seed_membership(&org_id, "user-alice", vec!["admin".to_owned()])
         .await;
 
-    let app = test_app(Arc::clone(&store));
+    let app = test_app(Arc::clone(&store_dyn));
     let resp = app
         .oneshot(
             Request::builder()
@@ -186,14 +189,15 @@ async fn delete_group_with_membership_returns_409_memberships_count() {
 
 #[tokio::test]
 async fn delete_group_with_both_returns_409_both_arrays_populated() {
-    let store = empty_store();
+    let store = empty_in_memory_store();
+    let store_dyn: Arc<dyn crate::store::OrgStore> = Arc::clone(&store) as _;
     // Setup org with "member" and "admin" inheriting "member"
-    let app = test_app(Arc::clone(&store));
+    let app = test_app(Arc::clone(&store_dyn));
     let resp = create_draft_org(&app, "org-del-both", "Both Org").await;
     assert_eq!(resp.status(), StatusCode::CREATED);
 
     // Create "member"
-    let app = test_app(Arc::clone(&store));
+    let app = test_app(Arc::clone(&store_dyn));
     let member_resp = app
         .oneshot(
             Request::builder()
@@ -222,7 +226,7 @@ async fn delete_group_with_both_returns_409_both_arrays_populated() {
         .to_owned();
 
     // Create "admin" inheriting "member"
-    let app = test_app(Arc::clone(&store));
+    let app = test_app(Arc::clone(&store_dyn));
     let resp = app
         .oneshot(
             Request::builder()
@@ -251,7 +255,7 @@ async fn delete_group_with_both_returns_409_both_arrays_populated() {
         .seed_membership(&org_id, "user-bob", vec!["member".to_owned()])
         .await;
 
-    let app = test_app(Arc::clone(&store));
+    let app = test_app(Arc::clone(&store_dyn));
     let resp = app
         .oneshot(
             Request::builder()

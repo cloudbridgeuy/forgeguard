@@ -31,8 +31,8 @@ use crate::store::{EtagedGroup, OrgStore};
 use crate::vp_client::{self, VpClient};
 
 /// Inputs to [`apply_create`].
-pub(crate) struct CreateParams<'a, S, V> {
-    pub(crate) store: &'a S,
+pub(crate) struct CreateParams<'a, V> {
+    pub(crate) store: &'a dyn OrgStore,
     pub(crate) vp: &'a V,
     pub(crate) vp_ctx: &'a VpContext,
     pub(crate) org_id: &'a OrganizationId,
@@ -42,8 +42,8 @@ pub(crate) struct CreateParams<'a, S, V> {
 }
 
 /// Inputs to [`apply_update`].
-pub(crate) struct UpdateParams<'a, S, V> {
-    pub(crate) store: &'a S,
+pub(crate) struct UpdateParams<'a, V> {
+    pub(crate) store: &'a dyn OrgStore,
     pub(crate) vp: &'a V,
     pub(crate) vp_ctx: &'a VpContext,
     pub(crate) org_id: &'a OrganizationId,
@@ -57,8 +57,8 @@ pub(crate) struct UpdateParams<'a, S, V> {
 }
 
 /// Inputs to [`apply_delete`].
-pub(crate) struct DeleteParams<'a, S, V> {
-    pub(crate) store: &'a S,
+pub(crate) struct DeleteParams<'a, V> {
+    pub(crate) store: &'a dyn OrgStore,
     pub(crate) vp: &'a V,
     pub(crate) vp_ctx: &'a VpContext,
     pub(crate) org_id: &'a OrganizationId,
@@ -69,8 +69,8 @@ pub(crate) struct DeleteParams<'a, S, V> {
 }
 
 /// Inputs to [`rollback_create`].
-struct RollbackCreateParams<'a, S> {
-    store: &'a S,
+struct RollbackCreateParams<'a> {
+    store: &'a dyn OrgStore,
     org_id: &'a OrganizationId,
     raw_org_id: &'a str,
     entry_name: &'a str,
@@ -79,8 +79,8 @@ struct RollbackCreateParams<'a, S> {
 }
 
 /// Inputs to [`rollback_update`].
-struct RollbackUpdateParams<'a, S> {
-    store: &'a S,
+struct RollbackUpdateParams<'a> {
+    store: &'a dyn OrgStore,
     org_id: &'a OrganizationId,
     raw_org_id: &'a str,
     entry_name: &'a str,
@@ -90,8 +90,8 @@ struct RollbackUpdateParams<'a, S> {
 }
 
 /// Inputs to [`rollback_delete`].
-struct RollbackDeleteParams<'a, S> {
-    store: &'a S,
+struct RollbackDeleteParams<'a> {
+    store: &'a dyn OrgStore,
     org_id: &'a OrganizationId,
     raw_org_id: &'a str,
     entry_name: &'a str,
@@ -103,8 +103,8 @@ struct RollbackDeleteParams<'a, S> {
 ///
 /// On VP failure, attempts to undo the DDB write via `delete_group`. F3'
 /// fires when the rollback itself fails.
-pub(crate) async fn apply_create<S: OrgStore, V: VpClient>(
-    p: CreateParams<'_, S, V>,
+pub(crate) async fn apply_create<V: VpClient>(
+    p: CreateParams<'_, V>,
 ) -> Result<EtagedGroup, GroupHandlerError> {
     debug_assert!(
         p.compiled.dependents.is_empty(),
@@ -160,9 +160,7 @@ pub(crate) async fn apply_create<S: OrgStore, V: VpClient>(
     Ok(eg)
 }
 
-async fn rollback_create<S: OrgStore>(
-    p: RollbackCreateParams<'_, S>,
-) -> Result<EtagedGroup, GroupHandlerError> {
+async fn rollback_create(p: RollbackCreateParams<'_>) -> Result<EtagedGroup, GroupHandlerError> {
     match p
         .store
         .delete_group(p.org_id, p.entry_name, p.written_etag)
@@ -199,8 +197,8 @@ async fn rollback_create<S: OrgStore>(
 ///   F3' fires if the put_back itself fails.
 /// - Fanout failure: no rollback. F4 surfaces with `(completed, failed,
 ///   remaining)` so the caller can drive a manual replay.
-pub(crate) async fn apply_update<S: OrgStore, V: VpClient>(
-    p: UpdateParams<'_, S, V>,
+pub(crate) async fn apply_update<V: VpClient>(
+    p: UpdateParams<'_, V>,
 ) -> Result<EtagedGroup, GroupHandlerError> {
     let entry_name = p.validated.entry().name.clone();
     let parent_name = p.compiled.parent.name.clone();
@@ -280,9 +278,7 @@ pub(crate) async fn apply_update<S: OrgStore, V: VpClient>(
     Ok(eg)
 }
 
-async fn rollback_update<S: OrgStore>(
-    p: RollbackUpdateParams<'_, S>,
-) -> Result<EtagedGroup, GroupHandlerError> {
+async fn rollback_update(p: RollbackUpdateParams<'_>) -> Result<EtagedGroup, GroupHandlerError> {
     match p
         .store
         .put_group(p.org_id, p.prior, Some(p.written_etag))
@@ -315,8 +311,8 @@ async fn rollback_update<S: OrgStore>(
 /// Per shaping doc A8.3, DELETE does not fan out to dependents. On VP failure
 /// the orchestrator restores the prior DDB row; F3' fires if that put_back
 /// fails. A VP `NotFound` is treated as idempotent success.
-pub(crate) async fn apply_delete<S: OrgStore, V: VpClient>(
-    p: DeleteParams<'_, S, V>,
+pub(crate) async fn apply_delete<V: VpClient>(
+    p: DeleteParams<'_, V>,
 ) -> Result<(), GroupHandlerError> {
     p.store
         .delete_group(p.org_id, &p.name, &p.expected_etag)
@@ -378,9 +374,7 @@ pub(crate) async fn apply_delete<S: OrgStore, V: VpClient>(
     }
 }
 
-async fn rollback_delete<S: OrgStore>(
-    p: RollbackDeleteParams<'_, S>,
-) -> Result<(), GroupHandlerError> {
+async fn rollback_delete(p: RollbackDeleteParams<'_>) -> Result<(), GroupHandlerError> {
     match p.store.put_group(p.org_id, p.prior, None).await {
         Ok(_) => Err(GroupHandlerError::VpPushFailed {
             stage: VpStage::Parent,

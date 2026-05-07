@@ -399,7 +399,7 @@ control plane's `IdentityChain` whenever both `--jwks-url` and
 
 ## Domain Model
 
-The control plane uses the `Organization` entity from `forgeguard_core` to represent each org. File-loaded orgs are created with `OrgStatus::Active`. The `OrgStore` trait is async with generic handlers (no `dyn` dispatch):
+The control plane uses the `Organization` entity from `forgeguard_core` to represent each org. File-loaded orgs are created with `OrgStatus::Active`. The `OrgStore` trait is object-safe via `#[async_trait]`; the runtime carries an `Arc<dyn OrgStore>` and handlers extract it through Axum state:
 
 | Type | Location | Purpose |
 |------|----------|---------|
@@ -407,10 +407,9 @@ The control plane uses the `Organization` entity from `forgeguard_core` to repre
 | `OrgConfig` | `config.rs` | Versioned proxy configuration (replaces old `OrgProxyConfig`) |
 | `Etag` | `etag.rs` | Typed ETag value (`pub(crate)` newtype over `String`). Constructed via `Etag::try_new(raw)` (rejects empty strings); `as_str()` exposes the raw value. Companions `IfMatch`, `ResolvedIfMatch`, `EtagCheck`, and `IfNoneMatchResult` cover the full RFC 7232 optimistic-locking state machine in pure code. |
 | `OrgRecord` | `store.rs` | Pairs `Organization` + `OrgConfig` + precomputed `Etag` |
-| `OrgStore` trait | `store.rs` | Async trait for org storage backends |
+| `OrgStore` trait | `store.rs` | Object-safe async trait for org storage backends |
 | `InMemoryOrgStore` | `store.rs` | In-memory HashMap behind `tokio::sync::RwLock` |
 | `DynamoOrgStore` | `dynamo_store.rs` | DynamoDB-backed organization store for production |
-| `AnyOrgStore` | `store.rs` | Dispatch enum for runtime store selection (`Memory` / `DynamoDb`) |
 
 ## ETag Caching
 

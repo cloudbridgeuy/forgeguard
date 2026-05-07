@@ -9,9 +9,9 @@ use forgeguard_core::OrganizationId;
 use crate::signing_key::{GenerateKeyResult, SigningKeyEntry};
 use crate::store::OrgStore;
 
-pub(crate) async fn generate_key_handler<S: OrgStore>(
+pub(crate) async fn generate_key_handler(
     Path(raw_org_id): Path<String>,
-    State(store): State<Arc<S>>,
+    State(store): State<Arc<dyn OrgStore>>,
 ) -> Response {
     let Ok(org_id) = OrganizationId::new(&raw_org_id) else {
         return super::not_found();
@@ -31,9 +31,9 @@ pub(crate) async fn generate_key_handler<S: OrgStore>(
     }
 }
 
-pub(crate) async fn revoke_key_handler<S: OrgStore>(
+pub(crate) async fn revoke_key_handler(
     Path((raw_org_id, key_id)): Path<(String, String)>,
-    State(store): State<Arc<S>>,
+    State(store): State<Arc<dyn OrgStore>>,
 ) -> Response {
     let Ok(org_id) = OrganizationId::new(&raw_org_id) else {
         return super::not_found();
@@ -48,9 +48,9 @@ pub(crate) async fn revoke_key_handler<S: OrgStore>(
     }
 }
 
-pub(crate) async fn rotate_key_handler<S: OrgStore>(
+pub(crate) async fn rotate_key_handler(
     Path((raw_org_id, key_id)): Path<(String, String)>,
-    State(store): State<Arc<S>>,
+    State(store): State<Arc<dyn OrgStore>>,
 ) -> Response {
     let Ok(org_id) = OrganizationId::new(&raw_org_id) else {
         return super::not_found();
@@ -75,9 +75,9 @@ pub(crate) async fn rotate_key_handler<S: OrgStore>(
     }
 }
 
-pub(crate) async fn list_keys_handler<S: OrgStore>(
+pub(crate) async fn list_keys_handler(
     Path(raw_org_id): Path<String>,
-    State(store): State<Arc<S>>,
+    State(store): State<Arc<dyn OrgStore>>,
 ) -> Response {
     let Ok(org_id) = OrganizationId::new(&raw_org_id) else {
         return super::not_found();

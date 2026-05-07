@@ -60,7 +60,7 @@ fn make_params<'a>(
     org_id: &'a OrganizationId,
     raw_org_id: &'a str,
     tenant: &'a TenantConfig,
-) -> MaterializeParams<'a, InMemoryOrgStore, StubVpClient> {
+) -> MaterializeParams<'a, StubVpClient> {
     MaterializeParams {
         store,
         vp,

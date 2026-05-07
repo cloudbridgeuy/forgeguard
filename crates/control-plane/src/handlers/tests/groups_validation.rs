@@ -12,7 +12,7 @@ use super::super::test_support::{create_draft_org, empty_store, test_app, TEST_A
 // ---------------------------------------------------------------------------
 
 async fn post_group(
-    store: Arc<crate::store::InMemoryOrgStore>,
+    store: Arc<dyn crate::store::OrgStore>,
     org_id: &str,
     body: serde_json::Value,
 ) -> axum::response::Response {
@@ -30,7 +30,7 @@ async fn post_group(
     .unwrap()
 }
 
-async fn setup_org(store: &Arc<crate::store::InMemoryOrgStore>, org_id: &str) {
+async fn setup_org(store: &Arc<dyn crate::store::OrgStore>, org_id: &str) {
     let app = test_app(Arc::clone(store));
     let resp = create_draft_org(&app, org_id, "Validation Org").await;
     assert_eq!(resp.status(), StatusCode::CREATED);

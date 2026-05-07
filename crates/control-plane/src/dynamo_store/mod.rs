@@ -11,6 +11,7 @@ pub(crate) mod groups;
 
 use std::collections::{BTreeMap, HashMap};
 
+use async_trait::async_trait;
 use aws_sdk_dynamodb::types::AttributeValue;
 use chrono::{DateTime, Utc};
 use forgeguard_authz_core::ValidatedRbacEntry;
@@ -349,6 +350,7 @@ pub(crate) fn signing_keys_from_item(
 // OrgStore implementation
 // ---------------------------------------------------------------------------
 
+#[async_trait]
 impl OrgStore for DynamoOrgStore {
     async fn create(&self, org: Organization, config: Option<OrgConfig>) -> Result<OrgRecord> {
         let configured = config.map(ConfiguredConfig::compute);

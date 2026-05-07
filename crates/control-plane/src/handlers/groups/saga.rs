@@ -38,8 +38,8 @@ use crate::vp_client::{self, VpClient};
 /// (CLAUDE.md params-struct-rule). Callers construct one explicitly per call;
 /// it is not `Clone` or `Default` because every field is required.
 #[allow(dead_code)] // V4: caller (saga ticket) does not exist yet; covered by tests.
-pub(crate) struct MaterializeParams<'a, S, V> {
-    pub(crate) store: &'a S,
+pub(crate) struct MaterializeParams<'a, V> {
+    pub(crate) store: &'a dyn OrgStore,
     pub(crate) vp: &'a V,
     pub(crate) org_id: &'a OrganizationId,
     pub(crate) raw_org_id: &'a str,
@@ -89,11 +89,10 @@ pub(crate) enum MaterializeError {
 /// the failure point may have been pushed to VP — the saga ticket is the
 /// recovery owner.
 #[allow(dead_code)] // V4: caller (saga ticket) does not exist yet; covered by tests.
-pub(crate) async fn materialize_groups_to_vp<S, V>(
-    p: MaterializeParams<'_, S, V>,
+pub(crate) async fn materialize_groups_to_vp<V>(
+    p: MaterializeParams<'_, V>,
 ) -> Result<(), MaterializeError>
 where
-    S: OrgStore,
     V: VpClient,
 {
     let etaged = p

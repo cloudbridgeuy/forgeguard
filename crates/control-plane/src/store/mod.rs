@@ -5,6 +5,7 @@ pub(crate) use groups::EtagedGroup;
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
+use async_trait::async_trait;
 use chrono::Utc;
 use ed25519_dalek::pkcs8::spki::der::pem::LineEnding;
 use ed25519_dalek::pkcs8::EncodePrivateKey as _;
@@ -14,7 +15,6 @@ use forgeguard_core::{OrgStatus, Organization, OrganizationId};
 use serde::Deserialize;
 
 use crate::config::OrgConfig;
-use crate::dynamo_store::DynamoOrgStore;
 use crate::error::{Error, Result};
 use crate::etag::Etag;
 use crate::signing_key::{GenerateKeyResult, SigningKeyEntry};
@@ -22,24 +22,14 @@ use crate::signing_key::{GenerateKeyResult, SigningKeyEntry};
 /// Abstraction over organization config storage.
 ///
 /// Implementations: `InMemoryOrgStore` (file-backed), `DynamoOrgStore` (DynamoDB).
-/// Runtime dispatch via `AnyOrgStore`.
+/// Construction picks one adapter; the runtime sees `Arc<dyn OrgStore>`.
+#[async_trait]
 pub(crate) trait OrgStore: Send + Sync {
-    fn get(
-        &self,
-        org_id: &OrganizationId,
-    ) -> impl std::future::Future<Output = Result<Option<OrgRecord>>> + Send;
+    async fn get(&self, org_id: &OrganizationId) -> Result<Option<OrgRecord>>;
 
-    fn create(
-        &self,
-        org: Organization,
-        config: Option<OrgConfig>,
-    ) -> impl std::future::Future<Output = Result<OrgRecord>> + Send;
+    async fn create(&self, org: Organization, config: Option<OrgConfig>) -> Result<OrgRecord>;
 
-    fn list(
-        &self,
-        offset: usize,
-        limit: usize,
-    ) -> impl std::future::Future<Output = Result<Vec<OrgRecord>>> + Send;
+    async fn list(&self, offset: usize, limit: usize) -> Result<Vec<OrgRecord>>;
 
     /// Persist a mutation to an existing organization.
     ///
@@ -48,51 +38,34 @@ pub(crate) trait OrgStore: Send + Sync {
     /// config etag does not equal `e`. When `expected_etag` is `None`, the
     /// implementation writes unconditionally (last-write-wins — preserved
     /// for callers that do not opt in).
-    fn update(
+    async fn update(
         &self,
         org_id: &OrganizationId,
         org: Organization,
         config: Option<OrgConfig>,
         expected_etag: Option<&Etag>,
-    ) -> impl std::future::Future<Output = Result<OrgRecord>> + Send;
+    ) -> Result<OrgRecord>;
 
-    fn delete(
-        &self,
-        org_id: &OrganizationId,
-    ) -> impl std::future::Future<Output = Result<()>> + Send;
+    async fn delete(&self, org_id: &OrganizationId) -> Result<()>;
 
-    fn generate_key(
-        &self,
-        org_id: &OrganizationId,
-    ) -> impl std::future::Future<Output = Result<GenerateKeyResult>> + Send;
+    async fn generate_key(&self, org_id: &OrganizationId) -> Result<GenerateKeyResult>;
 
-    fn list_keys(
-        &self,
-        org_id: &OrganizationId,
-    ) -> impl std::future::Future<Output = Result<Vec<SigningKeyEntry>>> + Send;
+    async fn list_keys(&self, org_id: &OrganizationId) -> Result<Vec<SigningKeyEntry>>;
 
-    fn revoke_key(
+    async fn revoke_key(&self, org_id: &OrganizationId, key_id: &str) -> Result<()>;
+
+    async fn rotate_signing_key(
         &self,
         org_id: &OrganizationId,
         key_id: &str,
-    ) -> impl std::future::Future<Output = Result<()>> + Send;
-
-    fn rotate_signing_key(
-        &self,
-        org_id: &OrganizationId,
-        key_id: &str,
-    ) -> impl std::future::Future<Output = Result<GenerateKeyResult>> + Send;
+    ) -> Result<GenerateKeyResult>;
 
     // -----------------------------------------------------------------------
     // Group CRUD (V2) — consumed by Group D handler bodies
     // -----------------------------------------------------------------------
 
     /// Retrieve a single group by name, or `None` if it does not exist.
-    fn get_group(
-        &self,
-        org_id: &OrganizationId,
-        name: &str,
-    ) -> impl std::future::Future<Output = Result<Option<EtagedGroup>>> + Send;
+    async fn get_group(&self, org_id: &OrganizationId, name: &str) -> Result<Option<EtagedGroup>>;
 
     /// Create or update a group with optimistic-locking semantics.
     ///
@@ -103,54 +76,43 @@ pub(crate) trait OrgStore: Send + Sync {
     /// | `(Some(e), Some(t))` where `e.etag() == t` | Update |
     /// | `(Some(e), Some(t))` where `e.etag() != t` | `PreconditionFailed` |
     /// | `(None, Some(_))`           | `PreconditionFailed { current_etag: "" }` |
-    fn put_group(
+    async fn put_group(
         &self,
         org_id: &OrganizationId,
         entry: ValidatedRbacEntry,
         expected_etag: Option<&str>,
-    ) -> impl std::future::Future<Output = Result<EtagedGroup>> + Send;
+    ) -> Result<EtagedGroup>;
 
     /// List all groups for an org, sorted ascending by name.
-    fn list_groups(
-        &self,
-        org_id: &OrganizationId,
-    ) -> impl std::future::Future<Output = Result<Vec<EtagedGroup>>> + Send;
+    async fn list_groups(&self, org_id: &OrganizationId) -> Result<Vec<EtagedGroup>>;
 
     /// Delete a group by name, checking the etag for optimistic locking.
     ///
     /// Callers MUST verify no live memberships (via `count_memberships_for_group`)
     /// and no inheritors (via `list_inheritors`) exist before calling this method;
     /// `delete_group` does not re-check these constraints.
-    fn delete_group(
+    async fn delete_group(
         &self,
         org_id: &OrganizationId,
         name: &str,
         expected_etag: &str,
-    ) -> impl std::future::Future<Output = Result<()>> + Send;
+    ) -> Result<()>;
 
     /// Return the names of groups that list `name` in their `inherits` field.
-    fn list_inheritors(
-        &self,
-        org_id: &OrganizationId,
-        name: &str,
-    ) -> impl std::future::Future<Output = Result<Vec<String>>> + Send;
+    async fn list_inheritors(&self, org_id: &OrganizationId, name: &str) -> Result<Vec<String>>;
 
     /// Return the count of users in the given group, keyed by user id.
-    fn count_memberships_for_group(
+    async fn count_memberships_for_group(
         &self,
         org_id: &OrganizationId,
         name: &str,
-    ) -> impl std::future::Future<Output = Result<BTreeMap<String, u32>>> + Send;
+    ) -> Result<BTreeMap<String, u32>>;
 
     /// Return `true` iff `name` is a declared (written) group for the org.
     ///
     /// Reserved for issue #100's POST /users membership validator.
     #[allow(dead_code)]
-    fn is_declared_group(
-        &self,
-        org_id: &OrganizationId,
-        name: &str,
-    ) -> impl std::future::Future<Output = Result<bool>> + Send;
+    async fn is_declared_group(&self, org_id: &OrganizationId, name: &str) -> Result<bool>;
 }
 
 /// A configured (`OrgConfig` + matching etag) pair.
@@ -265,6 +227,7 @@ impl InMemoryOrgStore {
     }
 }
 
+#[async_trait]
 impl OrgStore for InMemoryOrgStore {
     async fn get(&self, org_id: &OrganizationId) -> Result<Option<OrgRecord>> {
         let guard = self.orgs.read().await;
@@ -604,163 +567,6 @@ pub(crate) fn load_config_file(path: &Path) -> color_eyre::Result<InMemoryOrgSto
     let json_str = std::fs::read_to_string(path)?;
     let store = build_org_store(&json_str)?;
     Ok(store)
-}
-
-// ---------------------------------------------------------------------------
-// AnyOrgStore — dispatch enum for runtime store selection
-// ---------------------------------------------------------------------------
-
-/// Enum wrapper that delegates to the active store backend.
-///
-/// The `OrgStore` trait uses RPITIT (`impl Future` in return position), making
-/// it not object-safe. This enum provides static dispatch instead of `dyn`.
-///
-/// `InMemoryOrgStore` is larger than `DynamoOrgStore` because it embeds its
-/// data in-process (four `RwLock<BTreeMap<…>>` fields). Boxing would add
-/// an indirection with no benefit — the enum is always heap-allocated in
-/// an `Arc<AnyOrgStore>` at the call site.
-#[allow(clippy::large_enum_variant)]
-pub(crate) enum AnyOrgStore {
-    Memory(InMemoryOrgStore),
-    DynamoDb(DynamoOrgStore),
-}
-
-impl OrgStore for AnyOrgStore {
-    async fn get(&self, org_id: &OrganizationId) -> Result<Option<OrgRecord>> {
-        match self {
-            Self::Memory(s) => s.get(org_id).await,
-            Self::DynamoDb(s) => s.get(org_id).await,
-        }
-    }
-
-    async fn create(&self, org: Organization, config: Option<OrgConfig>) -> Result<OrgRecord> {
-        match self {
-            Self::Memory(s) => s.create(org, config).await,
-            Self::DynamoDb(s) => s.create(org, config).await,
-        }
-    }
-
-    async fn list(&self, offset: usize, limit: usize) -> Result<Vec<OrgRecord>> {
-        match self {
-            Self::Memory(s) => s.list(offset, limit).await,
-            Self::DynamoDb(s) => s.list(offset, limit).await,
-        }
-    }
-
-    async fn update(
-        &self,
-        org_id: &OrganizationId,
-        org: Organization,
-        config: Option<OrgConfig>,
-        expected_etag: Option<&Etag>,
-    ) -> Result<OrgRecord> {
-        match self {
-            Self::Memory(s) => s.update(org_id, org, config, expected_etag).await,
-            Self::DynamoDb(s) => s.update(org_id, org, config, expected_etag).await,
-        }
-    }
-
-    async fn delete(&self, org_id: &OrganizationId) -> Result<()> {
-        match self {
-            Self::Memory(s) => s.delete(org_id).await,
-            Self::DynamoDb(s) => s.delete(org_id).await,
-        }
-    }
-
-    async fn generate_key(&self, org_id: &OrganizationId) -> Result<GenerateKeyResult> {
-        match self {
-            Self::Memory(s) => s.generate_key(org_id).await,
-            Self::DynamoDb(s) => s.generate_key(org_id).await,
-        }
-    }
-
-    async fn list_keys(&self, org_id: &OrganizationId) -> Result<Vec<SigningKeyEntry>> {
-        match self {
-            Self::Memory(s) => s.list_keys(org_id).await,
-            Self::DynamoDb(s) => s.list_keys(org_id).await,
-        }
-    }
-
-    async fn revoke_key(&self, org_id: &OrganizationId, key_id: &str) -> Result<()> {
-        match self {
-            Self::Memory(s) => s.revoke_key(org_id, key_id).await,
-            Self::DynamoDb(s) => s.revoke_key(org_id, key_id).await,
-        }
-    }
-
-    async fn rotate_signing_key(
-        &self,
-        org_id: &OrganizationId,
-        key_id: &str,
-    ) -> Result<GenerateKeyResult> {
-        match self {
-            Self::Memory(s) => s.rotate_signing_key(org_id, key_id).await,
-            Self::DynamoDb(s) => s.rotate_signing_key(org_id, key_id).await,
-        }
-    }
-
-    async fn get_group(&self, org_id: &OrganizationId, name: &str) -> Result<Option<EtagedGroup>> {
-        match self {
-            Self::Memory(s) => s.get_group(org_id, name).await,
-            Self::DynamoDb(s) => s.get_group(org_id, name).await,
-        }
-    }
-
-    async fn put_group(
-        &self,
-        org_id: &OrganizationId,
-        entry: ValidatedRbacEntry,
-        expected_etag: Option<&str>,
-    ) -> Result<EtagedGroup> {
-        match self {
-            Self::Memory(s) => s.put_group(org_id, entry, expected_etag).await,
-            Self::DynamoDb(s) => s.put_group(org_id, entry, expected_etag).await,
-        }
-    }
-
-    async fn list_groups(&self, org_id: &OrganizationId) -> Result<Vec<EtagedGroup>> {
-        match self {
-            Self::Memory(s) => s.list_groups(org_id).await,
-            Self::DynamoDb(s) => s.list_groups(org_id).await,
-        }
-    }
-
-    async fn delete_group(
-        &self,
-        org_id: &OrganizationId,
-        name: &str,
-        expected_etag: &str,
-    ) -> Result<()> {
-        match self {
-            Self::Memory(s) => s.delete_group(org_id, name, expected_etag).await,
-            Self::DynamoDb(s) => s.delete_group(org_id, name, expected_etag).await,
-        }
-    }
-
-    async fn list_inheritors(&self, org_id: &OrganizationId, name: &str) -> Result<Vec<String>> {
-        match self {
-            Self::Memory(s) => s.list_inheritors(org_id, name).await,
-            Self::DynamoDb(s) => s.list_inheritors(org_id, name).await,
-        }
-    }
-
-    async fn count_memberships_for_group(
-        &self,
-        org_id: &OrganizationId,
-        name: &str,
-    ) -> Result<BTreeMap<String, u32>> {
-        match self {
-            Self::Memory(s) => s.count_memberships_for_group(org_id, name).await,
-            Self::DynamoDb(s) => s.count_memberships_for_group(org_id, name).await,
-        }
-    }
-
-    async fn is_declared_group(&self, org_id: &OrganizationId, name: &str) -> Result<bool> {
-        match self {
-            Self::Memory(s) => s.is_declared_group(org_id, name).await,
-            Self::DynamoDb(s) => s.is_declared_group(org_id, name).await,
-        }
-    }
 }
 
 #[cfg(test)]

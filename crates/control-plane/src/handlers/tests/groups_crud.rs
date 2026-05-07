@@ -20,7 +20,7 @@ fn group_body(name: &str, allow: &[&str]) -> Vec<u8> {
 }
 
 async fn create_org_and_group(
-    store: Arc<crate::store::InMemoryOrgStore>,
+    store: Arc<dyn crate::store::OrgStore>,
     org_id: &str,
     group_name: &str,
     allow: &[&str],

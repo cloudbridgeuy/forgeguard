@@ -2,17 +2,18 @@
 //!
 //! - `active_org_store` — seeds an `InMemoryOrgStore` with one Active org
 //!   carrying a populated `vp_store_id`. Used by every Active-branch test.
-//! - `FailingStore<S>` — delegating wrapper over any [`OrgStore`] with one-shot
-//!   failure injection on `delete_group` / `put_group`. Used by the F3' tests
-//!   to drive the rollback into `Err(rollback_err)`.
-//! - `test_app_for_store` — generic counterpart to
-//!   [`super::super::test_support::test_app_with_stub`]; parameterised on `S`
-//!   so the failure-mode tests can plug in `FailingStore<InMemoryOrgStore>`.
+//! - `FailingStore` — delegating wrapper over [`Arc<dyn OrgStore>`] with
+//!   one-shot failure injection on `delete_group` / `put_group`. Used by the
+//!   F3' tests to drive the rollback into `Err(rollback_err)`.
+//! - `test_app_for_store` — counterpart to
+//!   [`super::super::test_support::test_app_with_stub`]; accepts an arbitrary
+//!   `Arc<dyn OrgStore>` so the failure-mode tests can plug in [`FailingStore`].
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
+use async_trait::async_trait;
 use tokio::sync::{Mutex, MutexGuard};
 
 use axum::body::Body;
@@ -37,7 +38,7 @@ use crate::error::{Error, Result};
 use crate::handlers::test_support::TEST_API_KEY;
 use crate::handlers::AppState;
 use crate::signing_key::{GenerateKeyResult, SigningKeyEntry};
-use crate::store::{build_org_store, EtagedGroup, InMemoryOrgStore, OrgRecord, OrgStore};
+use crate::store::{build_org_store, EtagedGroup, OrgRecord, OrgStore};
 use crate::vp_client::stub::StubVpClient;
 
 /// Process-wide async lock for tests that read/assert against the global
@@ -50,7 +51,7 @@ pub(super) async fn metric_lock() -> MutexGuard<'static, ()> {
     LOCK.get_or_init(|| Mutex::new(())).lock().await
 }
 
-pub(super) fn active_org_store(org_id: &str, vp_store_id: &str) -> Arc<InMemoryOrgStore> {
+pub(super) fn active_org_store(org_id: &str, vp_store_id: &str) -> Arc<dyn OrgStore> {
     let json = format!(
         r#"{{
             "organizations": {{
@@ -78,14 +79,14 @@ pub(super) fn active_org_store(org_id: &str, vp_store_id: &str) -> Arc<InMemoryO
 /// Used to drive the F3' rollback-fails branch: arm `fail_next_delete_group`
 /// (for CREATE rollback) or `fail_next_put_group` (for UPDATE/DELETE rollback)
 /// before the request, and the *first* matching call returns `Error::Store`.
-pub(super) struct FailingStore<S> {
-    inner: Arc<S>,
+pub(super) struct FailingStore {
+    inner: Arc<dyn OrgStore>,
     fail_delete_group_once: AtomicBool,
     fail_put_group_once: AtomicBool,
 }
 
-impl<S> FailingStore<S> {
-    pub(super) fn new(inner: Arc<S>) -> Self {
+impl FailingStore {
+    pub(super) fn new(inner: Arc<dyn OrgStore>) -> Self {
         Self {
             inner,
             fail_delete_group_once: AtomicBool::new(false),
@@ -102,7 +103,8 @@ impl<S> FailingStore<S> {
     }
 }
 
-impl<S: OrgStore> OrgStore for FailingStore<S> {
+#[async_trait]
+impl OrgStore for FailingStore {
     async fn get(&self, org_id: &OrganizationId) -> Result<Option<OrgRecord>> {
         self.inner.get(org_id).await
     }
@@ -183,17 +185,14 @@ impl<S: OrgStore> OrgStore for FailingStore<S> {
     }
 }
 
-/// Generic test app builder — same wiring as
-/// [`super::super::test_support::test_app_with_stub`] but parameterised on
-/// `S` so failure-mode tests can plug in [`FailingStore`].
+/// Test app builder — same wiring as
+/// [`super::super::test_support::test_app_with_stub`] but accepts any
+/// `Arc<dyn OrgStore>` so failure-mode tests can plug in [`FailingStore`].
 ///
 /// Only the group routes are mounted (the only routes the Active-branch tests
 /// need). Health, org, key, metrics, and proxy-config routes are intentionally
 /// absent.
-pub(super) fn test_app_for_store<S: OrgStore + 'static>(
-    store: Arc<S>,
-    vp: Arc<StubVpClient>,
-) -> Router {
+pub(super) fn test_app_for_store(store: Arc<dyn OrgStore>, vp: Arc<StubVpClient>) -> Router {
     let route_matcher = RouteMatcher::new(&[]).unwrap();
     let public_routes = vec![
         PublicRoute::new(
@@ -237,14 +236,14 @@ pub(super) fn test_app_for_store<S: OrgStore + 'static>(
     Router::new()
         .route(
             "/api/v1/organizations/{org_id}/groups",
-            axum::routing::post(crate::handlers::groups::create_handler::<S, StubVpClient>)
-                .get(crate::handlers::groups::list_handler::<S>),
+            axum::routing::post(crate::handlers::groups::create_handler::<StubVpClient>)
+                .get(crate::handlers::groups::list_handler),
         )
         .route(
             "/api/v1/organizations/{org_id}/groups/{name}",
-            axum::routing::get(crate::handlers::groups::get_handler::<S>)
-                .put(crate::handlers::groups::update_handler::<S, StubVpClient>)
-                .delete(crate::handlers::groups::delete_handler::<S, StubVpClient>),
+            axum::routing::get(crate::handlers::groups::get_handler)
+                .put(crate::handlers::groups::update_handler::<StubVpClient>)
+                .delete(crate::handlers::groups::delete_handler::<StubVpClient>),
         )
         .with_state(state)
         .layer(axum::middleware::from_fn_with_state(fg, forgeguard_layer))
