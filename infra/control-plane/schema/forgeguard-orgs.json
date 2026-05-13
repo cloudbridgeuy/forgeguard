@@ -28,6 +28,14 @@
         "groups": { "type": "L", "required": true },
         "joined_at": { "type": "S", "required": true }
       }
+    },
+    "group": {
+      "pk": "ORG#{org_id}",
+      "sk": "GROUP#{name}",
+      "attributes": {
+        "config": { "type": "S", "required": true, "format": "json" },
+        "etag": { "type": "S", "required": true }
+      }
     }
   }
 }
