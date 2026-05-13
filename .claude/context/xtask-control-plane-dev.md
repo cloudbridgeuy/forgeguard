@@ -37,9 +37,11 @@ Because credential inheritance is silent, the launch banner reminds the operator
 
 ## Seed status mapping
 
-The dev seed mirrors the legacy file-loader convention documented in [control-plane.md § Lifecycle](./control-plane.md): an entry **with** a `config` block lands as `OrgStatus::Active`, an entry **without** lands as `OrgStatus::Draft`. The mapping is computed from `org.config.is_some()` in `seed_organizations` (`xtask/src/control_plane/dev.rs`) and written to the `status` attribute alongside `config`/`etag`.
+The dev pre-load step keeps the original V0 `config`-presence convention even though the broader system moved off it in V5 of issue #102 (see [control-plane.md § Lifecycle](./control-plane.md)). An entry **with** a `config` block lands as `OrgStatus::Active`, an entry **without** lands as `OrgStatus::Draft`. The mapping is computed from `org.config.is_some()` in `seed_organizations` (`xtask/src/control_plane/dev.rs`) and written to the `status` attribute alongside `config`/`etag`. The file loader inside the CP child no longer applies this heuristic — it reads the `status` attribute we write — so `dev` and the CP child stay consistent.
 
 This is what makes the V2 Groups path testable locally: `org-seeded-draft` in `examples/control-plane/orgs.test.json` has no `config`, so it seeds as Draft and accepts V2 mutations; `org-acme` and `org-globex` carry a `config`, so they seed as Active and the V3 guard short-circuits Groups mutations with `501 Not Implemented`. Editing the seed JSON is the canonical way to flip an org between Draft and Active for local QA.
+
+The dedicated `cargo xtask control-plane seed` command (separate from `dev`) takes a different approach: it always writes Draft and never inspects `config`. Use it when validating the V5 seed flow against `dynamodb-local`. See [seed-qa.md](./seed-qa.md).
 
 ## Ports and cleanup
 
