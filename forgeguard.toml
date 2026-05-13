@@ -59,7 +59,7 @@ resource_attribute = "org_id"
 [[policies]]
 name = "member"
 description = "Read-only org access"
-allow = ["cp-organization-read", "cp-key-read", "cp-config-read"]
+allow = ["cp-organization-read", "cp-key-read", "cp-config-read", "cp-group-read"]
 
 [[policies]]
 name = "admin"
@@ -70,6 +70,7 @@ allow = [
   "cp-member-invite", "cp-member-remove", "cp-member-change-role",
   "cp-config-write",
   "cp-key-generate", "cp-key-revoke", "cp-key-rotate",
+  "cp-group-create", "cp-group-update", "cp-group-delete",
 ]
 
 [[policies]]
