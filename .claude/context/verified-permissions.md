@@ -67,13 +67,13 @@ These workarounds are baked into the sync engine. Knowing them prevents re-intro
 
 The pure RBAC → Cedar compiler (`compile_rbac_to_cedar`, `resolve_inherits`,
 `validate_cedar_ident`, `RbacEntry`, `TenantConfig`) lives in
-`forgeguard_authz_core::rbac`. `xtask/src/control_plane/cedar_core/rbac.rs`
-contains two pieces: a thin re-export of the compiler from `authz-core`, and an
-I/O-edge adapter (`policy_entries_to_rbac`) that maps the xtask-local TOML
-`PolicyEntry` shape onto `RbacEntry`. Readers tracing `compile_rbac_to_cedar`
-in xtask will find both in that file. The control-plane Groups handlers (V2+)
-call the compiler directly when materializing per-org Groups into the org's VP
-store.
+`forgeguard_authz_core::rbac`. xtask consumes it directly via
+`cedar_core::desired` — there is no longer a separate `cedar_core/rbac.rs`
+module (deleted in V6 of issue #102). The lone I/O-edge adapter
+`policy_entries_to_rbac` (which maps xtask-local TOML `PolicyEntry` shapes
+onto `RbacEntry`) is a private function inside `cedar_core::desired`, the only
+caller of it. The control-plane Groups handlers (V2+) call the compiler
+directly when materializing per-org Groups into the org's VP store.
 
 ### Plan Output
 
@@ -106,9 +106,11 @@ The CP ships three RBAC roles plus a single machine permit. Each human role maps
 
 | Role | Inherits | Adds |
 |---|---|---|
-| `member` | — | `cp-organization-read`, `cp-key-read`, `cp-config-read` |
-| `admin` | `member` | org create/update, member invite/remove/change-role, `cp-config-write`, key generate/revoke/rotate |
+| `member` | — | `cp-organization-read`, `cp-key-read`, `cp-config-read`, `cp-group-read` |
+| `admin` | `member` | org create/update, member invite/remove/change-role, `cp-config-write`, key generate/revoke/rotate, `cp-group-create`, `cp-group-update`, `cp-group-delete` |
 | `owner` | `admin` | `cp-organization-delete`, `cp-member-promote-owner` |
+
+Canonical source: the `[[policies]]` `allow` arrays in `forgeguard.toml` at the workspace root. Sync them to the CP-dogfood VP store with `cargo xtask control-plane cedar sync --config forgeguard.toml`.
 
 The compiler emits one `permit(principal in forgeguard::Group::"<role>", ...)` per role with `when { principal.org_id == resource.org_id }` auto-appended for tenant scoping. No per-user VP instantiation runs at invitation time — group membership alone grants the permit.
 

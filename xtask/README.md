@@ -22,7 +22,10 @@ check). Exceptions:
 - `forgeguard_authz_core` (pure leaf crate, no I/O deps) — provides the
   shared RBAC compiler used by `cargo xtask control-plane cedar sync` and
   by the V2+ control-plane Groups handlers. See
-  `crates/authz-core/README.md`.
+  `crates/authz-core/README.md`. Note: `cedar_core::rbac` no longer exists
+  as a separate module — the lone I/O-edge adapter `policy_entries_to_rbac`
+  was inlined into `cedar_core::desired` (its only caller) in V6 of
+  issue #102.
 
 xtask still inlines the narrow Ed25519 signing surface it needs in
 `src/signing.rs` rather than depending on `forgeguard_authn_core`. The

@@ -141,6 +141,39 @@ The full entry shape encoded inside `config`:
 `etag` is a separate top-level attribute so it can be used in DynamoDB condition
 expressions without deserialising `config`.
 
+#### Authorization
+
+Groups CRUD is authorised via four `cp-group-*` actions in the `cp` namespace.
+The role mapping mirrors the CP-wide RBAC model in `forgeguard.toml`:
+
+| Role | Actions |
+|------|---------|
+| `member` | `cp:group:read` |
+| `admin` | `cp:group:create`, `cp:group:update`, `cp:group:delete` (inherits `member`) |
+| `owner` | inherits all from `admin` |
+
+Declared in `forgeguard.toml` `[[policies]]` `allow` arrays; apply with
+`cargo xtask control-plane cedar sync`. See
+[`.claude/plans/2026-05-13-issue-102-cp-groups-v6/v6-plan.md`](../../.claude/plans/2026-05-13-issue-102-cp-groups-v6/v6-plan.md)
+for V6 implementation details.
+
+#### Round-trip parity
+
+`crates/control-plane/src/handlers/tests/groups_round_trip.rs` proves that
+the `forgeguard.toml` RBAC role definitions survive a full HTTP round-trip
+without information loss. The fixture parses the `[[policies]]` entries into
+`Vec<RbacEntry>`, POSTs each as a group to a Draft test org via the in-memory
+store, GETs them back, converts to `Vec<RbacEntry>`, and asserts `toml::Value`
+equality against the canonical source. This catches any serialization drift
+between the `RbacEntry` type, the `GroupResource` wire shape, and the TOML
+representation before it can diverge silently.
+
+For fast iteration:
+
+```sh
+cargo test -p forgeguard_control_plane handlers::tests::groups_round_trip
+```
+
 ## Quick Start
 
 A test config with two orgs (`org-acme`, `org-globex`) is included at
@@ -351,6 +384,11 @@ Each route maps to a `namespace:entity:action` QualifiedAction in the `cp` names
 | `POST` | `/api/v1/organizations/{org_id}/keys` | `cp:key:generate` |
 | `GET` | `/api/v1/organizations/{org_id}/keys` | `cp:key:read` |
 | `DELETE` | `/api/v1/organizations/{org_id}/keys/{key_id}` | `cp:key:revoke` |
+| `POST` | `/api/v1/organizations/{org_id}/groups` | `cp:group:create` |
+| `GET` | `/api/v1/organizations/{org_id}/groups` | `cp:group:read` |
+| `GET` | `/api/v1/organizations/{org_id}/groups/{name}` | `cp:group:read` |
+| `PUT` | `/api/v1/organizations/{org_id}/groups/{name}` | `cp:group:update` |
+| `DELETE` | `/api/v1/organizations/{org_id}/groups/{name}` | `cp:group:delete` |
 
 ### PrincipalKind Routing
 
