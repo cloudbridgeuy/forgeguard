@@ -41,6 +41,8 @@ Valid transitions are enforced by `OrgStatus::can_transition_to()`. `Organizatio
 
 Machine principals carry an `org_id` attribute and have no group parents. The kind is set at resolver time (Ed25519 → Machine; Cognito JWT and static API key → User) and propagated through `Identity` → `build_query()` → `PrincipalRef`.
 
+`ResourceRef` is the resource-side counterpart and carries a `ResourceOrgSource` discriminator (default `RequestTenant`) that controls whether the Cedar resource entity's `org_id` is sourced from the request tenant header or from the resource's own id — control-plane org-scoped routes set `OwnId` to make tenant-scope Cedar clauses meaningful.
+
 ## Cedar types
 
 The crate provides Cedar-specific types for policy and schema generation:
