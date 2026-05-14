@@ -4,7 +4,9 @@ use aws_sdk_verifiedpermissions::types::{
     ActionIdentifier, AttributeValue, Decision, EntitiesDefinition, EntityIdentifier, EntityItem,
 };
 use forgeguard_authz_core::{DenyReason, PolicyDecision, PolicyQuery};
-use forgeguard_core::{GroupName, PrincipalKind, PrincipalRef, ProjectId, ResourceRef, TenantId};
+use forgeguard_core::{
+    GroupName, PrincipalKind, PrincipalRef, ProjectId, ResourceOrgSource, ResourceRef, TenantId,
+};
 
 use crate::error::{Error, Result};
 
@@ -77,8 +79,9 @@ pub(crate) fn build_vp_request(
 ///   set to the tenant ID value; no group parents.
 ///
 /// When a **resource** is present, a resource entity is added with an `org_id`
-/// attribute matching the tenant. This is required for Cedar policies that
-/// scope access via `resource.org_id == principal.org_id`.
+/// attribute set to the resource's owning org — its own id when
+/// `ResourceOrgSource::OwnId`, otherwise the request tenant. This is required
+/// for Cedar policies that scope access via `resource.org_id == principal.org_id`.
 ///
 /// VP has no entity store (design decision D5), so we pass entities inline
 /// at query time.
@@ -166,7 +169,14 @@ pub(crate) fn build_vp_entities(
     };
 
     // Add resource entity with org_id attribute for tenant-scoped policies.
+    // The owning org comes from the resource itself (control-plane routes,
+    // where the resource id IS the org) or the request tenant (proxy
+    // resources, collection endpoints) — never blindly from the header.
     if let Some(res) = resource {
+        let resource_org = match res.org_source() {
+            ResourceOrgSource::OwnId => res.id().as_str(),
+            ResourceOrgSource::RequestTenant => tenant.as_str(),
+        };
         let resource_entity = EntityItem::builder()
             .identifier(
                 EntityIdentifier::builder()
@@ -179,10 +189,7 @@ pub(crate) fn build_vp_entities(
                         ))
                     })?,
             )
-            .attributes(
-                "org_id",
-                AttributeValue::String(tenant.as_str().to_string()),
-            )
+            .attributes("org_id", AttributeValue::String(resource_org.to_string()))
             .build();
         entities.push(resource_entity);
     }
@@ -410,6 +417,69 @@ mod tests {
                 // Only the machine entity — no group entities.
                 assert_eq!(items.len(), 1);
                 assert!(items[0].parents().is_empty());
+            }
+            _ => panic!("expected EntityList variant"),
+        }
+    }
+
+    #[test]
+    fn entities_resource_org_id_defaults_to_request_tenant() {
+        let principal = PrincipalRef::new(UserId::new("alice").unwrap());
+        let action = QualifiedAction::parse("todo:list:read").unwrap();
+        let resource_id = ResourceId::parse("list-001").unwrap();
+        let resource = ResourceRef::from_route(&action, resource_id);
+        let entities = build_vp_entities(
+            &principal,
+            &[],
+            Some(&resource),
+            &test_project(),
+            &test_tenant(),
+        )
+        .unwrap();
+
+        match &entities {
+            EntitiesDefinition::EntityList(items) => {
+                assert_eq!(items.len(), 2);
+                let res_item = items.last().expect("resource entity present");
+                let ident = res_item.identifier().expect("identifier set");
+                assert_eq!(ident.entity_type(), "acme_app::todo__list");
+                let attrs = res_item.attributes().expect("attributes set");
+                let org_id = attrs.get("org_id").expect("org_id attribute present");
+                assert_eq!(org_id.as_string().expect("string"), "acme-corp");
+            }
+            _ => panic!("expected EntityList variant"),
+        }
+    }
+
+    #[test]
+    fn entities_resource_org_id_uses_own_id_when_scoped() {
+        let principal = PrincipalRef::new(UserId::new("alice").unwrap());
+        let action = QualifiedAction::parse("todo:list:read").unwrap();
+        // The resource lives in org-acme; the request tenant is acme-corp
+        // (a *different* org — simulating the cross-org bypass attempt).
+        let resource_id = ResourceId::parse("org-acme").unwrap();
+        let resource = ResourceRef::from_route(&action, resource_id).scoped_by_own_id();
+        let entities = build_vp_entities(
+            &principal,
+            &[],
+            Some(&resource),
+            &test_project(),
+            &test_tenant(),
+        )
+        .unwrap();
+
+        match &entities {
+            EntitiesDefinition::EntityList(items) => {
+                assert_eq!(items.len(), 2);
+                let res_item = items.last().expect("resource entity present");
+                let ident = res_item.identifier().expect("identifier set");
+                assert_eq!(ident.entity_type(), "acme_app::todo__list");
+                let attrs = res_item.attributes().expect("attributes set");
+                let org_id = attrs.get("org_id").expect("org_id attribute present");
+                let org_id_str = org_id.as_string().expect("string");
+                // org_id reflects the resource's own id, NOT the request tenant.
+                assert_eq!(org_id_str, "org-acme");
+                assert_ne!(org_id_str, test_tenant().as_str());
             }
             _ => panic!("expected EntityList variant"),
         }
