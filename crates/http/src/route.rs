@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use forgeguard_core::{FlagName, QualifiedAction, ResourceId, ResourceRef};
+use forgeguard_core::{FlagName, QualifiedAction, ResourceId, ResourceOrgSource, ResourceRef};
 
 use crate::method::HttpMethod;
 use crate::Result;
@@ -28,6 +28,9 @@ pub struct RouteMapping {
     /// Fallback resource ID used when no `resource_param` is present in the path.
     /// Enables collection-level endpoints to pass a synthetic resource to VP.
     default_resource_id: Option<ResourceId>,
+    /// Where the matched resource's owning-org id comes from. Defaults to
+    /// `RequestTenant`; org-scoped routes opt into `OwnId`.
+    resource_org_source: ResourceOrgSource,
 }
 
 impl RouteMapping {
@@ -47,6 +50,7 @@ impl RouteMapping {
             feature_gate,
             resource_entity_type: None,
             default_resource_id: None,
+            resource_org_source: ResourceOrgSource::default(),
         }
     }
 
@@ -65,6 +69,15 @@ impl RouteMapping {
             crate::Error::Config(format!("invalid default_resource_id {id:?}: {e}"))
         })?);
         Ok(self)
+    }
+
+    /// Mark this route's resource as scoped by its own id — the matched
+    /// `ResourceRef` will report `ResourceOrgSource::OwnId`. Use for routes
+    /// whose `resource_param` resolves to the owning org id (e.g. control-plane
+    /// `/organizations/{org_id}/...` routes).
+    pub fn with_org_resource(mut self) -> Self {
+        self.resource_org_source = ResourceOrgSource::OwnId;
+        self
     }
 
     /// The HTTP method for this route.
@@ -140,6 +153,7 @@ struct RouteValue {
     feature_gate: Option<FlagName>,
     resource_entity_type: Option<String>,
     default_resource_id: Option<ResourceId>,
+    resource_org_source: ResourceOrgSource,
 }
 
 // ---------------------------------------------------------------------------
@@ -171,6 +185,7 @@ impl RouteMatcher {
                 feature_gate: route.feature_gate.clone(),
                 resource_entity_type: route.resource_entity_type.clone(),
                 default_resource_id: route.default_resource_id.clone(),
+                resource_org_source: route.resource_org_source,
             };
 
             let pattern = normalize_pattern(&normalize_path(route.path_pattern()));
@@ -294,11 +309,17 @@ fn build_matched_route(matched: &matchit::Match<'_, '_, &RouteValue>) -> Matched
         })
         .or_else(|| value.default_resource_id.clone());
 
-    let resource = resolved_id.map(|rid| match &value.resource_entity_type {
-        Some(entity_type) => {
-            ResourceRef::from_route_with_entity_type(&value.action, rid, entity_type.clone())
+    let resource = resolved_id.map(|rid| {
+        let base = match &value.resource_entity_type {
+            Some(entity_type) => {
+                ResourceRef::from_route_with_entity_type(&value.action, rid, entity_type.clone())
+            }
+            None => ResourceRef::from_route(&value.action, rid),
+        };
+        match value.resource_org_source {
+            ResourceOrgSource::OwnId => base.scoped_by_own_id(),
+            ResourceOrgSource::RequestTenant => base,
         }
-        None => ResourceRef::from_route(&value.action, rid),
     });
 
     MatchedRoute {
@@ -581,5 +602,65 @@ mod tests {
         .with_default_resource_id("Invalid_ID");
 
         assert!(result.is_err(), "uppercase/underscore IDs must be rejected");
+    }
+
+    #[test]
+    fn with_org_resource_flows_to_matched_resource_ref() {
+        let route = make_route(
+            "GET",
+            "/api/v1/organizations/:org_id/groups",
+            "cp:group:read",
+            Some("org_id"),
+        )
+        .with_resource_entity_type("Organization")
+        .with_org_resource();
+        let matcher = RouteMatcher::new(&[route]).unwrap();
+
+        let matched = matcher
+            .match_request("GET", "/api/v1/organizations/org-acme/groups")
+            .expect("route matches");
+        let resource = matched.resource().expect("resource extracted");
+        assert_eq!(resource.id().as_str(), "org-acme");
+        assert_eq!(
+            resource.org_source(),
+            forgeguard_core::ResourceOrgSource::OwnId,
+        );
+    }
+
+    #[test]
+    fn route_without_with_org_resource_defaults_to_request_tenant() {
+        let route = make_route("GET", "/api/lists/:id", "todo:list:read", Some("id"));
+        let matcher = RouteMatcher::new(&[route]).unwrap();
+
+        let matched = matcher
+            .match_request("GET", "/api/lists/list-001")
+            .expect("route matches");
+        let resource = matched.resource().expect("resource extracted");
+        assert_eq!(
+            resource.org_source(),
+            forgeguard_core::ResourceOrgSource::RequestTenant,
+        );
+    }
+
+    #[test]
+    fn with_org_resource_without_entity_type_flows_to_matched_resource_ref() {
+        let route = make_route(
+            "GET",
+            "/api/v1/organizations/:org_id/members",
+            "cp:member:read",
+            Some("org_id"),
+        )
+        .with_org_resource();
+        let matcher = RouteMatcher::new(&[route]).unwrap();
+
+        let matched = matcher
+            .match_request("GET", "/api/v1/organizations/org-acme/members")
+            .expect("route matches");
+        let resource = matched.resource().expect("resource extracted");
+        assert_eq!(resource.id().as_str(), "org-acme");
+        assert_eq!(
+            resource.org_source(),
+            forgeguard_core::ResourceOrgSource::OwnId,
+        );
     }
 }
