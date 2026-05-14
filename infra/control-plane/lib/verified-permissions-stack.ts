@@ -24,15 +24,7 @@ export class VerifiedPermissionsStack extends cdk.Stack {
     });
 
     this.policyStoreId = policyStore.attrPolicyStoreId;
-    // Verified Permissions is a region-less service: ARNs use an empty
-    // region segment (`arn:aws:verifiedpermissions::<account>:policy-store/<id>`).
-    this.policyStoreArn = cdk.Stack.of(this).formatArn({
-      service: "verifiedpermissions",
-      region: "",
-      resource: "policy-store",
-      resourceName: policyStore.attrPolicyStoreId,
-      arnFormat: cdk.ArnFormat.SLASH_RESOURCE_NAME,
-    });
+    this.policyStoreArn = policyStore.attrArn;
 
     if (props.userPoolArn && props.appClientId) {
       new vp.CfnIdentitySource(this, "CognitoIdentitySource", {
