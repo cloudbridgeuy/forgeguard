@@ -284,9 +284,15 @@ fn cp_route_actions() -> forgeguard_http::Result<Vec<RouteMapping>> {
             )
             .with_resource_entity_type("Organization");
             if resource_param.is_none() {
+                // Collection endpoints (POST/GET /api/v1/organizations) have no
+                // org_id path param — keep the RequestTenant default.
                 mapping.with_default_resource_id("collection")
             } else {
-                Ok(mapping)
+                // Every org-scoped route's resource_param is "org_id", so the
+                // matched resource id IS the owning org. Scope by own id so the
+                // Cedar tenant clause compares the principal's org against the
+                // org in the URL path — not the request header.
+                Ok(mapping.with_org_resource())
             }
         })
         .collect()
@@ -560,5 +566,34 @@ mod tests {
                 matched.action()
             );
         }
+    }
+
+    #[test]
+    fn cp_org_scoped_routes_are_scoped_by_own_id() {
+        let routes = cp_route_actions().expect("cp routes build");
+        let matcher = forgeguard_http::RouteMatcher::new(&routes).expect("matcher builds");
+
+        // Org-scoped route: resource id is the {org_id} path param, so the
+        // owning org must be the resource's own id (closes the bypass).
+        let matched = matcher
+            .match_request("GET", "/api/v1/organizations/org-acme/groups")
+            .expect("org-scoped route matches");
+        let resource = matched.resource().expect("resource extracted");
+        assert_eq!(resource.id().as_str(), "org-acme");
+        assert_eq!(
+            resource.org_source(),
+            forgeguard_core::ResourceOrgSource::OwnId,
+        );
+
+        // Collection route: no org_id path param — stays RequestTenant.
+        let collection = matcher
+            .match_request("GET", "/api/v1/organizations")
+            .expect("collection route matches");
+        let collection_resource = collection.resource().expect("default resource id present");
+        assert_eq!(collection_resource.id().as_str(), "collection");
+        assert_eq!(
+            collection_resource.org_source(),
+            forgeguard_core::ResourceOrgSource::RequestTenant,
+        );
     }
 }
