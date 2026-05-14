@@ -321,6 +321,29 @@ impl ResourceId {
 }
 
 // ---------------------------------------------------------------------------
+// ResourceOrgSource
+// ---------------------------------------------------------------------------
+
+/// Where a resource's owning-org id comes from when building the VP
+/// `org_id` attribute for the Cedar tenant-scope clause
+/// (`principal.org_id == resource.org_id`).
+///
+/// This is a pure routing decision made once at route-config time. It exists
+/// because `crates/authz` is shared between the control plane (where a
+/// resource's id *is* its owning org) and the proxy (where a resource belongs
+/// to the single request tenant).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ResourceOrgSource {
+    /// The owning org is the resource's own id — e.g. a control-plane
+    /// `Organization` addressed by its `{org_id}` path param.
+    OwnId,
+    /// The owning org is the request tenant — e.g. proxy resources and
+    /// control-plane collection endpoints. This is the safe default.
+    #[default]
+    RequestTenant,
+}
+
+// ---------------------------------------------------------------------------
 // ResourceRef
 // ---------------------------------------------------------------------------
 
@@ -334,6 +357,9 @@ pub struct ResourceRef {
     /// Optional Cedar entity type override. When set, `vp_entity_type` uses
     /// this directly instead of deriving from `namespace`/`entity`.
     cedar_entity_type: Option<String>,
+    /// Where this resource's owning-org id comes from. Defaults to
+    /// `RequestTenant`; control-plane org-scoped routes opt into `OwnId`.
+    org_source: ResourceOrgSource,
 }
 
 impl ResourceRef {
@@ -345,6 +371,7 @@ impl ResourceRef {
             entity: action.entity().clone(),
             id,
             cedar_entity_type: None,
+            org_source: ResourceOrgSource::default(),
         }
     }
 
@@ -359,7 +386,21 @@ impl ResourceRef {
             entity: action.entity().clone(),
             id,
             cedar_entity_type: Some(cedar_entity_type),
+            org_source: ResourceOrgSource::default(),
         }
+    }
+
+    /// Mark this resource as scoped by its own id — the resource's owning org
+    /// is `self.id()`, not the request tenant. Use for control-plane routes
+    /// whose resource id is the `{org_id}` path param.
+    pub fn scoped_by_own_id(mut self) -> Self {
+        self.org_source = ResourceOrgSource::OwnId;
+        self
+    }
+
+    /// Where this resource's owning-org id comes from.
+    pub fn org_source(&self) -> ResourceOrgSource {
+        self.org_source
     }
 
     /// Verified Permissions entity type: e.g. "todo_app::Organization"
@@ -753,6 +794,30 @@ mod tests {
     }
 
     // -- ResourceRef ---------------------------------------------------------
+
+    #[test]
+    fn resource_ref_defaults_to_request_tenant_org_source() {
+        let action = QualifiedAction::parse("todo:list:read").unwrap();
+        let id = ResourceId::parse("list-001").unwrap();
+        let res = ResourceRef::from_route(&action, id);
+        assert_eq!(res.org_source(), ResourceOrgSource::RequestTenant);
+    }
+
+    #[test]
+    fn scoped_by_own_id_sets_own_id_org_source() {
+        let action = QualifiedAction::parse("todo:list:read").unwrap();
+        let id = ResourceId::parse("org-acme").unwrap();
+        let res = ResourceRef::from_route(&action, id).scoped_by_own_id();
+        assert_eq!(res.org_source(), ResourceOrgSource::OwnId);
+    }
+
+    #[test]
+    fn from_route_with_entity_type_defaults_to_request_tenant() {
+        let action = QualifiedAction::parse("todo:list:read").unwrap();
+        let id = ResourceId::parse("list-001").unwrap();
+        let res = ResourceRef::from_route_with_entity_type(&action, id, "Organization".to_string());
+        assert_eq!(res.org_source(), ResourceOrgSource::RequestTenant);
+    }
 
     #[test]
     fn resource_ref_to_fgrn() {

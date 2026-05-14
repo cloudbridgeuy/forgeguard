@@ -16,7 +16,7 @@ pub mod segment;
 
 pub use action::{
     Action, Entity, Namespace, PrincipalKind, PrincipalRef, QualifiedAction, ResourceId,
-    ResourceRef,
+    ResourceOrgSource, ResourceRef,
 };
 pub use cedar::{
     compile_all_to_cedar, compile_policy_to_cedar, generate_cedar_schema, CedarAttributeType,
