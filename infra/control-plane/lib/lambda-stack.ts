@@ -67,6 +67,21 @@ export class LambdaStack extends cdk.Stack {
       }),
     );
 
+    // V3 Active-org group writes materialise Cedar permits into each org's
+    // dedicated VP store. Per-org store ARNs are created at runtime and are
+    // unknowable to CDK, so the write actions cannot be ARN-scoped here.
+    controlPlane.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: [
+          "verifiedpermissions:CreatePolicy",
+          "verifiedpermissions:DeletePolicy",
+          "verifiedpermissions:ListPolicies",
+          "verifiedpermissions:GetPolicy",
+        ],
+        resources: ["*"],
+      }),
+    );
+
     // --- Dead-letter queue ---
 
     const dlq = new sqs.Queue(this, "SagaTriggerDlq", {

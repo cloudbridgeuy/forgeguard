@@ -121,8 +121,11 @@ The control-plane Lambda's startup behavior depends on a coupled env-var-plus-IA
 | --------- | -------- | --- |
 | `dynamodb:*` (read+write) | `TABLE_NAME` ARN | `table.grantReadWriteData(controlPlane)` |
 | `verifiedpermissions:IsAuthorized` | Policy store ARN (`policyStoreArn`) | CP authorization decisions; scoped — never `*` |
+| `verifiedpermissions:{CreatePolicy,DeletePolicy,ListPolicies,GetPolicy}` | `*` (unavoidable) | V3 Active-org group writes materialise Cedar permits into each org's **dedicated** VP store; per-org store ARNs are created at runtime and are unknowable to CDK, so these write actions cannot be ARN-scoped |
 
 `IsAuthorizedWithToken` is **not** granted because the CP parses JWTs itself and submits a fully-formed `IsAuthorized` request. If a future slice adopts token-mode VP calls, expand the action list there.
+
+The VP write grant is a separate `addToRolePolicy` statement (not folded into the `IsAuthorized` one) precisely because its `resources` is `*` while `IsAuthorized` stays scoped — keeping them apart documents the asymmetry. See [groups-v3.md](./groups-v3.md) for the per-org store model and `policy_name_for_group` (`cp-rbac-{name}`, no org prefix → why each org needs its own store).
 
 #### Schema changes that require pool replacement
 
@@ -145,7 +148,7 @@ The old pool is deleted per its `removalPolicy` (or orphaned on `RETAIN`). Child
 - **Policy store:** `vp.CfnPolicyStore` with `validationSettings.mode = "OFF"` (Cedar schema is managed via `cargo xtask control-plane cedar sync`, not CloudFormation).
 - **Identity source:** `vp.CfnIdentitySource` bound to the Cognito user pool + app client when both arns are passed in.
 - **Stack exports:** `policyStoreId` and `policyStoreArn` as `public readonly` properties (consumed by the Lambda stack via cross-stack references) plus matching `CfnOutput`s for human visibility.
-- **ARN format:** Verified Permissions is region-less. The stack builds the ARN with `cdk.Stack.of(this).formatArn({ service: "verifiedpermissions", region: "", resource: "policy-store", resourceName, arnFormat: SLASH_RESOURCE_NAME })` so the resulting `arn:aws:verifiedpermissions::<account>:policy-store/<id>` matches what the SDK expects.
+- **ARN format:** Verified Permissions is region-less. The stack exposes `policyStoreArn` straight from the CFN attribute getter (`policyStore.attrArn`) rather than hand-building it with `cdk.Stack.formatArn`. CloudFormation already emits the correct region-less `arn:aws:verifiedpermissions::<account>:policy-store/<id>`, so the manual `formatArn` call (with its empty-region-segment trap) is unnecessary. See [aws-arn-formats.md](./aws-arn-formats.md).
 - **Stack ordering:** instantiated in `bin/app.ts` *before* `LambdaStack` so the policy store id and arn are available as constructor props.
 
 The Lambda stack imports those exports and:
