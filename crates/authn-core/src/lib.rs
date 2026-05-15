@@ -5,6 +5,7 @@ pub mod credential;
 pub mod error;
 pub mod identity;
 pub mod jwt_claims;
+pub mod membership;
 pub mod resolver;
 pub mod signing;
 pub mod signing_key_store;
