@@ -21,9 +21,17 @@ pub use credential::Credential;
 pub use error::{Error, Result};
 pub use identity::{Identity, IdentityParams};
 pub use jwt_claims::JwtClaims;
+pub use membership::{MembershipRow, MembershipRowParams};
 pub use resolver::IdentityResolver;
 pub use signing_key_store::{InMemorySigningKeyStore, SigningKeyStore};
 pub use static_api_key::StaticApiKeyResolver;
+pub use user_pool::{CreateUserParams, PoolId, UpdatePoolParams, UserPoolError};
+pub use user_schema::{
+    diff_schema, schema_to_cognito_attrs, validate_attributes, AppendOnlyViolation, AttrType,
+    CognitoAttrDef, CognitoStringConstraints, CreateUserCommand, CustomAttrName, CustomAttrSpec,
+    FieldError, FieldErrorKind, FieldViolation, RawAttrMap, SchemaDelta, StandardAttrName,
+    StandardAttrSpec, UserAttributes, UserSchema, ValidationErrors, ViolationKind,
+};
 
 #[cfg(feature = "test-support")]
 pub use builder::IdentityBuilder;
