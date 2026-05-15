@@ -9,9 +9,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Error;
 
+pub mod cognito_mapping;
 pub mod types;
 pub mod validation;
 
+pub use cognito_mapping::{schema_to_cognito_attrs, CognitoAttrDef, CognitoStringConstraints};
 pub use types::{RawAttrMap, UserAttributes};
 pub use validation::{validate_attributes, FieldError, FieldErrorKind, ValidationErrors};
 
