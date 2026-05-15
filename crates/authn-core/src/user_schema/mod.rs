@@ -4,10 +4,16 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;
 
-use forgeguard_core::OrgStatus;
+use forgeguard_core::{GroupName, OrgStatus};
 use serde::{Deserialize, Serialize};
 
 use crate::error::Error;
+
+pub mod types;
+pub mod validation;
+
+pub use types::{RawAttrMap, UserAttributes};
+pub use validation::{validate_attributes, FieldError, FieldErrorKind, ValidationErrors};
 
 /// One of the 15 Cognito standard user attributes ForgeGuard recognises.
 ///
@@ -271,6 +277,17 @@ pub enum ViolationKind {
     RequiredToggled,
     LengthBoundsChanged,
     StandardMapEdited,
+}
+
+/// In-domain command produced by the wire-to-domain conversion in V2 handlers.
+///
+/// Holds the raw attribute payload; downstream code is expected to run
+/// `validate_attributes(&schema, &cmd.attributes)` before persisting.
+#[derive(Debug, Clone)]
+pub struct CreateUserCommand {
+    pub email: String,
+    pub attributes: RawAttrMap,
+    pub groups: Vec<GroupName>,
 }
 
 /// Diff two `UserSchema`s under the org's lifecycle status.
