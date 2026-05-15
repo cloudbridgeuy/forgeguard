@@ -42,6 +42,15 @@ pub enum Error {
     /// The required X-ForgeGuard-Org-Id header is missing from the signed request.
     #[error("missing X-ForgeGuard-Org-Id header in signed request")]
     MissingOrgId,
+    /// `CustomAttrName` failed the parse invariant.
+    #[error("invalid custom attribute name {raw:?}: {reason}")]
+    InvalidCustomAttrName { raw: String, reason: &'static str },
+    /// A string did not name one of the 15 Cognito standard attributes.
+    #[error("invalid standard attribute name: {0:?}")]
+    InvalidStandardAttrName(String),
+    /// `PoolId` was empty.
+    #[error("invalid pool ID: must be non-empty")]
+    InvalidPoolId,
 }
 
 /// Convenience alias used throughout this crate.
