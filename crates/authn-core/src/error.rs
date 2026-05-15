@@ -48,9 +48,9 @@ pub enum Error {
     /// A string did not name one of the 15 Cognito standard attributes.
     #[error("invalid standard attribute name: {0:?}")]
     InvalidStandardAttrName(String),
-    /// `PoolId` was empty.
-    #[error("invalid pool ID: must be non-empty")]
-    InvalidPoolId,
+    /// `PoolId` failed its parse invariant.
+    #[error("invalid pool ID {raw:?}: must be non-empty and must not contain '#'")]
+    InvalidPoolId { raw: String },
 }
 
 /// Convenience alias used throughout this crate.

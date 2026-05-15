@@ -10,6 +10,7 @@ pub mod resolver;
 pub mod signing;
 pub mod signing_key_store;
 pub mod static_api_key;
+pub mod user_pool;
 pub mod user_schema;
 
 #[cfg(feature = "test-support")]
