@@ -301,7 +301,7 @@ mod tests {
     #[test]
     fn from_record_active_with_vp_store_returns_active() {
         let cfg = config_with_vp_store(Some("ps-abc"));
-        let configured = ConfiguredConfig::compute(cfg).unwrap();
+        let configured = ConfiguredConfig::compute(cfg);
         let record = OrgRecord::new(make_org(OrgStatus::Active), Some(configured));
         let ctx = OrgWriteContext::from_record(&record).unwrap();
         match ctx {
@@ -324,7 +324,7 @@ mod tests {
     #[test]
     fn from_record_active_without_vp_store_errors() {
         let cfg = config_with_vp_store(None);
-        let configured = ConfiguredConfig::compute(cfg).unwrap();
+        let configured = ConfiguredConfig::compute(cfg);
         let record = OrgRecord::new(make_org(OrgStatus::Active), Some(configured));
         let err = OrgWriteContext::from_record(&record).unwrap_err();
         assert_eq!(err, ActiveStateError::ActiveWithoutVpStore);
@@ -496,7 +496,7 @@ mod tests {
         // A Draft org with a populated config (including vp_store_id) must still
         // resolve as Draft rather than Active.
         let cfg = config_with_vp_store(Some("ps-draft-with-store"));
-        let configured = ConfiguredConfig::compute(cfg).unwrap();
+        let configured = ConfiguredConfig::compute(cfg);
         let record = OrgRecord::new(make_org(OrgStatus::Draft), Some(configured));
         let ctx = OrgWriteContext::from_record(&record).unwrap();
         assert!(

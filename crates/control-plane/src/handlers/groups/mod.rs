@@ -30,7 +30,7 @@ use forgeguard_core::OrganizationId;
 use serde::Deserialize;
 
 use self::active_pure::{compile_for_active, ActiveStateError, OrgWriteContext, VpStage};
-use crate::etag;
+use crate::etag::{self, Etag};
 use crate::handlers::AppState;
 use crate::metrics::PreconditionReason;
 use crate::store::{EtagedGroup, OrgStore};
@@ -117,9 +117,9 @@ fn shape_active_state_error(err: &ActiveStateError, raw_org_id: &str, group: &st
 }
 
 /// Build a [`HeaderMap`] containing a single strong `ETag` header.
-fn etag_header(etag: &str) -> HeaderMap {
+fn etag_header(etag: &Etag) -> HeaderMap {
     let mut headers = HeaderMap::new();
-    if let Ok(val) = etag.parse() {
+    if let Ok(val) = etag.as_str().parse() {
         headers.insert(axum::http::header::ETAG, val);
     }
     headers
@@ -286,7 +286,7 @@ pub(crate) async fn create_handler<V: VpClient + 'static>(
         Ok(eg) => (
             StatusCode::CREATED,
             etag_header(eg.etag()),
-            Json(pure::group_resource_from(eg.entry(), eg.etag())),
+            Json(pure::group_resource_from(eg.entry(), eg.etag().as_str())),
         )
             .into_response(),
         Err(err) => shape_group_error_response(&err),
@@ -350,7 +350,7 @@ pub(crate) async fn list_handler(
 
     let resources: Vec<_> = groups
         .iter()
-        .map(|eg| pure::group_resource_from(eg.entry(), eg.etag()))
+        .map(|eg| pure::group_resource_from(eg.entry(), eg.etag().as_str()))
         .collect();
     Json(resources).into_response()
 }
@@ -414,7 +414,7 @@ pub(crate) async fn get_handler(
     (
         StatusCode::OK,
         etag_header(eg.etag()),
-        Json(pure::group_resource_from(eg.entry(), eg.etag())),
+        Json(pure::group_resource_from(eg.entry(), eg.etag().as_str())),
     )
         .into_response()
 }
@@ -486,11 +486,11 @@ pub(crate) async fn update_handler<V: VpClient + 'static>(
     // Resolve If-Match against the stored etag
     let resolved = etag::resolve_if_match(if_match_raw, Some(existing.etag()));
     let expected_etag: String = match &resolved {
-        etag::ResolvedIfMatch::Strong(e) => e.clone(),
+        etag::ResolvedIfMatch::Strong(e) => e.to_string(),
         // `If-Match: *` on an existing row — pass the stored etag so that
         // `put_group` takes the conditional-update path rather than the
         // create-only path (which rejects `(Some(_), None)` as Conflict).
-        etag::ResolvedIfMatch::WildcardMatched => existing.etag().to_owned(),
+        etag::ResolvedIfMatch::WildcardMatched => existing.etag().to_string(),
         // Wildcard on absent row — fail closed (404 already returned above)
         etag::ResolvedIfMatch::WildcardOnDraft => {
             return shape_group_error_response(&GroupHandlerError::NotFound);
@@ -540,7 +540,9 @@ pub(crate) async fn update_handler<V: VpClient + 'static>(
                 crate::error::Error::PreconditionFailed { current_etag } => {
                     crate::metrics::record_precondition_failed(PreconditionReason::StaleEtag);
                     GroupHandlerError::PreconditionFailed {
-                        current_etag,
+                        current_etag: current_etag
+                            .map(|e| e.to_string())
+                            .unwrap_or_default(),
                         reason: PreconditionReason::StaleEtag,
                     }
                 }
@@ -592,7 +594,7 @@ pub(crate) async fn update_handler<V: VpClient + 'static>(
         Ok(eg) => (
             StatusCode::OK,
             etag_header(eg.etag()),
-            Json(pure::group_resource_from(eg.entry(), eg.etag())),
+            Json(pure::group_resource_from(eg.entry(), eg.etag().as_str())),
         )
             .into_response(),
         Err(err) => shape_group_error_response(&err),
@@ -669,7 +671,7 @@ pub(crate) async fn delete_handler<V: VpClient + 'static>(
     // Resolve If-Match against the stored etag
     let resolved = etag::resolve_if_match(if_match_raw, Some(existing.etag()));
     let expected_etag: String = match &resolved {
-        etag::ResolvedIfMatch::Strong(e) => e.clone(),
+        etag::ResolvedIfMatch::Strong(e) => e.to_string(),
         etag::ResolvedIfMatch::WildcardMatched => existing.etag().to_string(),
         // Wildcard on absent row — not reachable (we 404'd above), but handle defensively
         etag::ResolvedIfMatch::WildcardOnDraft => {
@@ -722,7 +724,9 @@ pub(crate) async fn delete_handler<V: VpClient + 'static>(
                 crate::error::Error::PreconditionFailed { current_etag } => {
                     crate::metrics::record_precondition_failed(PreconditionReason::StaleEtag);
                     GroupHandlerError::PreconditionFailed {
-                        current_etag,
+                        current_etag: current_etag
+                            .map(|e| e.to_string())
+                            .unwrap_or_default(),
                         reason: PreconditionReason::StaleEtag,
                     }
                 }

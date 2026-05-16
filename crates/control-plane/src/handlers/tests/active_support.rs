@@ -33,12 +33,15 @@ use forgeguard_proxy_core::{PipelineConfig, PipelineConfigParams};
 
 use tower::ServiceExt;
 
+use forgeguard_authn_core::UserSchema;
+
 use crate::config::OrgConfig;
 use crate::error::{Error, Result};
+use crate::etag::Etag;
 use crate::handlers::test_support::TEST_API_KEY;
 use crate::handlers::AppState;
 use crate::signing_key::{GenerateKeyResult, SigningKeyEntry};
-use crate::store::{build_org_store, EtagedGroup, OrgRecord, OrgStore};
+use crate::store::{build_org_store, EtagedGroup, EtagedUserSchema, OrgRecord, OrgStore};
 use crate::vp_client::stub::StubVpClient;
 
 /// Process-wide async lock for tests that read/assert against the global
@@ -120,7 +123,7 @@ impl OrgStore for FailingStore {
         org_id: &OrganizationId,
         org: Organization,
         config: Option<OrgConfig>,
-        expected_etag: Option<&str>,
+        expected_etag: Option<&Etag>,
     ) -> Result<OrgRecord> {
         self.inner.update(org_id, org, config, expected_etag).await
     }
@@ -183,6 +186,19 @@ impl OrgStore for FailingStore {
     }
     async fn is_declared_group(&self, org_id: &OrganizationId, name: &str) -> Result<bool> {
         self.inner.is_declared_group(org_id, name).await
+    }
+    async fn get_user_schema(&self, org_id: &OrganizationId) -> Result<Option<EtagedUserSchema>> {
+        self.inner.get_user_schema(org_id).await
+    }
+    async fn put_user_schema(
+        &self,
+        org_id: &OrganizationId,
+        schema: UserSchema,
+        expected_etag: Option<&Etag>,
+    ) -> Result<EtagedUserSchema> {
+        self.inner
+            .put_user_schema(org_id, schema, expected_etag)
+            .await
     }
 }
 

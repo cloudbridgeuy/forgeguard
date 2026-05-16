@@ -72,6 +72,26 @@ let saga_id = SagaId::try_new("01HXYZ...")?;      // bare form
 
 The rule: include framing in the value when the framing IS part of the value's identity (etags, qualified names). Strip framing when it's a transport detail (DynamoDB PK prefixes, URL path segments).
 
+## Inbound Structs: the `Payload` Suffix
+
+Where a single newtype's wire and domain forms differ in *decoration* (etag quotes, PK prefixes), a composite request body has a different concern — a whole **struct** comes in from outside (HTTP body, TOML config, message envelope) and must be parsed into the domain command/value the handler operates on. The convention:
+
+| Role | Suffix | Example |
+| --- | --- | --- |
+| Wire-format struct deserialized from untrusted bytes | `Payload` | `CreateUserPayload`, `UpdateSchemaPayload` |
+| Domain struct the handler/use-case operates on | no suffix (or `Command` / `Request`) | `CreateUserCommand`, `UpdateSchemaCommand` |
+
+The `Payload` struct is shallow: it holds raw scalars or other `Payload`s. The conversion to the domain struct is where each field passes through its newtype constructor (`GroupName::try_new`, etc.) and any cross-field invariants are checked. If a single field fails, the conversion returns `Error` and the handler maps it to `422` with the field path.
+
+Conventions:
+
+- **`Payload` always implements `Deserialize`.** Domain structs never derive `Deserialize` directly.
+- **`Payload` fields are `Vec<T>` / `Option<T>` / primitive types**, not domain newtypes. The constructor for the domain struct does the lift.
+- **`#[serde(default)]`** is the standard tool for optional-on-wire / required-in-domain fields. The default produces the empty/identity value the domain expects (e.g. `Vec::new()` for an absent groups list).
+- **Validation reads as a `TryFrom`** (or a free function `try_from_payload`) returning the crate's `Result<Domain>`. Tests cover one happy-path conversion plus every documented failure mode.
+
+This generalises the single-newtype "where validation runs" rule from the next section: validation lives at the wire-to-domain seam, so downstream code never observes invalid input.
+
 ## Where Validation Runs
 
 Validation lives at **deserialization**, not at use site. Across the workspace this means:

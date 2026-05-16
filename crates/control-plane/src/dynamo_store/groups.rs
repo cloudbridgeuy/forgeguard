@@ -16,6 +16,7 @@ use aws_sdk_dynamodb::types::AttributeValue;
 use forgeguard_core::OrganizationId;
 
 use crate::error::Result;
+use crate::etag::Etag;
 use crate::store::{EtagedGroup, OrgStore};
 
 use super::{sk, DynamoOrgStore};
@@ -70,21 +71,19 @@ pub(crate) fn build_group_put_condition(expected_etag: Option<&str>) -> GroupCon
 /// Recover the current stored etag for a group after a
 /// `ConditionalCheckFailedException`.
 ///
-/// Returns `Ok("")` when the group is absent or has no `etag` attribute.
-/// This matches the fail-closed contract: if the group never existed, any
-/// `If-Match` value is wrong and the empty string tells the handler to emit
-/// a `current_etag: ""` body (same as `InMemoryOrgStore`'s
-/// `(None, Some(_))` branch in `put_group`).
+/// Returns `Ok(None)` when the group is absent. This matches the fail-closed
+/// contract: if the group never existed, any `If-Match` value is wrong and
+/// `None` tells the handler to emit a `current_etag: ""` body (same as
+/// `InMemoryOrgStore`'s `(None, Some(_))` branch in `put_group`).
 pub(crate) async fn recover_group_etag(
     store: &DynamoOrgStore,
     org_id: &OrganizationId,
     name: &str,
-) -> Result<String> {
+) -> Result<Option<Etag>> {
     Ok(store
         .get_group(org_id, name)
         .await?
-        .map(|g| g.etag().to_string())
-        .unwrap_or_default())
+        .map(|g| g.etag().clone()))
 }
 
 /// Lift `from_group_item` output into an `EtagedGroup`.
@@ -96,7 +95,7 @@ pub(crate) fn etaged_group_from_item(
     item: &std::collections::HashMap<String, AttributeValue>,
 ) -> Result<EtagedGroup> {
     let (entry, etag) = crate::handlers::groups::codec::from_group_item(item)?;
-    Ok(EtagedGroup::from_stored(entry, etag))
+    Ok(EtagedGroup::from_stored(entry, Etag::try_new(etag)?))
 }
 
 // ---------------------------------------------------------------------------

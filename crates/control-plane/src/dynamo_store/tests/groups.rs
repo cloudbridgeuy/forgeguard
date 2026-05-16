@@ -78,9 +78,12 @@ async fn dynamodb_create_then_get_group() {
     let created = store.put_group(&org_id, validated, None).await.unwrap();
 
     assert_eq!(created.entry().name, "admin");
-    assert!(!created.etag().is_empty(), "etag must be non-empty");
     assert!(
-        created.etag().starts_with('"') && created.etag().ends_with('"'),
+        !created.etag().as_str().is_empty(),
+        "etag must be non-empty"
+    );
+    assert!(
+        created.etag().as_str().starts_with('"') && created.etag().as_str().ends_with('"'),
         "etag must be a quoted string, got: {}",
         created.etag()
     );
@@ -135,7 +138,7 @@ async fn dynamodb_update_with_stale_etag_returns_precondition_failed() {
         .put_group(&org_id, validated_single(entry), None)
         .await
         .unwrap();
-    let correct_etag = created.etag().to_string();
+    let correct_etag = created.etag().clone();
 
     // Try to update with a wrong etag
     let update_entry = make_entry("member", &["cp:org:read", "cp:org:write"]);
@@ -149,7 +152,8 @@ async fn dynamodb_update_with_stale_etag_returns_precondition_failed() {
     match result {
         Err(crate::error::Error::PreconditionFailed { current_etag }) => {
             assert_eq!(
-                current_etag, correct_etag,
+                current_etag,
+                Some(correct_etag),
                 "recovered etag must match the stored one"
             );
         }
@@ -196,7 +200,7 @@ async fn dynamodb_delete_group_with_matching_etag_succeeds() {
         .unwrap();
 
     store
-        .delete_group(&org_id, "admin", created.etag())
+        .delete_group(&org_id, "admin", created.etag().as_str())
         .await
         .unwrap();
 

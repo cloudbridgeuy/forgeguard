@@ -7,6 +7,7 @@
 use forgeguard_authz_core::RbacEntry;
 
 use crate::error::Result;
+use crate::etag::Etag;
 
 /// A stored RBAC group entry together with its content-addressed etag.
 ///
@@ -16,19 +17,22 @@ use crate::error::Result;
 #[derive(Debug, Clone)]
 pub(crate) struct EtagedGroup {
     entry: RbacEntry,
-    etag: String,
+    etag: Etag,
 }
 
 impl EtagedGroup {
     /// Build from an `RbacEntry`, computing the etag from its contents.
     pub(crate) fn compute(entry: RbacEntry) -> Result<Self> {
         let etag = crate::handlers::groups::pure::compute_group_etag(&entry)?;
-        Ok(Self { entry, etag })
+        Ok(Self {
+            entry,
+            etag: Etag::from_validated(etag),
+        })
     }
 
     /// Build from an already-paired (entry, etag) — e.g. when reconstituting
     /// an `EtagedGroup` from a DynamoDB item.
-    pub(crate) fn from_stored(entry: RbacEntry, etag: String) -> Self {
+    pub(crate) fn from_stored(entry: RbacEntry, etag: Etag) -> Self {
         Self { entry, etag }
     }
 
@@ -36,7 +40,7 @@ impl EtagedGroup {
         &self.entry
     }
 
-    pub(crate) fn etag(&self) -> &str {
+    pub(crate) fn etag(&self) -> &Etag {
         &self.etag
     }
 }

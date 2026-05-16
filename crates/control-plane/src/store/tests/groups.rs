@@ -118,7 +118,7 @@ async fn put_group_stale_etag_returns_precondition_failed() {
         .put_group(&oid, validate(entry("member")), None)
         .await
         .unwrap();
-    let current_etag = created.etag().to_string();
+    let current_etag = created.etag().clone();
 
     let result = s
         .put_group(
@@ -130,7 +130,11 @@ async fn put_group_stale_etag_returns_precondition_failed() {
 
     match result {
         Err(Error::PreconditionFailed { current_etag: got }) => {
-            assert_eq!(got, current_etag, "returned etag should match stored etag");
+            assert_eq!(
+                got,
+                Some(current_etag),
+                "returned etag should match stored etag"
+            );
         }
         other => panic!("expected PreconditionFailed, got: {other:?}"),
     }
@@ -204,7 +208,7 @@ async fn delete_group_matching_etag_removes_group() {
         .put_group(&oid, validate(entry("member")), None)
         .await
         .unwrap();
-    s.delete_group(&oid, "member", created.etag())
+    s.delete_group(&oid, "member", created.etag().as_str())
         .await
         .unwrap();
 
@@ -232,7 +236,7 @@ async fn delete_group_stale_etag_returns_precondition_failed() {
         Err(Error::PreconditionFailed { current_etag }) => {
             assert_eq!(
                 current_etag,
-                created.etag(),
+                Some(created.etag().clone()),
                 "should return the current stored etag"
             );
         }
@@ -396,7 +400,7 @@ async fn put_group_etag_on_nonexistent_returns_precondition_failed_empty_current
     match result {
         Err(Error::PreconditionFailed { current_etag }) => {
             assert!(
-                current_etag.is_empty(),
+                current_etag.is_none(),
                 "current_etag should be empty for non-existent row, got: {current_etag:?}"
             );
         }

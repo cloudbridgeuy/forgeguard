@@ -14,6 +14,7 @@ use std::collections::{BTreeMap, HashMap};
 use async_trait::async_trait;
 use aws_sdk_dynamodb::types::AttributeValue;
 use chrono::{DateTime, Utc};
+use forgeguard_authn_core::UserSchema;
 use forgeguard_authz_core::ValidatedRbacEntry;
 use forgeguard_core::{OrgStatus, Organization, OrganizationId};
 
@@ -23,7 +24,9 @@ use crate::etag::Etag;
 use crate::handlers::groups::codec::{group_pk, group_sk, to_group_item, SK_GROUP_PREFIX};
 use crate::handlers::groups::pure::compute_group_etag;
 use crate::signing_key::{GenerateKeyResult, SigningKeyEntry};
-use crate::store::{generate_key_material, ConfiguredConfig, EtagedGroup, OrgRecord, OrgStore};
+use crate::store::{
+    generate_key_material, ConfiguredConfig, EtagedGroup, EtagedUserSchema, OrgRecord, OrgStore,
+};
 
 // ---------------------------------------------------------------------------
 // Key schema — single source of truth from shared JSON
@@ -631,7 +634,10 @@ impl OrgStore for DynamoOrgStore {
         }
 
         match req.send().await {
-            Ok(_) => Ok(EtagedGroup::from_stored(entry.into_inner(), etag)),
+            Ok(_) => Ok(EtagedGroup::from_stored(
+                entry.into_inner(),
+                Etag::from_validated(etag),
+            )),
             Err(sdk_err) if is_conditional_check_failed(&sdk_err) => match expected_etag {
                 None => Err(Error::Conflict(format!(
                     "group '{group_name}' already exists"
@@ -729,7 +735,7 @@ impl OrgStore for DynamoOrgStore {
                     match self.get_group(org_id, name).await? {
                         None => Err(Error::NotFound(format!("group '{name}' not found"))),
                         Some(current) => Err(Error::PreconditionFailed {
-                            current_etag: current.etag().to_string(),
+                            current_etag: Some(current.etag().clone()),
                         }),
                     }
                 } else {
@@ -817,6 +823,27 @@ impl OrgStore for DynamoOrgStore {
 
     async fn is_declared_group(&self, org_id: &OrganizationId, name: &str) -> Result<bool> {
         Ok(self.get_group(org_id, name).await?.is_some())
+    }
+
+    // -----------------------------------------------------------------------
+    // User schema CRUD — implementation lands in Step 2.
+    // -----------------------------------------------------------------------
+
+    async fn get_user_schema(&self, _org_id: &OrganizationId) -> Result<Option<EtagedUserSchema>> {
+        Err(Error::Store(
+            "DynamoOrgStore::get_user_schema not yet implemented — issue #100 Step 2".to_string(),
+        ))
+    }
+
+    async fn put_user_schema(
+        &self,
+        _org_id: &OrganizationId,
+        _schema: UserSchema,
+        _expected_etag: Option<&Etag>,
+    ) -> Result<EtagedUserSchema> {
+        Err(Error::Store(
+            "DynamoOrgStore::put_user_schema not yet implemented — issue #100 Step 2".to_string(),
+        ))
     }
 }
 

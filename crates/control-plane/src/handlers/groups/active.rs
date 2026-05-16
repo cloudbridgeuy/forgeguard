@@ -151,7 +151,7 @@ pub(crate) async fn apply_create<V: VpClient>(
             org_id: p.org_id,
             raw_org_id: p.raw_org_id,
             entry_name: &entry_name,
-            written_etag: eg.etag(),
+            written_etag: eg.etag().as_str(),
             parent_name: &parent_name,
         })
         .await;
@@ -211,7 +211,7 @@ pub(crate) async fn apply_update<V: VpClient>(
             Error::PreconditionFailed { current_etag } => {
                 record_precondition_failed(PreconditionReason::StaleEtag);
                 GroupHandlerError::PreconditionFailed {
-                    current_etag,
+                    current_etag: current_etag.map(|e| e.to_string()).unwrap_or_default(),
                     reason: PreconditionReason::StaleEtag,
                 }
             }
@@ -241,7 +241,7 @@ pub(crate) async fn apply_update<V: VpClient>(
             raw_org_id: p.raw_org_id,
             entry_name: &entry_name,
             prior: p.prior_for_rollback,
-            written_etag: eg.etag(),
+            written_etag: eg.etag().as_str(),
             parent_name: &parent_name,
         })
         .await;
@@ -321,7 +321,7 @@ pub(crate) async fn apply_delete<V: VpClient>(
             Error::PreconditionFailed { current_etag } => {
                 record_precondition_failed(PreconditionReason::StaleEtag);
                 GroupHandlerError::PreconditionFailed {
-                    current_etag,
+                    current_etag: current_etag.map(|e| e.to_string()).unwrap_or_default(),
                     reason: PreconditionReason::StaleEtag,
                 }
             }
