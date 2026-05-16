@@ -36,6 +36,14 @@
         "config": { "type": "S", "required": true, "format": "json" },
         "etag": { "type": "S", "required": true }
       }
+    },
+    "user_schema": {
+      "pk": "ORG#{org_id}",
+      "sk": "USER_SCHEMA",
+      "attributes": {
+        "schema": { "type": "S", "required": true, "format": "json" },
+        "etag": { "type": "S", "required": true }
+      }
     }
   }
 }
