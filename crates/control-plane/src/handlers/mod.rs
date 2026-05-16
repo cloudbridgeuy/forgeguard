@@ -1,5 +1,6 @@
 pub(crate) mod groups;
 mod keys;
+pub(crate) mod user_schema;
 
 use std::sync::Arc;
 
