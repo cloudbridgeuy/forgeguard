@@ -8,6 +8,7 @@
 //! of truth consumed by both CDK (TypeScript) and Rust.
 
 pub(crate) mod groups;
+pub(crate) mod user_schema;
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -826,24 +827,66 @@ impl OrgStore for DynamoOrgStore {
     }
 
     // -----------------------------------------------------------------------
-    // User schema CRUD — implementation lands in Step 2.
+    // User schema CRUD
     // -----------------------------------------------------------------------
 
-    async fn get_user_schema(&self, _org_id: &OrganizationId) -> Result<Option<EtagedUserSchema>> {
-        Err(Error::Store(
-            "DynamoOrgStore::get_user_schema not yet implemented — issue #100 Step 2".to_string(),
-        ))
+    async fn get_user_schema(&self, org_id: &OrganizationId) -> Result<Option<EtagedUserSchema>> {
+        let pk_value = user_schema::user_schema_pk(org_id);
+        let result = self
+            .client
+            .get_item()
+            .table_name(&self.table_name)
+            .key(pk(), AttributeValue::S(pk_value))
+            .key(
+                sk(),
+                AttributeValue::S(user_schema::SK_USER_SCHEMA.to_owned()),
+            )
+            .send()
+            .await
+            .map_err(map_sdk_error)?;
+        result
+            .item
+            .as_ref()
+            .map(user_schema::etaged_user_schema_from_item)
+            .transpose()
     }
 
     async fn put_user_schema(
         &self,
-        _org_id: &OrganizationId,
-        _schema: UserSchema,
-        _expected_etag: Option<&Etag>,
+        org_id: &OrganizationId,
+        schema: UserSchema,
+        expected_etag: Option<&Etag>,
     ) -> Result<EtagedUserSchema> {
-        Err(Error::Store(
-            "DynamoOrgStore::put_user_schema not yet implemented — issue #100 Step 2".to_string(),
-        ))
+        let etaged = EtagedUserSchema::compute(schema);
+        let item = user_schema::to_user_schema_item(org_id, etaged.schema(), etaged.etag())?;
+        let parts = user_schema::build_user_schema_put_condition(expected_etag);
+
+        let mut req = self
+            .client
+            .put_item()
+            .table_name(&self.table_name)
+            .set_item(Some(item))
+            .condition_expression(parts.expression);
+        for (k, v) in parts.names {
+            req = req.expression_attribute_names(k, v);
+        }
+        for (k, v) in parts.values {
+            req = req.expression_attribute_values(k, v);
+        }
+
+        match req.send().await {
+            Ok(_) => Ok(etaged),
+            Err(sdk_err) if is_conditional_check_failed(&sdk_err) => match expected_etag {
+                None => Err(Error::Conflict(format!(
+                    "user schema for org '{org_id}' already exists"
+                ))),
+                Some(_) => {
+                    let current_etag = user_schema::recover_user_schema_etag(self, org_id).await?;
+                    Err(Error::PreconditionFailed { current_etag })
+                }
+            },
+            Err(sdk_err) => Err(map_sdk_error(sdk_err)),
+        }
     }
 }
 

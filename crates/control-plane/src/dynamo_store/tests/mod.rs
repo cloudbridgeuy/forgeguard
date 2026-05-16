@@ -890,3 +890,4 @@ async fn dynamo_draft_put_with_any_if_match_returns_412() {
 }
 
 mod groups;
+mod user_schema;
