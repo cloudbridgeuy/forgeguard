@@ -7,3 +7,6 @@
 pub(crate) mod get;
 pub(crate) mod pure;
 pub(crate) mod put;
+
+pub(crate) use get::get_user_schema_handler;
+pub(crate) use put::put_user_schema_handler;

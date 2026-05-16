@@ -4,10 +4,6 @@
 //! until V4, Deleted → 404, others → 409), parse the payload, resolve the
 //! `If-Match` header, and call the store. Pure helpers (DTOs, error mapping)
 //! live in [`super::pure`].
-//!
-//! Transiently dead in production builds until Step 5 mounts the route on the
-//! `build_forgeguard` router; tests reach it via the test-only router.
-#![allow(dead_code)]
 
 use std::sync::Arc;
 

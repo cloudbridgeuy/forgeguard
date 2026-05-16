@@ -170,6 +170,8 @@ const API_ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/v1/organizations/{org_id}/groups/{name}"),
     ("PUT", "/api/v1/organizations/{org_id}/groups/{name}"),
     ("DELETE", "/api/v1/organizations/{org_id}/groups/{name}"),
+    ("GET", "/api/v1/organizations/{org_id}/user-schema"),
+    ("PUT", "/api/v1/organizations/{org_id}/user-schema"),
 ];
 
 /// Route-to-action mappings for all control-plane API routes.
@@ -263,6 +265,18 @@ fn cp_route_actions() -> forgeguard_http::Result<Vec<RouteMapping>> {
             "DELETE",
             "/api/v1/organizations/{org_id}/groups/{name}",
             "cp:group:delete",
+            Some("org_id"),
+        ),
+        (
+            "GET",
+            "/api/v1/organizations/{org_id}/user-schema",
+            "cp:user-schema:read",
+            Some("org_id"),
+        ),
+        (
+            "PUT",
+            "/api/v1/organizations/{org_id}/user-schema",
+            "cp:user-schema:update",
             Some("org_id"),
         ),
     ];
@@ -432,6 +446,11 @@ fn build_router<V: VpClient + 'static>(state: AppState<V>, fg: Arc<ForgeGuard>) 
                 .put(handlers::groups::update_handler::<V>)
                 .delete(handlers::groups::delete_handler::<V>),
         )
+        .route(
+            "/api/v1/organizations/{org_id}/user-schema",
+            get(handlers::user_schema::get_user_schema_handler)
+                .put(handlers::user_schema::put_user_schema_handler),
+        )
         .with_state(state)
         .layer(axum::middleware::from_fn_with_state(fg, forgeguard_layer))
         .layer(TraceLayer::new_for_http())
@@ -451,8 +470,8 @@ mod tests {
         let mappings = cp_route_actions().expect("cp_route_actions must not fail");
         assert_eq!(
             mappings.len(),
-            15,
-            "expected 15 route mappings, got {}",
+            17,
+            "expected 17 route mappings, got {}",
             mappings.len()
         );
         // Confirm each action string round-trips correctly through QualifiedAction
@@ -472,6 +491,8 @@ mod tests {
             "cp:group:read",
             "cp:group:update",
             "cp:group:delete",
+            "cp:user-schema:read",
+            "cp:user-schema:update",
         ];
         for (mapping, expected) in mappings.iter().zip(expected_actions.iter()) {
             assert_eq!(
@@ -553,6 +574,16 @@ mod tests {
                 "/api/v1/organizations/org-123/groups/admin",
                 "cp:group:delete",
             ),
+            (
+                "GET",
+                "/api/v1/organizations/org-123/user-schema",
+                "cp:user-schema:read",
+            ),
+            (
+                "PUT",
+                "/api/v1/organizations/org-123/user-schema",
+                "cp:user-schema:update",
+            ),
         ];
 
         for &(method, path, expected_action) in cases {
@@ -575,15 +606,23 @@ mod tests {
 
         // Org-scoped route: resource id is the {org_id} path param, so the
         // owning org must be the resource's own id (closes the bypass).
-        let matched = matcher
-            .match_request("GET", "/api/v1/organizations/org-acme/groups")
-            .expect("org-scoped route matches");
-        let resource = matched.resource().expect("resource extracted");
-        assert_eq!(resource.id().as_str(), "org-acme");
-        assert_eq!(
-            resource.org_source(),
-            forgeguard_core::ResourceOrgSource::OwnId,
-        );
+        for path in [
+            "/api/v1/organizations/org-acme/groups",
+            "/api/v1/organizations/org-acme/user-schema",
+        ] {
+            let matched = matcher
+                .match_request("GET", path)
+                .unwrap_or_else(|| panic!("org-scoped route matches: {path}"));
+            let resource = matched
+                .resource()
+                .unwrap_or_else(|| panic!("resource extracted: {path}"));
+            assert_eq!(resource.id().as_str(), "org-acme", "path = {path}");
+            assert_eq!(
+                resource.org_source(),
+                forgeguard_core::ResourceOrgSource::OwnId,
+                "path = {path}",
+            );
+        }
 
         // Collection route: no org_id path param — stays RequestTenant.
         let collection = matcher

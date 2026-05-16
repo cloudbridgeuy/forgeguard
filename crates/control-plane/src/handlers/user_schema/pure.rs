@@ -1,9 +1,5 @@
 //! Functional core for the user-schema handlers — deterministic, I/O-free,
 //! unit-testable without an async runtime or AWS SDK.
-//!
-//! Transiently dead: clippy would flag these helpers until the imperative shells
-//! in Step 4 reference them.
-#![allow(dead_code)]
 
 use std::collections::BTreeMap;
 use std::str::FromStr;
