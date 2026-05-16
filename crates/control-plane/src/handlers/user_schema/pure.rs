@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 use std::str::FromStr;
 
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use forgeguard_authn_core::user_schema::{
@@ -16,6 +16,8 @@ use forgeguard_authn_core::user_schema::{
 };
 use forgeguard_authn_core::UserSchema;
 use serde::{Deserialize, Serialize};
+
+use crate::etag::Etag;
 
 /// Wire DTO for `PUT /api/v1/organizations/{org_id}/user-schema`.
 ///
@@ -117,6 +119,18 @@ struct InvalidPayloadBody {
     reason: &'static str,
     field: String,
     message: String,
+}
+
+/// Build an `ETag` response header from a stored etag value.
+///
+/// Returns an empty `HeaderMap` if the etag string cannot be parsed as a
+/// valid HTTP header value (should not occur for well-formed etags).
+pub(crate) fn etag_header(etag: &Etag) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    if let Ok(val) = etag.as_str().parse() {
+        headers.insert(axum::http::header::ETAG, val);
+    }
+    headers
 }
 
 /// Map a parse error to a `422 Unprocessable Entity` response with a stable

@@ -123,7 +123,6 @@ pub(crate) trait OrgStore: Send + Sync {
 
     /// Return the org's declared user attribute schema and its ETag, or
     /// `None` if no schema row has been written yet.
-    #[allow(dead_code)]
     async fn get_user_schema(&self, org_id: &OrganizationId) -> Result<Option<EtagedUserSchema>>;
 
     /// Persist a new user attribute schema for the org with optimistic-locking
@@ -139,7 +138,6 @@ pub(crate) trait OrgStore: Send + Sync {
     ///
     /// On success returns the stored `EtagedUserSchema` with a freshly
     /// computed etag.
-    #[allow(dead_code)]
     async fn put_user_schema(
         &self,
         org_id: &OrganizationId,
@@ -226,7 +224,6 @@ pub(crate) struct InMemoryOrgStore {
     /// Added in V2 to allow delete-conflict pre-checks to be exercised in
     /// InMemory tests. Production memberships live in DynamoDB only (Group E).
     memberships_to_groups: tokio::sync::RwLock<BTreeMap<(OrganizationId, String), Vec<String>>>,
-    #[allow(dead_code)]
     user_schemas: tokio::sync::RwLock<BTreeMap<OrganizationId, EtagedUserSchema>>,
 }
 

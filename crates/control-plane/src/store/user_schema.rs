@@ -13,7 +13,6 @@ pub(crate) struct EtagedUserSchema {
     etag: Etag,
 }
 
-#[allow(dead_code)]
 impl EtagedUserSchema {
     pub(crate) fn compute(schema: UserSchema) -> Self {
         let etag = super::compute_etag_json(&schema);
