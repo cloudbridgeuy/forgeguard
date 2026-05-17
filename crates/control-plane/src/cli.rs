@@ -27,6 +27,12 @@ pub(crate) struct Cli {
     #[arg(long, env = "FORGEGUARD_CP_DYNAMODB_TABLE")]
     pub dynamodb_table: Option<String>,
 
+    /// Saga ticket DynamoDB table name (required when --store=dynamodb).
+    ///
+    /// Backs the V3 POST /users inline saga and the (future) #103 drain worker.
+    #[arg(long, env = "FORGEGUARD_CP_SAGAS_TABLE")]
+    pub sagas_table: Option<String>,
+
     /// Address to listen on.
     #[arg(long, default_value = "127.0.0.1:3001", env = "FORGEGUARD_CP_LISTEN")]
     pub listen: SocketAddr,

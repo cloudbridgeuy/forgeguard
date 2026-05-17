@@ -19,6 +19,9 @@ async fn main() -> Result<(), Error> {
     let table_name = std::env::var("TABLE_NAME")
         .map_err(|_| Error::from("TABLE_NAME environment variable is required"))?;
 
+    let sagas_table_name = std::env::var("FORGEGUARD_CP_SAGAS_TABLE")
+        .map_err(|_| Error::from("FORGEGUARD_CP_SAGAS_TABLE environment variable is required"))?;
+
     let auth = match std::env::var("FORGEGUARD_CP_JWKS_URL") {
         Ok(jwks_url) => {
             let issuer = std::env::var("FORGEGUARD_CP_ISSUER").map_err(|_| {
@@ -40,11 +43,15 @@ async fn main() -> Result<(), Error> {
         }
     };
 
-    tracing::info!(%table_name, "building control-plane router");
+    tracing::info!(%table_name, %sagas_table_name, "building control-plane router");
 
-    let router = forgeguard_control_plane::app::dynamodb_router(&table_name, auth.as_ref())
-        .await
-        .map_err(|e| Error::from(format!("failed to build router: {e:#}")))?;
+    let router = forgeguard_control_plane::app::dynamodb_router(
+        &table_name,
+        &sagas_table_name,
+        auth.as_ref(),
+    )
+    .await
+    .map_err(|e| Error::from(format!("failed to build router: {e:#}")))?;
 
     lambda_http::run(router).await
 }

@@ -9,6 +9,7 @@
 
 pub(crate) mod groups;
 pub(crate) mod membership;
+pub(crate) mod saga;
 pub(crate) mod user_schema;
 
 use std::collections::{BTreeMap, HashMap};
@@ -261,18 +262,21 @@ fn from_item(item: &HashMap<String, AttributeValue>) -> Result<OrgRecord> {
 // Attribute helpers
 // ---------------------------------------------------------------------------
 
-fn get_s(item: &HashMap<String, AttributeValue>, key: &str) -> Result<String> {
+pub(crate) fn get_s(item: &HashMap<String, AttributeValue>, key: &str) -> Result<String> {
     item.get(key)
         .and_then(|v| v.as_s().ok())
         .cloned()
         .ok_or_else(|| Error::Store(format!("missing or non-string attribute: {key}")))
 }
 
-fn get_s_opt(item: &HashMap<String, AttributeValue>, key: &str) -> Option<String> {
+pub(crate) fn get_s_opt(item: &HashMap<String, AttributeValue>, key: &str) -> Option<String> {
     item.get(key).and_then(|v| v.as_s().ok()).cloned()
 }
 
-fn parse_datetime(item: &HashMap<String, AttributeValue>, key: &str) -> Result<DateTime<Utc>> {
+pub(crate) fn parse_datetime(
+    item: &HashMap<String, AttributeValue>,
+    key: &str,
+) -> Result<DateTime<Utc>> {
     let s = get_s(item, key)?;
     DateTime::parse_from_rfc3339(&s)
         .map(|dt| dt.with_timezone(&Utc))

@@ -26,6 +26,7 @@ use forgeguard_proxy_core::{MembershipResolver, PipelineConfig, PipelineConfigPa
 use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 
+use crate::dynamo_store::saga::DynamoSagaTicketStore;
 use crate::dynamo_store::DynamoOrgStore;
 use crate::handlers::AppState;
 use crate::membership_store::DynamoMembershipResolver;
@@ -77,6 +78,7 @@ impl AuthConfig {
 /// wires all routes. This is the entry point for Lambda deployments.
 pub async fn dynamodb_router(
     table_name: &str,
+    sagas_table_name: &str,
     auth: Option<&AuthConfig>,
 ) -> color_eyre::Result<Router> {
     let sdk_config = aws_config::defaults(aws_config::BehaviorVersion::latest())
@@ -97,7 +99,10 @@ pub async fn dynamodb_router(
     let vp = Arc::new(AwsVpClient::new(vp_sdk_client.clone()));
     let user_pool: Arc<dyn UserPoolClient> =
         Arc::new(AwsCognitoUserPoolClient::new(cognito_client));
-    let saga_tickets: Arc<dyn SagaTicketStore> = Arc::new(InMemorySagaTicketStore::new());
+    let saga_tickets: Arc<dyn SagaTicketStore> = Arc::new(DynamoSagaTicketStore::new(
+        dynamo_client.clone(),
+        sagas_table_name.to_string(),
+    ));
     let membership_resolver: Option<Arc<dyn MembershipResolver>> = if auth.is_some() {
         Some(Arc::new(DynamoMembershipResolver::new(
             dynamo_client.clone(),

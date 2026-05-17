@@ -2,6 +2,7 @@ import * as cdk from "aws-cdk-lib";
 import { DynamoDbStack } from "../lib/dynamodb-stack";
 import { LambdaStack } from "../lib/lambda-stack";
 import { CognitoStack } from "../lib/cognito-stack";
+import { SagasStack } from "../lib/sagas-stack";
 import { VerifiedPermissionsStack } from "../lib/verified-permissions-stack";
 
 type ForgeguardEnv = "dev" | "prod";
@@ -46,10 +47,16 @@ const vpStack = new VerifiedPermissionsStack(app, `forgeguard-${environment}-vp`
   appClientId: cognitoStack.appClient.userPoolClientId,
 });
 
+const sagasStack = new SagasStack(app, `forgeguard-${environment}-sagas`, {
+  env,
+  environment,
+});
+
 new LambdaStack(app, `forgeguard-${environment}-lambda`, {
   env,
   environment,
   table: dynamoStack.table,
+  sagasTable: sagasStack.sagasTable,
   userPoolId: cognitoStack.userPool.userPoolId,
   appClientId: cognitoStack.appClient.userPoolClientId,
   policyStoreId: vpStack.policyStoreId,

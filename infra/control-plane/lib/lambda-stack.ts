@@ -13,6 +13,7 @@ import { Construct } from "constructs";
 interface LambdaStackProps extends cdk.StackProps {
   environment: string;
   table: dynamodb.ITableV2;
+  sagasTable: dynamodb.ITableV2;
   userPoolId: string;
   appClientId: string;
   policyStoreId: string;
@@ -26,6 +27,7 @@ export class LambdaStack extends cdk.Stack {
     const {
       environment,
       table,
+      sagasTable,
       userPoolId,
       appClientId,
       policyStoreId,
@@ -51,6 +53,8 @@ export class LambdaStack extends cdk.Stack {
         FORGEGUARD_CP_ISSUER: `https://cognito-idp.${this.region}.amazonaws.com/${userPoolId}`,
         FORGEGUARD_CP_AUDIENCE: appClientId,
         FORGEGUARD_CP_POLICY_STORE_ID: policyStoreId,
+        FORGEGUARD_CP_SAGAS_TABLE: sagasTable.tableName,
+        FORGEGUARD_CP_COGNITO_POOL_ID: userPoolId,
       },
     });
 
@@ -59,6 +63,7 @@ export class LambdaStack extends cdk.Stack {
     });
 
     table.grantReadWriteData(controlPlane);
+    sagasTable.grantReadWriteData(controlPlane);
 
     controlPlane.addToRolePolicy(
       new iam.PolicyStatement({
@@ -77,6 +82,21 @@ export class LambdaStack extends cdk.Stack {
           "verifiedpermissions:DeletePolicy",
           "verifiedpermissions:ListPolicies",
           "verifiedpermissions:GetPolicy",
+        ],
+        resources: ["*"],
+      }),
+    );
+
+    // V3 POST /users inline saga calls Cognito to admin-create the user. Pool
+    // ARNs are per-org runtime values, so the actions cannot be scoped at CDK
+    // time; V5+ will scope them per-org via Cedar.
+    controlPlane.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: [
+          "cognito-idp:AdminCreateUser",
+          "cognito-idp:AdminDeleteUser",
+          "cognito-idp:AdminGetUser",
+          "cognito-idp:AddCustomAttributes",
         ],
         resources: ["*"],
       }),
