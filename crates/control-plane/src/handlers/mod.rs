@@ -14,7 +14,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::OrgConfig;
 use crate::etag::{self, Etag, IfNoneMatchResult, ResolvedIfMatch};
-use crate::store::{OrgRecord, OrgStore};
+use crate::store::{OrgRecord, OrgStore, SagaTicketStore};
+use crate::user_pool::UserPoolClient;
 
 /// Shared router state for the control-plane Axum app.
 ///
@@ -22,9 +23,16 @@ use crate::store::{OrgRecord, OrgStore};
 /// the V3 Active write path. Non-group handlers extract
 /// `State<Arc<dyn OrgStore>>` via the `FromRef` impl below; group handlers
 /// extract the full [`AppState<V>`].
+///
+/// V3 adds `user_pool` and `saga_tickets` for the inline `POST /users` saga
+/// driver. The trait objects let production wire `AwsCognitoUserPoolClient` +
+/// `DynamoSagaTicketStore` while tests wire the in-memory equivalents.
+#[allow(dead_code)]
 pub(crate) struct AppState<V> {
     pub(crate) store: Arc<dyn OrgStore>,
     pub(crate) vp: Arc<V>,
+    pub(crate) user_pool: Arc<dyn UserPoolClient>,
+    pub(crate) saga_tickets: Arc<dyn SagaTicketStore>,
 }
 
 impl<V> Clone for AppState<V> {
@@ -32,6 +40,8 @@ impl<V> Clone for AppState<V> {
         Self {
             store: Arc::clone(&self.store),
             vp: Arc::clone(&self.vp),
+            user_pool: Arc::clone(&self.user_pool),
+            saga_tickets: Arc::clone(&self.saga_tickets),
         }
     }
 }
@@ -39,6 +49,18 @@ impl<V> Clone for AppState<V> {
 impl<V> FromRef<AppState<V>> for Arc<dyn OrgStore> {
     fn from_ref(input: &AppState<V>) -> Arc<dyn OrgStore> {
         Arc::clone(&input.store)
+    }
+}
+
+impl<V> FromRef<AppState<V>> for Arc<dyn UserPoolClient> {
+    fn from_ref(input: &AppState<V>) -> Arc<dyn UserPoolClient> {
+        Arc::clone(&input.user_pool)
+    }
+}
+
+impl<V> FromRef<AppState<V>> for Arc<dyn SagaTicketStore> {
+    fn from_ref(input: &AppState<V>) -> Arc<dyn SagaTicketStore> {
+        Arc::clone(&input.saga_tickets)
     }
 }
 
@@ -503,7 +525,10 @@ pub(super) mod test_support {
     };
     use forgeguard_proxy_core::{PipelineConfig, PipelineConfigParams};
 
-    use crate::store::{build_org_store, InMemoryOrgStore, OrgStore};
+    use crate::store::{
+        build_org_store, InMemoryOrgStore, InMemorySagaTicketStore, OrgStore, SagaTicketStore,
+    };
+    use crate::user_pool::{InMemoryUserPoolClient, UserPoolClient};
     use crate::vp_client::stub::{happy_stub, StubVpClient};
 
     /// Test-only handler that probes whether a group name is declared for an org.
@@ -593,7 +618,14 @@ pub(super) mod test_support {
             Arc::new(StaticPolicyEngine::new(PolicyDecision::Allow));
         let fg = Arc::new(ForgeGuard::new(config, chain, engine));
 
-        let state = super::AppState { store, vp };
+        let user_pool: Arc<dyn UserPoolClient> = Arc::new(InMemoryUserPoolClient::new());
+        let saga_tickets: Arc<dyn SagaTicketStore> = Arc::new(InMemorySagaTicketStore::new());
+        let state = super::AppState {
+            store,
+            vp,
+            user_pool,
+            saga_tickets,
+        };
         Router::new()
             .route(
                 "/api/v1/organizations",

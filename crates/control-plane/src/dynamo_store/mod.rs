@@ -8,6 +8,7 @@
 //! of truth consumed by both CDK (TypeScript) and Rust.
 
 pub(crate) mod groups;
+pub(crate) mod membership;
 pub(crate) mod user_schema;
 
 use std::collections::{BTreeMap, HashMap};
@@ -890,11 +891,8 @@ impl OrgStore for DynamoOrgStore {
         }
     }
 
-    async fn put_membership_row(&self, _params: PutMembershipRowParams<'_>) -> Result<()> {
-        // Filled in by V3 sub-commit (b) — real DDB PutItem on the membership row.
-        Err(Error::Store(
-            "DynamoOrgStore::put_membership_row not yet implemented".to_owned(),
-        ))
+    async fn put_membership_row(&self, params: PutMembershipRowParams<'_>) -> Result<()> {
+        membership::put_membership_row(self, params).await
     }
 }
 

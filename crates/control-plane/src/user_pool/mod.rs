@@ -3,14 +3,22 @@
 //! ## Module structure
 //!
 //! - `mod` (this file) — `UserPoolClient` trait.
-//! - `aws` — production impl `AwsCognitoUserPoolClient` (V3 sub-commit (b)).
-//! - `memory` — in-process `InMemoryUserPoolClient` for tests
-//!   (V3 sub-commit (b)).
+//! - `aws` — production impl `AwsCognitoUserPoolClient`.
+//! - `in_memory` — in-process `InMemoryUserPoolClient` for tests with
+//!   `arm_*_once` failure injection knobs.
 //!
 //! The trait returns the pure [`forgeguard_authn_core::UserPoolError`] so the
 //! saga driver can pattern-match outcomes without ever depending on the AWS
 //! SDK directly. Method names mirror the underlying Cognito API verbs
 //! (`AdminCreateUser`, `AdminDeleteUser`, `AdminGetUser`, `UpdateUserPool`).
+
+pub(crate) mod aws;
+pub(crate) mod in_memory;
+
+#[allow(unused_imports)]
+pub(crate) use aws::AwsCognitoUserPoolClient;
+#[allow(unused_imports)]
+pub(crate) use in_memory::InMemoryUserPoolClient;
 
 use async_trait::async_trait;
 use forgeguard_authn_core::user_pool::{CreateUserParams, PoolId, UpdatePoolParams, UserPoolError};

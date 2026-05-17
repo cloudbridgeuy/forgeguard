@@ -30,7 +30,8 @@ use crate::dynamo_store::DynamoOrgStore;
 use crate::handlers::AppState;
 use crate::membership_store::DynamoMembershipResolver;
 use crate::signing_key_store::DynamoSigningKeyStore;
-use crate::store::{self, OrgStore};
+use crate::store::{self, InMemorySagaTicketStore, OrgStore, SagaTicketStore};
+use crate::user_pool::{AwsCognitoUserPoolClient, InMemoryUserPoolClient, UserPoolClient};
 use crate::vp_client::aws::AwsVpClient;
 use crate::vp_client::VpClient;
 
@@ -88,11 +89,15 @@ pub async fn dynamodb_router(
     );
     let dynamo_client = aws_sdk_dynamodb::Client::new(&sdk_config);
     let vp_sdk_client = aws_sdk_verifiedpermissions::Client::new(&sdk_config);
+    let cognito_client = aws_sdk_cognitoidentityprovider::Client::new(&sdk_config);
     let s: Arc<dyn OrgStore> = Arc::new(DynamoOrgStore::new(
         dynamo_client.clone(),
         table_name.to_string(),
     ));
     let vp = Arc::new(AwsVpClient::new(vp_sdk_client.clone()));
+    let user_pool: Arc<dyn UserPoolClient> =
+        Arc::new(AwsCognitoUserPoolClient::new(cognito_client));
+    let saga_tickets: Arc<dyn SagaTicketStore> = Arc::new(InMemorySagaTicketStore::new());
     let membership_resolver: Option<Arc<dyn MembershipResolver>> = if auth.is_some() {
         Some(Arc::new(DynamoMembershipResolver::new(
             dynamo_client.clone(),
@@ -113,7 +118,15 @@ pub async fn dynamodb_router(
         Some(vp_sdk_client),
         membership_resolver,
     )?;
-    Ok(build_router(AppState { store: s, vp }, fg))
+    Ok(build_router(
+        AppState {
+            store: s,
+            vp,
+            user_pool,
+            saga_tickets,
+        },
+        fg,
+    ))
 }
 
 /// Build a control-plane `Router` backed by an in-memory JSON config file.
@@ -135,10 +148,22 @@ pub async fn memory_router(
     let vp = Arc::new(AwsVpClient::new(aws_sdk_verifiedpermissions::Client::new(
         &sdk_config,
     )));
+    // Memory mode skips the AWS user-pool round trip — InMemoryUserPoolClient
+    // keeps `POST /users` exercisable end-to-end against a dev JSON config.
+    let user_pool: Arc<dyn UserPoolClient> = Arc::new(InMemoryUserPoolClient::new());
+    let saga_tickets: Arc<dyn SagaTicketStore> = Arc::new(InMemorySagaTicketStore::new());
     // Ed25519 resolver requires DynamoDB for key lookup; memory mode has no DynamoDB client.
     // VP engine is also unavailable in memory mode — StaticPolicyEngine(Allow) is used instead.
     let fg = build_forgeguard(auth, None, None, None)?;
-    Ok(build_router(AppState { store: s, vp }, fg))
+    Ok(build_router(
+        AppState {
+            store: s,
+            vp,
+            user_pool,
+            saga_tickets,
+        },
+        fg,
+    ))
 }
 
 /// Build an anonymous public route from method and path strings.

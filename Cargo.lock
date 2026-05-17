@@ -1874,6 +1874,7 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "aws-config",
+ "aws-sdk-cognitoidentityprovider",
  "aws-sdk-dynamodb",
  "aws-sdk-verifiedpermissions",
  "axum",
@@ -1901,6 +1902,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "ulid",
  "url",
  "xxhash-rust",
 ]

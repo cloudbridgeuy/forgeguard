@@ -42,8 +42,10 @@ use crate::handlers::test_support::TEST_API_KEY;
 use crate::handlers::AppState;
 use crate::signing_key::{GenerateKeyResult, SigningKeyEntry};
 use crate::store::{
-    build_org_store, EtagedGroup, EtagedUserSchema, OrgRecord, OrgStore, PutMembershipRowParams,
+    build_org_store, EtagedGroup, EtagedUserSchema, InMemorySagaTicketStore, OrgRecord, OrgStore,
+    PutMembershipRowParams, SagaTicketStore,
 };
+use crate::user_pool::{InMemoryUserPoolClient, UserPoolClient};
 use crate::vp_client::stub::StubVpClient;
 
 /// Process-wide async lock for tests that read/assert against the global
@@ -254,7 +256,14 @@ pub(super) fn test_app_for_store(store: Arc<dyn OrgStore>, vp: Arc<StubVpClient>
     let engine: Arc<dyn PolicyEngine> = Arc::new(StaticPolicyEngine::new(PolicyDecision::Allow));
     let fg = Arc::new(ForgeGuard::new(config, chain, engine));
 
-    let state = AppState { store, vp };
+    let user_pool: Arc<dyn UserPoolClient> = Arc::new(InMemoryUserPoolClient::new());
+    let saga_tickets: Arc<dyn SagaTicketStore> = Arc::new(InMemorySagaTicketStore::new());
+    let state = AppState {
+        store,
+        vp,
+        user_pool,
+        saga_tickets,
+    };
     Router::new()
         .route(
             "/api/v1/organizations/{org_id}/groups",

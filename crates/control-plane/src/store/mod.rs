@@ -1,8 +1,11 @@
 pub(crate) mod groups;
+pub(crate) mod in_memory_saga;
 pub(crate) mod saga;
 pub(crate) mod user_schema;
 
 pub(crate) use groups::EtagedGroup;
+#[allow(unused_imports)]
+pub(crate) use in_memory_saga::InMemorySagaTicketStore;
 #[allow(unused_imports)]
 pub(crate) use saga::{SagaStageUpdate, SagaTicketStore};
 pub(crate) use user_schema::EtagedUserSchema;
@@ -159,7 +162,7 @@ pub(crate) trait OrgStore: Send + Sync {
     /// [`Error::Conflict`] rather than silently overwriting an existing row.
     /// The V3 saga driver handles a duplicate by treating it as "stage S3 done"
     /// only after re-reading the row to confirm it matches the intended payload.
-    #[allow(dead_code)] // consumed by the saga driver in sub-commit (d)
+    #[allow(dead_code)]
     async fn put_membership_row(&self, params: PutMembershipRowParams<'_>) -> Result<()>;
 }
 
@@ -170,7 +173,7 @@ pub(crate) trait OrgStore: Send + Sync {
 /// without churning the trait signature. Borrows the row so the saga driver
 /// keeps ownership for downstream response building.
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // consumed by the saga driver in sub-commit (d)
+#[allow(dead_code)]
 pub(crate) struct PutMembershipRowParams<'a> {
     pub(crate) row: &'a MembershipRow,
 }
