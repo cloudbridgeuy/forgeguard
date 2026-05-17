@@ -30,17 +30,6 @@ dependencies = [
 
 [[package]]
 name = "ahash"
-version = "0.7.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "891477e0c6a8957309ee5c45a6368af3ae14bb510732d2684ffa19af310920f9"
-dependencies = [
- "getrandom 0.2.17",
- "once_cell",
- "version_check",
-]
-
-[[package]]
-name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5a15f179cd60c4584b8a8c596927aadc462e27f2ca70c04e0071964a73ba7a75"
@@ -1800,6 +1789,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+ "ulid",
 ]
 
 [[package]]
@@ -2249,9 +2239,6 @@ name = "hashbrown"
 version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a9ee70c43aaf417c914396645a0fa852624801b24ebb7ae78fe8272889ac888"
-dependencies = [
- "ahash 0.7.8",
-]
 
 [[package]]
 name = "hashbrown"
@@ -2278,6 +2265,11 @@ name = "hashbrown"
 version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4f467dd6dccf739c208452f8014c75c18bb8301b050ad1cfb27153803edb0f51"
+dependencies = [
+ "allocator-api2",
+ "equivalent",
+ "foldhash 0.2.0",
+]
 
 [[package]]
 name = "heck"
@@ -3291,7 +3283,7 @@ version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c59d8c4c939a3a193a3da0e061aa7acf7432431f92ee62a26f5a9e5167a0ade2"
 dependencies = [
- "ahash 0.8.12",
+ "ahash",
  "async-trait",
  "blake2",
  "bstr",
@@ -3328,7 +3320,7 @@ version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "08973c4853cef4c682f7a592907e81a32dcad69476c4846e5de079f16448b177"
 dependencies = [
- "ahash 0.8.12",
+ "ahash",
  "async-trait",
  "brotli",
  "bstr",
@@ -3413,7 +3405,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "91bb5030596a3d442c0866ac68afe29c14ba558e77c726dcdf7016b0dbb359d9"
 dependencies = [
  "arrayvec",
- "hashbrown 0.12.3",
+ "hashbrown 0.17.0",
  "parking_lot",
  "rand 0.8.5",
 ]
@@ -5007,6 +4999,17 @@ name = "typenum"
 version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "562d481066bde0658276a35467c4af00bdc6ee726305698a55b86e61d7ad82bb"
+
+[[package]]
+name = "ulid"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "470dbf6591da1b39d43c14523b2b469c86879a53e8b758c8e090a470fe7b1fbe"
+dependencies = [
+ "rand 0.9.3",
+ "serde",
+ "web-time",
+]
 
 [[package]]
 name = "unicase"

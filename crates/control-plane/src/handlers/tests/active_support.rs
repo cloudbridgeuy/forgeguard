@@ -41,7 +41,9 @@ use crate::etag::Etag;
 use crate::handlers::test_support::TEST_API_KEY;
 use crate::handlers::AppState;
 use crate::signing_key::{GenerateKeyResult, SigningKeyEntry};
-use crate::store::{build_org_store, EtagedGroup, EtagedUserSchema, OrgRecord, OrgStore};
+use crate::store::{
+    build_org_store, EtagedGroup, EtagedUserSchema, OrgRecord, OrgStore, PutMembershipRowParams,
+};
 use crate::vp_client::stub::StubVpClient;
 
 /// Process-wide async lock for tests that read/assert against the global
@@ -199,6 +201,9 @@ impl OrgStore for FailingStore {
         self.inner
             .put_user_schema(org_id, schema, expected_etag)
             .await
+    }
+    async fn put_membership_row(&self, params: PutMembershipRowParams<'_>) -> Result<()> {
+        self.inner.put_membership_row(params).await
     }
 }
 

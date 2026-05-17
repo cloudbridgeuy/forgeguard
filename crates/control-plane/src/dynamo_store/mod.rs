@@ -27,6 +27,7 @@ use crate::handlers::groups::pure::compute_group_etag;
 use crate::signing_key::{GenerateKeyResult, SigningKeyEntry};
 use crate::store::{
     generate_key_material, ConfiguredConfig, EtagedGroup, EtagedUserSchema, OrgRecord, OrgStore,
+    PutMembershipRowParams,
 };
 
 // ---------------------------------------------------------------------------
@@ -887,6 +888,13 @@ impl OrgStore for DynamoOrgStore {
             },
             Err(sdk_err) => Err(map_sdk_error(sdk_err)),
         }
+    }
+
+    async fn put_membership_row(&self, _params: PutMembershipRowParams<'_>) -> Result<()> {
+        // Filled in by V3 sub-commit (b) — real DDB PutItem on the membership row.
+        Err(Error::Store(
+            "DynamoOrgStore::put_membership_row not yet implemented".to_owned(),
+        ))
     }
 }
 
