@@ -4,9 +4,7 @@ pub(crate) mod saga;
 pub(crate) mod user_schema;
 
 pub(crate) use groups::EtagedGroup;
-#[allow(unused_imports)]
 pub(crate) use in_memory_saga::InMemorySagaTicketStore;
-#[allow(unused_imports)]
 pub(crate) use saga::{SagaStageUpdate, SagaTicketStore};
 pub(crate) use user_schema::EtagedUserSchema;
 
@@ -120,7 +118,6 @@ pub(crate) trait OrgStore: Send + Sync {
     /// Return `true` iff `name` is a declared (written) group for the org.
     ///
     /// Reserved for issue #100's POST /users membership validator.
-    #[allow(dead_code)]
     async fn is_declared_group(&self, org_id: &OrganizationId, name: &str) -> Result<bool>;
 
     // -----------------------------------------------------------------------
@@ -162,7 +159,6 @@ pub(crate) trait OrgStore: Send + Sync {
     /// [`Error::Conflict`] rather than silently overwriting an existing row.
     /// The V3 saga driver handles a duplicate by treating it as "stage S3 done"
     /// only after re-reading the row to confirm it matches the intended payload.
-    #[allow(dead_code)]
     async fn put_membership_row(&self, params: PutMembershipRowParams<'_>) -> Result<()>;
 }
 
@@ -173,7 +169,6 @@ pub(crate) trait OrgStore: Send + Sync {
 /// without churning the trait signature. Borrows the row so the saga driver
 /// keeps ownership for downstream response building.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub(crate) struct PutMembershipRowParams<'a> {
     pub(crate) row: &'a MembershipRow,
 }
@@ -261,12 +256,8 @@ pub(crate) struct InMemoryOrgStore {
     ///
     /// V3 introduces this for `put_membership_row`. The legacy
     /// `memberships_to_groups` is kept for V2 delete-conflict tests; V3 writes
-    /// keep both maps in sync so existing tests are unaffected.
-    ///
-    /// Read by `get_membership_row` (test probe) and by the V3 saga driver
-    /// in sub-commit (d); allow(dead_code) keeps sub-commit (a) building
-    /// before either consumer lands.
-    #[allow(dead_code)]
+    /// keep both maps in sync so existing tests are unaffected. Read by the
+    /// `get_membership_row` test probe and written by `put_membership_row`.
     membership_rows: tokio::sync::RwLock<BTreeMap<(OrganizationId, UserId), MembershipRow>>,
 }
 
@@ -625,7 +616,6 @@ impl InMemoryOrgStore {
     /// `POST /users` integration tests to assert S3's effect on the store
     /// without paying the cost of a `Box<dyn Any>` downcast.
     #[cfg(test)]
-    #[allow(dead_code)]
     pub(crate) async fn get_membership_row(
         &self,
         org_id: &OrganizationId,

@@ -17,37 +17,40 @@ use crate::user_pool::UserPoolClient;
 
 /// Test stub that emulates the `UserPoolClient` surface in-process.
 #[derive(Debug, Default)]
-#[allow(dead_code)]
 pub(crate) struct InMemoryUserPoolClient {
     users: RwLock<BTreeMap<(PoolId, String), UserId>>,
     fail_create: Mutex<Option<UserPoolError>>,
     fail_delete: Mutex<Option<UserPoolError>>,
     fail_get: Mutex<Option<UserPoolError>>,
+    #[allow(dead_code)] // wired in V4 schema-apply tests
     fail_update_pool: Mutex<Option<UserPoolError>>,
 }
 
-#[allow(dead_code)]
 impl InMemoryUserPoolClient {
     pub(crate) fn new() -> Self {
         Self::default()
     }
 
     /// Arm a one-shot failure for the next `admin_create_user` call.
+    #[cfg(test)]
     pub(crate) fn arm_admin_create_user_once(&self, err: UserPoolError) {
         Self::arm_slot(&self.fail_create, err);
     }
 
     /// Arm a one-shot failure for the next `admin_delete_user` call.
+    #[cfg(test)]
     pub(crate) fn arm_admin_delete_user_once(&self, err: UserPoolError) {
         Self::arm_slot(&self.fail_delete, err);
     }
 
     /// Arm a one-shot failure for the next `admin_get_user` call.
+    #[allow(dead_code)] // wired in V4 schema-apply tests
     pub(crate) fn arm_admin_get_user_once(&self, err: UserPoolError) {
         Self::arm_slot(&self.fail_get, err);
     }
 
     /// Arm a one-shot failure for the next `update_user_pool` call.
+    #[allow(dead_code)] // wired in V4 schema-apply tests
     pub(crate) fn arm_update_user_pool_once(&self, err: UserPoolError) {
         Self::arm_slot(&self.fail_update_pool, err);
     }

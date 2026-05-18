@@ -15,9 +15,7 @@
 pub(crate) mod aws;
 pub(crate) mod in_memory;
 
-#[allow(unused_imports)]
 pub(crate) use aws::AwsCognitoUserPoolClient;
-#[allow(unused_imports)]
 pub(crate) use in_memory::InMemoryUserPoolClient;
 
 use async_trait::async_trait;
@@ -30,7 +28,6 @@ use forgeguard_core::UserId;
 /// - `aws::AwsCognitoUserPoolClient` — production
 /// - `memory::InMemoryUserPoolClient` — tests (with `arm_*` knobs)
 #[async_trait]
-#[allow(dead_code)] // consumers added in sub-commits (b)/(d)
 pub(crate) trait UserPoolClient: Send + Sync {
     /// Stage S2 — AdminCreateUser with `MessageAction=SUPPRESS`.
     ///
@@ -51,11 +48,13 @@ pub(crate) trait UserPoolClient: Send + Sync {
     /// Returns [`UserPoolError::UserNotFound`] when no user matches. Used by
     /// the saga driver to recover the sub of a partially-created user when a
     /// retry observes `UsernameExists`.
+    #[allow(dead_code)] // wired in V4 schema-apply retry path
     async fn admin_get_user(&self, pool_id: &PoolId, email: &str) -> Result<UserId, UserPoolError>;
 
     /// Schema sync — UpdateUserPool with the rebuilt attribute list.
     ///
     /// V3 surfaces [`UserPoolError::AttributeAlreadyExists`] as a typed error;
     /// V4 will tolerate it as success in the schema-apply path.
+    #[allow(dead_code)] // wired in V4 schema-apply handler
     async fn update_user_pool(&self, params: UpdatePoolParams) -> Result<(), UserPoolError>;
 }

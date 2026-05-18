@@ -26,13 +26,11 @@ use crate::user_pool::UserPoolClient;
 
 /// Production `UserPoolClient` backed by AWS Cognito.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub(crate) struct AwsCognitoUserPoolClient {
     client: aws_sdk_cognitoidentityprovider::Client,
 }
 
 impl AwsCognitoUserPoolClient {
-    #[allow(dead_code)]
     pub(crate) fn new(client: aws_sdk_cognitoidentityprovider::Client) -> Self {
         Self { client }
     }
@@ -200,6 +198,7 @@ fn map_admin_delete_error(
     }
 }
 
+#[allow(dead_code)] // wired in V4 schema-apply retry path
 fn map_admin_get_error(
     sdk_err: aws_sdk_cognitoidentityprovider::error::SdkError<AdminGetUserError>,
 ) -> UserPoolError {

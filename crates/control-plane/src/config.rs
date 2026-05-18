@@ -67,7 +67,6 @@ impl OrgConfig {
         self.vp_store_id.as_deref()
     }
 
-    #[cfg(test)]
     pub(crate) fn cognito_user_pool_id(&self) -> Option<&str> {
         self.cognito_user_pool_id.as_deref()
     }

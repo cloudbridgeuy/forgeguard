@@ -115,6 +115,12 @@ pub enum SagaStage {
     /// S3 failed transiently; C2 (AdminDeleteUser) about to run.
     #[serde(rename = "compensating")]
     Compensating,
+    /// Terminal: S2 rejected the request before any side effect (e.g.
+    /// `UsernameExists` or a `Permanent` Cognito error), or C2 succeeded
+    /// in rolling back an S3 transient failure. Either way no compensation
+    /// is owed and the ticket is permanently failed.
+    #[serde(rename = "failed")]
+    Failed,
     /// Terminal: C2 also failed.
     #[serde(rename = "compensation_failed")]
     CompensationFailed,
@@ -122,7 +128,7 @@ pub enum SagaStage {
 
 impl SagaStage {
     pub fn is_terminal(self) -> bool {
-        matches!(self, Self::Done | Self::CompensationFailed)
+        matches!(self, Self::Done | Self::Failed | Self::CompensationFailed)
     }
 }
 
@@ -134,6 +140,7 @@ impl fmt::Display for SagaStage {
             Self::S3 => "S3",
             Self::Done => "done",
             Self::Compensating => "compensating",
+            Self::Failed => "failed",
             Self::CompensationFailed => "compensation_failed",
         };
         f.write_str(s)
@@ -368,6 +375,7 @@ mod tests {
             (SagaStage::S3, "\"S3\""),
             (SagaStage::Done, "\"done\""),
             (SagaStage::Compensating, "\"compensating\""),
+            (SagaStage::Failed, "\"failed\""),
             (SagaStage::CompensationFailed, "\"compensation_failed\""),
         ] {
             let encoded = serde_json::to_string(&stage).unwrap();
@@ -396,6 +404,7 @@ mod tests {
             assert!(!s.is_terminal(), "{s:?} should be non-terminal");
         }
         assert!(SagaStage::Done.is_terminal());
+        assert!(SagaStage::Failed.is_terminal());
         assert!(SagaStage::CompensationFailed.is_terminal());
     }
 

@@ -16,7 +16,6 @@ use crate::error::Result;
 /// call. Every field is optional so callers fill in whichever change at the
 /// transition they are recording.
 #[derive(Debug, Clone, Default)]
-#[allow(dead_code)] // consumed by the saga driver in sub-commit (d)
 pub(crate) struct SagaStageUpdate {
     /// Populated when S2 succeeds — Cognito sub.
     pub(crate) sub: Option<UserId>,
@@ -32,7 +31,6 @@ pub(crate) struct SagaStageUpdate {
 /// - `dynamo_store::saga::DynamoSagaTicketStore` — production
 /// - `store::in_memory_saga::InMemorySagaTicketStore` — tests
 #[async_trait]
-#[allow(dead_code)] // consumers added in sub-commits (b)/(c)/(d)
 pub(crate) trait SagaTicketStore: Send + Sync {
     /// Fetch a saga ticket by id, or `None` if no row exists.
     async fn get_saga_ticket(&self, ticket_id: &TicketId) -> Result<Option<SagaTicket>>;

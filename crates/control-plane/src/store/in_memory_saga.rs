@@ -26,12 +26,10 @@ use crate::store::saga::{SagaStageUpdate, SagaTicketStore};
 
 /// Test stub that keeps saga tickets in a `RwLock<BTreeMap>`.
 #[derive(Debug, Default)]
-#[allow(dead_code)]
 pub(crate) struct InMemorySagaTicketStore {
     tickets: RwLock<BTreeMap<TicketId, SagaTicket>>,
 }
 
-#[allow(dead_code)]
 impl InMemorySagaTicketStore {
     pub(crate) fn new() -> Self {
         Self::default()

@@ -123,6 +123,29 @@ pub(crate) fn record_group_rollback_failed(stage_label: &'static str) {
     tracing::Span::current().record("rollback_stage", stage_label);
 }
 
+/// Saga-compensation-failure counter for the `POST /users` inline saga.
+///
+/// Bumped exactly on the Path-3 outcome — S3 failed transiently and the C2
+/// `AdminDeleteUser` compensation that should have undone S2 ALSO failed,
+/// leaving Cognito and DDB inconsistent. No labels (cardinality kept low):
+/// the alert lives in the SLO rule, not the dashboard.
+pub(crate) static SAGA_COMPENSATION_FAILED_TOTAL: LazyLock<prometheus::IntCounter> = LazyLock::new(
+    || {
+        prometheus::register_int_counter!(
+            "forgeguard_cp_saga_compensation_failed_total",
+            "POST /users saga compensation failures. Each increment means a Cognito user may exist without a membership row and requires operator intervention."
+        )
+        .unwrap_or_else(|e| {
+            panic!("failed to register forgeguard_cp_saga_compensation_failed_total: {e}")
+        })
+    },
+);
+
+/// Increment the saga-compensation-failure counter.
+pub(crate) fn record_saga_compensation_failed() {
+    SAGA_COMPENSATION_FAILED_TOTAL.inc();
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {

@@ -176,6 +176,7 @@ fn parse_stage(raw: &str) -> Result<SagaStage> {
         "S3" => Ok(SagaStage::S3),
         "done" => Ok(SagaStage::Done),
         "compensating" => Ok(SagaStage::Compensating),
+        "failed" => Ok(SagaStage::Failed),
         "compensation_failed" => Ok(SagaStage::CompensationFailed),
         other => Err(Error::Store(format!("invalid saga stage: {other}"))),
     }

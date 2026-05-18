@@ -202,6 +202,7 @@ const API_ROUTES: &[(&str, &str)] = &[
     ("DELETE", "/api/v1/organizations/{org_id}/groups/{name}"),
     ("GET", "/api/v1/organizations/{org_id}/user-schema"),
     ("PUT", "/api/v1/organizations/{org_id}/user-schema"),
+    ("POST", "/api/v1/organizations/{org_id}/users"),
 ];
 
 /// Route-to-action mappings for all control-plane API routes.
@@ -307,6 +308,12 @@ fn cp_route_actions() -> forgeguard_http::Result<Vec<RouteMapping>> {
             "PUT",
             "/api/v1/organizations/{org_id}/user-schema",
             "cp:user-schema:update",
+            Some("org_id"),
+        ),
+        (
+            "POST",
+            "/api/v1/organizations/{org_id}/users",
+            "cp:user:create",
             Some("org_id"),
         ),
     ];
@@ -481,6 +488,10 @@ fn build_router<V: VpClient + 'static>(state: AppState<V>, fg: Arc<ForgeGuard>) 
             get(handlers::user_schema::get_user_schema_handler)
                 .put(handlers::user_schema::put_user_schema_handler),
         )
+        .route(
+            "/api/v1/organizations/{org_id}/users",
+            post(handlers::users::create_handler::<V>),
+        )
         .with_state(state)
         .layer(axum::middleware::from_fn_with_state(fg, forgeguard_layer))
         .layer(TraceLayer::new_for_http())
@@ -500,8 +511,8 @@ mod tests {
         let mappings = cp_route_actions().expect("cp_route_actions must not fail");
         assert_eq!(
             mappings.len(),
-            17,
-            "expected 17 route mappings, got {}",
+            18,
+            "expected 18 route mappings, got {}",
             mappings.len()
         );
         // Confirm each action string round-trips correctly through QualifiedAction
@@ -523,6 +534,7 @@ mod tests {
             "cp:group:delete",
             "cp:user-schema:read",
             "cp:user-schema:update",
+            "cp:user:create",
         ];
         for (mapping, expected) in mappings.iter().zip(expected_actions.iter()) {
             assert_eq!(
@@ -613,6 +625,11 @@ mod tests {
                 "PUT",
                 "/api/v1/organizations/org-123/user-schema",
                 "cp:user-schema:update",
+            ),
+            (
+                "POST",
+                "/api/v1/organizations/org-123/users",
+                "cp:user:create",
             ),
         ];
 

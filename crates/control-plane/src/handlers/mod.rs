@@ -1,6 +1,7 @@
 pub(crate) mod groups;
 mod keys;
 pub(crate) mod user_schema;
+pub(crate) mod users;
 
 use std::sync::Arc;
 
@@ -27,7 +28,6 @@ use crate::user_pool::UserPoolClient;
 /// V3 adds `user_pool` and `saga_tickets` for the inline `POST /users` saga
 /// driver. The trait objects let production wire `AwsCognitoUserPoolClient` +
 /// `DynamoSagaTicketStore` while tests wire the in-memory equivalents.
-#[allow(dead_code)]
 pub(crate) struct AppState<V> {
     pub(crate) store: Arc<dyn OrgStore>,
     pub(crate) vp: Arc<V>,
@@ -669,6 +669,10 @@ pub(super) mod test_support {
                 "/api/v1/organizations/{org_id}/user-schema",
                 axum::routing::get(super::user_schema::get_user_schema_handler)
                     .put(super::user_schema::put_user_schema_handler),
+            )
+            .route(
+                "/api/v1/organizations/{org_id}/users",
+                axum::routing::post(super::users::create_handler::<StubVpClient>),
             )
             .route("/metrics", axum::routing::get(super::metrics_handler))
             // Test-only probe route — never compiled into production binaries.
