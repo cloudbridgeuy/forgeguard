@@ -5,8 +5,11 @@
 //! `DynamoTarget`, a pure ADT that parses the CLI flag selecting between
 //! prod and local DynamoDB.
 //!
-//! User provisioning lives in issue #100 and is not the seed's
-//! responsibility — every seeded org lands as `OrgStatus::Draft`.
+//! Each org also declares a `user_schema` and a set of `user` entries
+//! (issue #100 V6); the seed provisions those users in Cognito and writes
+//! their membership rows. Every seeded org still lands as `OrgStatus::Draft`.
+
+use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
@@ -23,11 +26,17 @@ impl SeedConfig {
     }
 }
 
-/// An organization to seed into DynamoDB along with its RBAC groups.
+/// An organization to seed into DynamoDB along with its RBAC groups,
+/// user schema, and seeded users.
 #[derive(Deserialize, Debug)]
 pub(crate) struct SeedOrg {
     org_id: String,
     name: String,
+    cognito_user_pool_id: String,
+    #[serde(default)]
+    user_schema: SeedUserSchema,
+    #[serde(default, rename = "user")]
+    users: Vec<SeedUser>,
     #[serde(default, rename = "group")]
     groups: Vec<SeedGroup>,
 }
@@ -41,8 +50,86 @@ impl SeedOrg {
         &self.name
     }
 
+    /// Per-org Cognito user pool id (e.g. `us-east-2_AcmeXXXXX`). A public
+    /// identifier — stored in `seed.toml`, not 1Password (V6 §2).
+    pub(crate) fn cognito_user_pool_id(&self) -> &str {
+        &self.cognito_user_pool_id
+    }
+
+    pub(crate) fn user_schema(&self) -> &SeedUserSchema {
+        &self.user_schema
+    }
+
+    pub(crate) fn users(&self) -> &[SeedUser] {
+        &self.users
+    }
+
     pub(crate) fn groups(&self) -> &[SeedGroup] {
         &self.groups
+    }
+}
+
+/// Per-org user-attribute schema declaration.
+///
+/// Mirrors `forgeguard_authn_core::user_schema::UserSchema` (standard +
+/// custom attribute maps). The `seed::pure::seed_user_schema_to_domain`
+/// adapter is the only way to turn this into the domain `UserSchema`.
+#[derive(Deserialize, Debug, Default)]
+pub(crate) struct SeedUserSchema {
+    #[serde(default)]
+    standard: BTreeMap<String, SeedAttrSpec>,
+    #[serde(default)]
+    custom: BTreeMap<String, SeedAttrSpec>,
+}
+
+impl SeedUserSchema {
+    pub(crate) fn standard(&self) -> &BTreeMap<String, SeedAttrSpec> {
+        &self.standard
+    }
+
+    pub(crate) fn custom(&self) -> &BTreeMap<String, SeedAttrSpec> {
+        &self.custom
+    }
+}
+
+/// A single attribute spec inside a [`SeedUserSchema`].
+#[derive(Deserialize, Debug)]
+pub(crate) struct SeedAttrSpec {
+    #[serde(default)]
+    required: bool,
+}
+
+impl SeedAttrSpec {
+    pub(crate) fn required(&self) -> bool {
+        self.required
+    }
+}
+
+/// A single user to provision: created in the org's Cognito pool, then
+/// written as a membership row keyed by the Cognito-issued sub.
+#[derive(Deserialize, Debug)]
+pub(crate) struct SeedUser {
+    email: String,
+    #[serde(default)]
+    groups: Vec<String>,
+    #[serde(default)]
+    attributes: BTreeMap<String, String>,
+}
+
+impl SeedUser {
+    pub(crate) fn email(&self) -> &str {
+        &self.email
+    }
+
+    pub(crate) fn groups(&self) -> &[String] {
+        &self.groups
+    }
+
+    /// Declared attributes, validated against the org schema before any AWS
+    /// call. `email` / `email_verified` are never declared here — they are
+    /// forgeguard invariants injected unconditionally during provisioning.
+    pub(crate) fn attributes(&self) -> &BTreeMap<String, String> {
+        &self.attributes
     }
 }
 
@@ -176,6 +263,7 @@ mod tests {
 [[organization]]
 org_id = "org-acme"
 name = "Acme Corp"
+cognito_user_pool_id = "us-east-2_acme"
 
 [[organization.group]]
 name = "member"
@@ -196,6 +284,7 @@ allow = ["cp-organization-delete"]
 [[organization]]
 org_id = "org-globex"
 name = "Globex Corporation"
+cognito_user_pool_id = "us-east-2_globex"
 "#;
 
         let config: SeedConfig = toml::from_str(toml_str).unwrap();
@@ -235,6 +324,7 @@ name = "Globex Corporation"
 [[organization]]
 org_id = "org-acme"
 name = "Acme"
+cognito_user_pool_id = "us-east-2_acme"
 
 [[organization.group]]
 name = "global"
@@ -244,5 +334,106 @@ tenant_scoped = false
         let config: SeedConfig = toml::from_str(toml_str).unwrap();
         let group = &config.organizations()[0].groups()[0];
         assert!(!group.tenant_scoped());
+    }
+}
+
+#[cfg(test)]
+mod seed_toml_v6_shape_tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    /// A V6-shaped config mirroring the real `seed.toml`: two orgs, each with
+    /// a `name`-required schema and two users carrying a `name` attribute.
+    fn v6_config() -> SeedConfig {
+        let toml_str = r#"
+[[organization]]
+org_id               = "org-acme"
+name                 = "Acme Corp"
+cognito_user_pool_id = "us-east-2_acme"
+
+[organization.user_schema.standard]
+name = { required = true }
+
+[[organization.user]]
+email      = "admin@acme.test"
+groups     = ["admin"]
+attributes = { name = "Acme Admin" }
+
+[[organization.user]]
+email      = "member@acme.test"
+groups     = ["member"]
+attributes = { name = "Acme Member" }
+
+[[organization]]
+org_id               = "org-globex"
+name                 = "Globex Corporation"
+cognito_user_pool_id = "us-east-2_globex"
+
+[organization.user_schema.standard]
+name = { required = true }
+
+[[organization.user]]
+email      = "admin@globex.test"
+groups     = ["admin"]
+attributes = { name = "Globex Admin" }
+
+[[organization.user]]
+email      = "member@globex.test"
+groups     = ["member"]
+attributes = { name = "Globex Member" }
+"#;
+        toml::from_str(toml_str).unwrap()
+    }
+
+    #[test]
+    fn each_org_has_two_users() {
+        let config = v6_config();
+        assert_eq!(config.organizations().len(), 2);
+        for org in config.organizations() {
+            assert_eq!(org.users().len(), 2, "{} should have 2 users", org.org_id());
+        }
+    }
+
+    #[test]
+    fn each_org_declares_required_name_standard_attr() {
+        for org in v6_config().organizations() {
+            let name_spec = org
+                .user_schema()
+                .standard()
+                .get("name")
+                .unwrap_or_else(|| panic!("{} missing `name` standard attr", org.org_id()));
+            assert!(
+                name_spec.required(),
+                "{} `name` must be required",
+                org.org_id()
+            );
+            assert!(
+                org.user_schema().custom().is_empty(),
+                "{} declares no custom attrs in V6",
+                org.org_id()
+            );
+        }
+    }
+
+    #[test]
+    fn every_user_has_non_empty_name_attribute() {
+        for org in v6_config().organizations() {
+            for user in org.users() {
+                let name = user
+                    .attributes()
+                    .get("name")
+                    .unwrap_or_else(|| panic!("{} missing `name` attr", user.email()));
+                assert!(!name.is_empty(), "{} `name` attr is empty", user.email());
+            }
+        }
+    }
+
+    #[test]
+    fn cognito_user_pool_id_is_parsed() {
+        let config = v6_config();
+        assert_eq!(
+            config.organizations()[0].cognito_user_pool_id(),
+            "us-east-2_acme"
+        );
     }
 }

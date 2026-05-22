@@ -40,6 +40,7 @@ fn seed_org_to_dynamodb_attrs_byte_stable() {
 [[organization]]
 org_id = "org-acme"
 name = "Acme Corp"
+cognito_user_pool_id = "us-east-2_acme"
 "#,
     );
     let attrs = seed_org_to_dynamodb_attrs(&org, fixed_now()).unwrap();
@@ -61,6 +62,7 @@ fn group_fixture() -> Vec<RbacEntry> {
 [[organization]]
 org_id = "org-acme"
 name = "Acme"
+cognito_user_pool_id = "us-east-2_acme"
 
 [[organization.group]]
 name = "member"

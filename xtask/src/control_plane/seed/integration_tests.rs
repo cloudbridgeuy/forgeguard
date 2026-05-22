@@ -43,6 +43,7 @@ const SEED_TOML: &str = r#"
 [[organization]]
 org_id = "org-acme"
 name = "Acme Corp"
+cognito_user_pool_id = "us-east-2_acme"
 
 [[organization.group]]
 name = "member"
@@ -285,6 +286,7 @@ async fn seed_dangling_inherit_aborts_before_any_put() {
 [[organization]]
 org_id = "org-acme"
 name = "Acme"
+cognito_user_pool_id = "us-east-2_acme"
 
 [[organization.group]]
 name = "broken"
@@ -332,6 +334,7 @@ async fn seed_cycle_aborts_before_any_put() {
 [[organization]]
 org_id = "org-acme"
 name = "Acme"
+cognito_user_pool_id = "us-east-2_acme"
 
 [[organization.group]]
 name = "a"

@@ -6,6 +6,7 @@
 [[organization]]
 org_id = "org-acme"
 name = "Acme Corp"
+cognito_user_pool_id = "us-east-2_acme"
 
 [[organization.group]]
 name = "member"
@@ -32,6 +33,7 @@ allow = ["cp-organization-delete", "cp-member-promote-owner"]
 [[organization]]
 org_id = "org-globex"
 name = "Globex Corporation"
+cognito_user_pool_id = "us-east-2_globex"
 
 [[organization.group]]
 name = "member"
