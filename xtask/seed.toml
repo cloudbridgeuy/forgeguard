@@ -1,12 +1,40 @@
 # Seed configuration for `cargo xtask control-plane seed`.
-# All seeded orgs are created as Draft. No users are created here —
-# user provisioning has moved to issue #100 (per-org Cognito pools
-# land via the saga ticket, separate from #102).
+#
+# IMPORTANT: the `forgeguard` platform org is NOT declared here.
+# `cargo xtask control-plane seed` would overwrite the operator account,
+# user_schema row, and membership row — destroying the hand-bootstrapped
+# platform admin. Bootstrap the platform org once via
+# infra/control-plane/BOOTSTRAP.md (R10.4).
+#
+# WARNING: teardown only sweeps users in the CP dashboard pool matching the
+# `org-{id}-*` convention. Users created manually in a per-org Cognito pool
+# are NOT deleted by re-running the seed. Clean stale per-org pools by hand
+# before re-seeding if they hold leftover test users.
+#
+# All seeded orgs are created as Draft. Each org declares a `user_schema`
+# and per-user `attributes`; the seed writes the USER_SCHEMA row, creates
+# the Cognito users, and writes their membership rows.
 
 [[organization]]
 org_id = "org-acme"
 name = "Acme Corp"
-cognito_user_pool_id = "us-east-2_acme"
+cognito_user_pool_id = "us-east-2_acme"   # CDK output: AcmeUserPoolId
+
+[organization.user_schema.standard]
+name = { required = true }
+
+[organization.user_schema.custom]
+# no custom attrs for org-acme
+
+[[organization.user]]
+email = "admin@acme.test"
+groups = ["admin"]
+attributes = { name = "Acme Admin" }
+
+[[organization.user]]
+email = "member@acme.test"
+groups = ["member"]
+attributes = { name = "Acme Member" }
 
 [[organization.group]]
 name = "member"
@@ -33,7 +61,23 @@ allow = ["cp-organization-delete", "cp-member-promote-owner"]
 [[organization]]
 org_id = "org-globex"
 name = "Globex Corporation"
-cognito_user_pool_id = "us-east-2_globex"
+cognito_user_pool_id = "us-east-2_globex"   # CDK output: GlobexUserPoolId
+
+[organization.user_schema.standard]
+name = { required = true }
+
+[organization.user_schema.custom]
+# no custom attrs for org-globex
+
+[[organization.user]]
+email = "admin@globex.test"
+groups = ["admin"]
+attributes = { name = "Globex Admin" }
+
+[[organization.user]]
+email = "member@globex.test"
+groups = ["member"]
+attributes = { name = "Globex Member" }
 
 [[organization.group]]
 name = "member"
