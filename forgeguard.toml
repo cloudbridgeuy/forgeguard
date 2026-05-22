@@ -29,7 +29,14 @@ policy_store_id = "op://forgeguard-prod/verified-permissions/policy-store-id"
 
 [schema]
 namespace = "forgeguard"
-actions = ["cp-proxy-config-read", "cp-organization-delete", "cp-member-promote-owner"]
+actions = [
+  "cp-proxy-config-read",
+  "cp-organization-delete",
+  "cp-member-promote-owner",
+  "cp-user-schema-read",
+  "cp-user-schema-update",
+  "cp-user-create",
+]
 
 [schema.entities.User.attributes]
 org_id = "String"
@@ -59,7 +66,10 @@ resource_attribute = "org_id"
 [[policies]]
 name = "member"
 description = "Read-only org access"
-allow = ["cp-organization-read", "cp-key-read", "cp-config-read", "cp-group-read"]
+allow = [
+  "cp-organization-read", "cp-key-read", "cp-config-read", "cp-group-read",
+  "cp-user-schema-read",
+]
 
 [[policies]]
 name = "admin"
@@ -71,6 +81,8 @@ allow = [
   "cp-config-write",
   "cp-key-generate", "cp-key-revoke", "cp-key-rotate",
   "cp-group-create", "cp-group-update", "cp-group-delete",
+  "cp-user-schema-update",
+  "cp-user-create",
 ]
 
 [[policies]]
@@ -93,4 +105,20 @@ permit(
   action == forgeguard::Action::"cp-proxy-config-read",
   resource
 ) when { resource.org_id == principal.org_id };
+"""
+
+[[policies]]
+type = "cedar"
+name = "forgeguard-admin-cross-org-user-schema"
+description = "forgeguard org admins can manage user schemas and create users on any org"
+body = """
+permit(
+  principal in forgeguard::Group::"admin",
+  action in [
+    forgeguard::Action::"cp-user-schema-read",
+    forgeguard::Action::"cp-user-schema-update",
+    forgeguard::Action::"cp-user-create"
+  ],
+  resource
+) when { principal.org_id == "forgeguard" };
 """
