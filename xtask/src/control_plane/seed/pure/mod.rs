@@ -192,6 +192,53 @@ pub(crate) fn compute_group_etag(entry: &RbacEntry) -> Result<String, String> {
     Ok(format!("\"{hash:016x}\""))
 }
 
+/// User-schema sort-key prefix. Mirrors
+/// `forgeguard_control_plane::dynamo_store::user_schema::SK_USER_SCHEMA`.
+const SK_USER_SCHEMA: &str = "USER_SCHEMA";
+
+/// Build the DynamoDB attribute list for an org's user-schema row.
+///
+/// Mirrors the V2 codec in
+/// `crates/control-plane/src/dynamo_store/user_schema.rs::to_user_schema_item`:
+/// `{PK = ORG#<org_id>, SK = USER_SCHEMA, schema = <UserSchema as JSON>, etag}`.
+/// The seed always writes the row unconditionally — teardown wiped any prior
+/// value — so an etag mismatch on a later CP write is impossible by
+/// construction.
+pub(crate) fn user_schema_to_dynamodb_attrs(
+    org_id: &str,
+    schema: &UserSchema,
+    etag: &str,
+) -> Result<Vec<(String, AttributeValue)>, String> {
+    let ddb_schema = orgs_schema();
+    let json = serde_json::to_string(schema)
+        .map_err(|e| format!("serialize user_schema for org '{org_id}': {e}"))?;
+    Ok(vec![
+        (
+            ddb_schema.partition_key.clone(),
+            AttributeValue::S(format!("ORG#{org_id}")),
+        ),
+        (
+            ddb_schema.sort_key.clone(),
+            AttributeValue::S(SK_USER_SCHEMA.to_owned()),
+        ),
+        ("schema".to_owned(), AttributeValue::S(json)),
+        ("etag".to_owned(), AttributeValue::S(etag.to_owned())),
+    ])
+}
+
+/// Compute the content-addressed etag for a `UserSchema`.
+///
+/// Same recipe as
+/// `forgeguard_control_plane::store::compute_etag_json` and
+/// `compute_group_etag` above: `xxh64` of the canonical-JSON bytes, formatted
+/// as `"<16-hex>"`. The matching format means a seeded row round-trips cleanly
+/// through a CP `If-Match` check after the seed.
+pub(crate) fn compute_user_schema_etag(schema: &UserSchema) -> Result<String, String> {
+    let json = serde_json::to_string(schema).map_err(|e| format!("etag serial: {e}"))?;
+    let hash = xxhash_rust::xxh64::xxh64(json.as_bytes(), 0);
+    Ok(format!("\"{hash:016x}\""))
+}
+
 /// Errors surfaced when converting a `SeedUserSchema` into the domain
 /// `UserSchema`. The TOML keys are raw strings, so a malformed `seed.toml`
 /// schema is caught here — before any AWS call — same as `validate_seed_groups`.

@@ -17,6 +17,7 @@
 mod groups;
 mod orgs;
 mod pure;
+mod schema;
 mod teardown;
 mod users;
 

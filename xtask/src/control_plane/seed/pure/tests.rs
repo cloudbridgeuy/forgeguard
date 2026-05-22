@@ -331,6 +331,50 @@ fn is_seeded_cp_rbac_policy_rejects_unencoded_name() {
     ));
 }
 
+// -- user schema row + etag ------------------------------------------------
+
+fn user_schema_fixture() -> UserSchema {
+    let mut standard = std::collections::BTreeMap::new();
+    standard.insert(StandardAttrName::Name, StandardAttrSpec { required: true });
+    UserSchema::new(standard, std::collections::BTreeMap::new())
+}
+
+#[test]
+fn user_schema_to_dynamodb_attrs_uses_v2_shape() {
+    let schema = user_schema_fixture();
+    let etag = compute_user_schema_etag(&schema).unwrap();
+    let attrs = user_schema_to_dynamodb_attrs("org-acme", &schema, &etag).unwrap();
+    let by_key: std::collections::HashMap<_, _> = attrs.into_iter().collect();
+    assert_eq!(by_key["PK"].as_s().unwrap(), "ORG#org-acme");
+    assert_eq!(by_key["SK"].as_s().unwrap(), "USER_SCHEMA");
+    assert_eq!(by_key["etag"].as_s().unwrap(), &etag);
+
+    let recovered: UserSchema = serde_json::from_str(by_key["schema"].as_s().unwrap()).unwrap();
+    assert_eq!(recovered, schema);
+}
+
+#[test]
+fn compute_user_schema_etag_format_and_determinism() {
+    let schema = user_schema_fixture();
+    let etag1 = compute_user_schema_etag(&schema).unwrap();
+    let etag2 = compute_user_schema_etag(&schema).unwrap();
+    assert_eq!(etag1, etag2);
+    assert_eq!(etag1.len(), 18, "etag={etag1:?}");
+    assert!(etag1.starts_with('"') && etag1.ends_with('"'));
+}
+
+#[test]
+fn compute_user_schema_etag_matches_cp_recipe() {
+    // Cross-crate anchor: CP's `store::compute_etag_json` uses serde_json +
+    // xxh64. If field order or seed convention drifts, this catches it before
+    // a seeded row fails an `If-Match` round-trip from the CP handler.
+    let schema = user_schema_fixture();
+    let etag = compute_user_schema_etag(&schema).unwrap();
+    let json = serde_json::to_string(&schema).unwrap();
+    let expected = format!("\"{:016x}\"", xxhash_rust::xxh64::xxh64(json.as_bytes(), 0));
+    assert_eq!(etag, expected);
+}
+
 // -- user schema + attr adapters -----------------------------------------
 
 #[test]
