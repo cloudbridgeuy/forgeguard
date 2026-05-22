@@ -1,9 +1,9 @@
 //! AWS Cognito-backed `UserPoolClient`.
 //!
-//! Single seam between the saga driver and the AWS SDK. `map_*_error`
-//! helpers classify SDK errors into the four [`UserPoolError`] variants per
-//! plan §5 so the driver and HTTP handler can pattern-match outcomes without
-//! inspecting SDK types directly.
+//! Single seam between the saga driver / xtask seed and the AWS SDK.
+//! `map_*_error` helpers classify SDK errors into the four [`UserPoolError`]
+//! variants so callers can pattern-match outcomes without inspecting SDK types
+//! directly.
 //!
 //! The "update_user_pool" trait method name predates the realisation that
 //! Cognito only supports schema mutations via `AddCustomAttributes`
@@ -26,12 +26,12 @@ use crate::user_pool::UserPoolClient;
 
 /// Production `UserPoolClient` backed by AWS Cognito.
 #[derive(Debug, Clone)]
-pub(crate) struct AwsCognitoUserPoolClient {
+pub struct AwsCognitoUserPoolClient {
     client: aws_sdk_cognitoidentityprovider::Client,
 }
 
 impl AwsCognitoUserPoolClient {
-    pub(crate) fn new(client: aws_sdk_cognitoidentityprovider::Client) -> Self {
+    pub fn new(client: aws_sdk_cognitoidentityprovider::Client) -> Self {
         Self { client }
     }
 }
@@ -198,7 +198,6 @@ fn map_admin_delete_error(
     }
 }
 
-#[allow(dead_code)] // wired in V4 schema-apply retry path
 fn map_admin_get_error(
     sdk_err: aws_sdk_cognitoidentityprovider::error::SdkError<AdminGetUserError>,
 ) -> UserPoolError {

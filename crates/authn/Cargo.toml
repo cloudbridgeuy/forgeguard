@@ -14,9 +14,16 @@ license.workspace = true
 name = "forgeguard_authn"
 path = "src/lib.rs"
 
+[features]
+# Exposes the `arm_*_once` failure-injection knobs on `InMemoryUserPoolClient`
+# to downstream test builds (e.g. `forgeguard_control_plane` handler tests).
+testing = []
+
 [dependencies]
 forgeguard_core = { workspace = true }
 forgeguard_authn_core = { workspace = true }
+async-trait = { workspace = true }
+aws-sdk-cognitoidentityprovider = { workspace = true }
 chrono = { workspace = true }
 jsonwebtoken = { workspace = true }
 reqwest = { workspace = true }
@@ -25,6 +32,7 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+ulid = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]

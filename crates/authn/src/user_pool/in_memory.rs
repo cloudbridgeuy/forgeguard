@@ -1,8 +1,10 @@
-//! In-memory `UserPoolClient` for control-plane tests.
+//! In-memory `UserPoolClient` for tests.
 //!
 //! Mimics Cognito by storing `(pool_id, email) → sub` rows in a `BTreeMap`.
-//! Failure injection knobs (`arm_*_once`) let saga driver tests reproduce
-//! transient/permanent SDK paths without an AWS round trip.
+//! Failure injection knobs (`arm_*_once`) let saga driver and seed tests
+//! reproduce transient/permanent SDK paths without an AWS round trip. The
+//! `arm_*` knobs are gated behind the `testing` Cargo feature so other crates
+//! can drive failure paths against this stub.
 
 use std::collections::BTreeMap;
 use std::sync::Mutex;
@@ -17,7 +19,7 @@ use crate::user_pool::UserPoolClient;
 
 /// Test stub that emulates the `UserPoolClient` surface in-process.
 #[derive(Debug, Default)]
-pub(crate) struct InMemoryUserPoolClient {
+pub struct InMemoryUserPoolClient {
     users: RwLock<BTreeMap<(PoolId, String), UserId>>,
     fail_create: Mutex<Option<UserPoolError>>,
     fail_delete: Mutex<Option<UserPoolError>>,
@@ -25,29 +27,29 @@ pub(crate) struct InMemoryUserPoolClient {
 }
 
 impl InMemoryUserPoolClient {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self::default()
     }
 
     /// Arm a one-shot failure for the next `admin_create_user` call.
-    #[cfg(test)]
-    pub(crate) fn arm_admin_create_user_once(&self, err: UserPoolError) {
+    #[cfg(any(test, feature = "testing"))]
+    pub fn arm_admin_create_user_once(&self, err: UserPoolError) {
         Self::arm_slot(&self.fail_create, err);
     }
 
     /// Arm a one-shot failure for the next `admin_delete_user` call.
-    #[cfg(test)]
-    pub(crate) fn arm_admin_delete_user_once(&self, err: UserPoolError) {
+    #[cfg(any(test, feature = "testing"))]
+    pub fn arm_admin_delete_user_once(&self, err: UserPoolError) {
         Self::arm_slot(&self.fail_delete, err);
     }
 
     /// Arm a one-shot failure for the next `update_user_pool` call.
-    #[cfg(test)]
-    pub(crate) fn arm_update_user_pool_once(&self, err: UserPoolError) {
+    #[cfg(any(test, feature = "testing"))]
+    pub fn arm_update_user_pool_once(&self, err: UserPoolError) {
         Self::arm_slot(&self.fail_update_pool, err);
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     fn arm_slot(slot: &Mutex<Option<UserPoolError>>, err: UserPoolError) {
         // Poison-recovery: a panic mid-test should still let other tests arm
         // failures rather than cascading into more panics.

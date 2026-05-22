@@ -12,5 +12,9 @@ pub(crate) mod metrics;
 mod signing_key;
 mod signing_key_store;
 mod store;
-pub(crate) mod user_pool;
 pub(crate) mod vp_client;
+
+// `UserPoolClient` + impls moved to `forgeguard_authn` (V6 / issue #100): xtask
+// needs them and cannot depend on this I/O crate. Re-exported so existing
+// `crate::user_pool::*` paths in handlers keep resolving.
+pub(crate) use forgeguard_authn::user_pool;

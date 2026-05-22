@@ -6,6 +6,7 @@ mod ed25519_resolver;
 pub mod error;
 mod jwks;
 mod resolver;
+pub mod user_pool;
 
 pub use config::JwtResolverConfig;
 pub use ed25519_resolver::Ed25519SignatureResolver;
