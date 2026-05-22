@@ -1,5 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
+use forgeguard_authn_core::{validate_attributes, FieldErrorKind, RawAttrMap};
+
 use super::*;
 use crate::control_plane::seed_core::SeedOrg;
 
@@ -327,4 +329,112 @@ fn is_seeded_cp_rbac_policy_rejects_unencoded_name() {
         Some("cp-rbac-org-acme-admin"),
         &scope()
     ));
+}
+
+// -- user schema + attr adapters -----------------------------------------
+
+#[test]
+fn seed_user_schema_to_domain_happy_path() {
+    let org = parse_seed_org(
+        r#"
+[[organization]]
+org_id = "org-acme"
+name = "Acme"
+cognito_user_pool_id = "us-east-2_acme"
+
+[organization.user_schema.standard]
+name = { required = true }
+"#,
+    );
+    let schema = seed_user_schema_to_domain(org.user_schema()).unwrap();
+    assert_eq!(schema.standard().len(), 1);
+    assert!(schema.standard()[&StandardAttrName::Name].required);
+    assert!(schema.custom().is_empty());
+}
+
+#[test]
+fn seed_user_schema_to_domain_rejects_unknown_standard_attr() {
+    let org = parse_seed_org(
+        r#"
+[[organization]]
+org_id = "org-acme"
+name = "Acme"
+cognito_user_pool_id = "us-east-2_acme"
+
+[organization.user_schema.standard]
+bogus_attr = { required = true }
+"#,
+    );
+    let err = seed_user_schema_to_domain(org.user_schema()).unwrap_err();
+    assert!(
+        matches!(err, SeedSchemaConversionError::InvalidStandardAttr { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn seed_user_schema_to_domain_rejects_invalid_custom_attr() {
+    let org = parse_seed_org(
+        r#"
+[[organization]]
+org_id = "org-acme"
+name = "Acme"
+cognito_user_pool_id = "us-east-2_acme"
+
+[organization.user_schema.custom]
+"Bad Name" = { required = false }
+"#,
+    );
+    let err = seed_user_schema_to_domain(org.user_schema()).unwrap_err();
+    assert!(
+        matches!(err, SeedSchemaConversionError::InvalidCustomAttr { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn validate_attributes_missing_required_name_errors() {
+    let org = parse_seed_org(
+        r#"
+[[organization]]
+org_id = "org-acme"
+name = "Acme"
+cognito_user_pool_id = "us-east-2_acme"
+
+[organization.user_schema.standard]
+name = { required = true }
+"#,
+    );
+    let schema = seed_user_schema_to_domain(org.user_schema()).unwrap();
+    let err = validate_attributes(&schema, &RawAttrMap::new()).unwrap_err();
+    assert!(err
+        .errors
+        .iter()
+        .any(|e| matches!(e.reason, FieldErrorKind::MissingRequired) && e.field == "name"));
+}
+
+#[test]
+fn validate_attributes_unknown_attr_errors() {
+    let org = parse_seed_org(
+        r#"
+[[organization]]
+org_id = "org-acme"
+name = "Acme"
+cognito_user_pool_id = "us-east-2_acme"
+
+[organization.user_schema.standard]
+name = { required = true }
+
+[[organization.user]]
+email = "a@acme.test"
+attributes = { name = "Alice", undeclared = "x" }
+"#,
+    );
+    let schema = seed_user_schema_to_domain(org.user_schema()).unwrap();
+    let attrs = seed_user_attrs_to_domain(&org.users()[0]);
+    let err = validate_attributes(&schema, &attrs).unwrap_err();
+    assert!(err
+        .errors
+        .iter()
+        .any(|e| matches!(e.reason, FieldErrorKind::Unknown) && e.field == "undeclared"));
 }

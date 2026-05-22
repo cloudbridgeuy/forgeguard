@@ -8,13 +8,19 @@
 //! provisioning lives in the saga ticket (separate from #102) — the seed
 //! never produces an Active row.
 
+use std::collections::BTreeMap;
+
 use aws_sdk_dynamodb::types::AttributeValue;
 use chrono::{DateTime, Utc};
+use forgeguard_authn_core::{
+    AttrType, CustomAttrName, CustomAttrSpec, RawAttrMap, StandardAttrName, StandardAttrSpec,
+    UserSchema,
+};
 use forgeguard_authz_core::rbac::{validate_group_name, CYCLE_PREFIX};
 use forgeguard_authz_core::{resolve_inherits, RbacEntry};
 
 use crate::control_plane::schema::orgs_schema;
-use crate::control_plane::seed_core::{SeedGroup, SeedOrg};
+use crate::control_plane::seed_core::{SeedGroup, SeedOrg, SeedUser, SeedUserSchema};
 
 /// Group sort-key prefix in DynamoDB. Mirrors the V2 codepath in
 /// `crates/control-plane/src/handlers/groups/codec.rs::SK_GROUP_PREFIX`.
@@ -184,6 +190,73 @@ pub(crate) fn compute_group_etag(entry: &RbacEntry) -> Result<String, String> {
     let json = serde_json::to_string(entry).map_err(|e| format!("etag serial: {e}"))?;
     let hash = xxhash_rust::xxh64::xxh64(json.as_bytes(), 0);
     Ok(format!("\"{hash:016x}\""))
+}
+
+/// Errors surfaced when converting a `SeedUserSchema` into the domain
+/// `UserSchema`. The TOML keys are raw strings, so a malformed `seed.toml`
+/// schema is caught here — before any AWS call — same as `validate_seed_groups`.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum SeedSchemaConversionError {
+    #[error("standard attribute '{name}' is not a recognised Cognito attribute: {reason}")]
+    InvalidStandardAttr { name: String, reason: String },
+    #[error("custom attribute '{name}' has an invalid name: {reason}")]
+    InvalidCustomAttr { name: String, reason: String },
+}
+
+/// Convert a `SeedUserSchema` (TOML repr) into the domain `UserSchema`.
+///
+/// Standard keys must name one of the 15 recognised Cognito standard
+/// attributes; custom keys must satisfy `CustomAttrName`. `seed.toml` carries
+/// only a `required` flag per attribute, so custom attrs map to an unbounded
+/// `AttrType::String` (no `min_length` / `max_length`).
+pub(crate) fn seed_user_schema_to_domain(
+    s: &SeedUserSchema,
+) -> Result<UserSchema, SeedSchemaConversionError> {
+    let mut standard = BTreeMap::new();
+    for (name, spec) in s.standard() {
+        let attr = name.parse::<StandardAttrName>().map_err(|e| {
+            SeedSchemaConversionError::InvalidStandardAttr {
+                name: name.clone(),
+                reason: e.to_string(),
+            }
+        })?;
+        standard.insert(
+            attr,
+            StandardAttrSpec {
+                required: spec.required(),
+            },
+        );
+    }
+
+    let mut custom = BTreeMap::new();
+    for (name, spec) in s.custom() {
+        let attr = CustomAttrName::try_new(name.clone()).map_err(|e| {
+            SeedSchemaConversionError::InvalidCustomAttr {
+                name: name.clone(),
+                reason: e.to_string(),
+            }
+        })?;
+        custom.insert(
+            attr,
+            CustomAttrSpec {
+                ty: AttrType::String {
+                    min_length: None,
+                    max_length: None,
+                    required: spec.required(),
+                },
+            },
+        );
+    }
+
+    Ok(UserSchema::new(standard, custom))
+}
+
+/// Clone a seeded user's declared attributes into the owned `RawAttrMap`
+/// that `validate_attributes` and the downstream Cognito call both consume.
+/// Thin, but names the TOML→domain boundary explicitly so the
+/// `seed/users.rs` call site reads clearly.
+pub(crate) fn seed_user_attrs_to_domain(user: &SeedUser) -> RawAttrMap {
+    user.attributes().clone()
 }
 
 /// A non-empty, validated set of seeded org IDs. Used by the teardown shell to
