@@ -21,8 +21,6 @@ pub(crate) struct InMemoryUserPoolClient {
     users: RwLock<BTreeMap<(PoolId, String), UserId>>,
     fail_create: Mutex<Option<UserPoolError>>,
     fail_delete: Mutex<Option<UserPoolError>>,
-    fail_get: Mutex<Option<UserPoolError>>,
-    #[allow(dead_code)] // wired in V4 schema-apply tests
     fail_update_pool: Mutex<Option<UserPoolError>>,
 }
 
@@ -43,18 +41,13 @@ impl InMemoryUserPoolClient {
         Self::arm_slot(&self.fail_delete, err);
     }
 
-    /// Arm a one-shot failure for the next `admin_get_user` call.
-    #[allow(dead_code)] // wired in V4 schema-apply tests
-    pub(crate) fn arm_admin_get_user_once(&self, err: UserPoolError) {
-        Self::arm_slot(&self.fail_get, err);
-    }
-
     /// Arm a one-shot failure for the next `update_user_pool` call.
-    #[allow(dead_code)] // wired in V4 schema-apply tests
+    #[cfg(test)]
     pub(crate) fn arm_update_user_pool_once(&self, err: UserPoolError) {
         Self::arm_slot(&self.fail_update_pool, err);
     }
 
+    #[cfg(test)]
     fn arm_slot(slot: &Mutex<Option<UserPoolError>>, err: UserPoolError) {
         // Poison-recovery: a panic mid-test should still let other tests arm
         // failures rather than cascading into more panics.
@@ -113,9 +106,6 @@ impl UserPoolClient for InMemoryUserPoolClient {
     }
 
     async fn admin_get_user(&self, pool_id: &PoolId, email: &str) -> Result<UserId, UserPoolError> {
-        if let Some(err) = Self::take_slot(&self.fail_get) {
-            return Err(err);
-        }
         let users = self.users.read().await;
         users
             .get(&(pool_id.clone(), email.to_owned()))

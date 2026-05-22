@@ -19,5 +19,7 @@ mod metrics_endpoint;
 mod optimistic_locking;
 mod proxy_config;
 mod user_schema;
+mod user_schema_active;
+mod user_schema_active_support;
 mod users_create;
 mod users_support;
