@@ -414,6 +414,57 @@ name = { required = true }
 }
 
 #[test]
+fn membership_row_to_dynamo_attrs_matches_cp_layout() {
+    use forgeguard_authn_core::membership::MembershipRowParams;
+    use forgeguard_authn_core::MembershipRow;
+    use forgeguard_core::{GroupName, OrganizationId, UserId};
+
+    let row = MembershipRow::new(MembershipRowParams {
+        sub: UserId::new("abc-123").unwrap(),
+        org_id: OrganizationId::new("org-acme").unwrap(),
+        groups: vec![GroupName::new("admin").unwrap()],
+        email: "a@acme.test".to_owned(),
+        created_at: fixed_now(),
+        created_by: UserId::new("xtask-seed").unwrap(),
+    });
+    let by_key: std::collections::HashMap<_, _> =
+        membership_row_to_dynamo_attrs(&row).into_iter().collect();
+    assert_eq!(by_key["PK"].as_s().unwrap(), "USER#abc-123");
+    assert_eq!(by_key["SK"].as_s().unwrap(), "ORG#org-acme");
+    assert_eq!(by_key["user_id"].as_s().unwrap(), "abc-123");
+    assert_eq!(by_key["org_id"].as_s().unwrap(), "org-acme");
+    assert_eq!(by_key["email"].as_s().unwrap(), "a@acme.test");
+    assert_eq!(by_key["created_by"].as_s().unwrap(), "xtask-seed");
+    let groups = by_key["groups"].as_l().unwrap();
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].as_s().unwrap(), "admin");
+    let joined = by_key["joined_at"].as_s().unwrap();
+    assert!(joined.starts_with("2026-05-07T12:00:00"));
+}
+
+#[test]
+fn membership_row_to_dynamo_attrs_emits_groups_list_even_when_empty() {
+    use forgeguard_authn_core::membership::MembershipRowParams;
+    use forgeguard_authn_core::MembershipRow;
+    use forgeguard_core::{OrganizationId, UserId};
+
+    let row = MembershipRow::new(MembershipRowParams {
+        sub: UserId::new("xyz").unwrap(),
+        org_id: OrganizationId::new("org-acme").unwrap(),
+        groups: vec![],
+        email: "x@acme.test".to_owned(),
+        created_at: fixed_now(),
+        created_by: UserId::new("xtask-seed").unwrap(),
+    });
+    let by_key: std::collections::HashMap<_, _> =
+        membership_row_to_dynamo_attrs(&row).into_iter().collect();
+    let groups = by_key["groups"]
+        .as_l()
+        .expect("groups must be a List even when empty");
+    assert!(groups.is_empty());
+}
+
+#[test]
 fn validate_attributes_unknown_attr_errors() {
     let org = parse_seed_org(
         r#"

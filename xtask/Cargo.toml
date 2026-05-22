@@ -16,6 +16,10 @@ path = "src/main.rs"
 [dependencies]
 # `forgeguard_authn_core` is a pure leaf crate (CLAUDE.md xtask-dep exception).
 forgeguard_authn_core = { workspace = true }
+# `forgeguard_core` is a pure leaf crate (CLAUDE.md xtask-dep exception) — needed
+# for the typed IDs (`UserId`, `OrganizationId`, `GroupName`) carried on the
+# membership row the V6 seed writes.
+forgeguard_core = { workspace = true }
 # `forgeguard_authn` is an I/O crate — a pragmatic expansion of the xtask-dep
 # policy (issue #100 V6 §7). It carries the Cognito `UserPoolClient` the seed
 # needs; no Axum, no handler tree — cost comparable to the AWS SDK deps below.

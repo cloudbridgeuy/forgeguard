@@ -5710,6 +5710,7 @@ dependencies = [
  "forgeguard_authn",
  "forgeguard_authn_core",
  "forgeguard_authz_core",
+ "forgeguard_core",
  "glob",
  "libc",
  "owo-colors",

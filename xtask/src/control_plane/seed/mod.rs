@@ -18,6 +18,7 @@ mod groups;
 mod orgs;
 mod pure;
 mod teardown;
+mod users;
 
 #[cfg(all(test, feature = "dynamodb-tests"))]
 mod integration_tests;

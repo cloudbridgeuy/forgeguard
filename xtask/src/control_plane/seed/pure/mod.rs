@@ -13,8 +13,8 @@ use std::collections::BTreeMap;
 use aws_sdk_dynamodb::types::AttributeValue;
 use chrono::{DateTime, Utc};
 use forgeguard_authn_core::{
-    AttrType, CustomAttrName, CustomAttrSpec, RawAttrMap, StandardAttrName, StandardAttrSpec,
-    UserSchema,
+    AttrType, CustomAttrName, CustomAttrSpec, MembershipRow, RawAttrMap, StandardAttrName,
+    StandardAttrSpec, UserSchema,
 };
 use forgeguard_authz_core::rbac::{validate_group_name, CYCLE_PREFIX};
 use forgeguard_authz_core::{resolve_inherits, RbacEntry};
@@ -293,6 +293,52 @@ pub(crate) fn is_seeded_username(username: &str, scope: &SeededOrgScope) -> bool
 /// Membership-row partition key for a Cognito sub.
 pub(crate) fn membership_pk_for_user(sub: &str) -> String {
     format!("USER#{sub}")
+}
+
+/// Build the DynamoDB attribute list for a `MembershipRow`.
+///
+/// Mirrors `forgeguard_control_plane::dynamo_store::membership::to_membership_item`:
+/// `PK=USER#{sub}`, `SK=ORG#{org_id}`, plus `user_id`, `org_id`, `groups` (always
+/// a `L` of `S`, even when empty), `joined_at` (RFC 3339), `email`, `created_by`.
+/// Replicated here (instead of imported) because the CP crate is an I/O crate
+/// and xtask only consumes pure leaves.
+pub(crate) fn membership_row_to_dynamo_attrs(row: &MembershipRow) -> Vec<(String, AttributeValue)> {
+    let groups: Vec<AttributeValue> = row
+        .groups()
+        .iter()
+        .map(|g| AttributeValue::S(g.to_string()))
+        .collect();
+    vec![
+        (
+            "PK".to_owned(),
+            AttributeValue::S(membership_pk_for_user(row.sub().as_str())),
+        ),
+        (
+            "SK".to_owned(),
+            AttributeValue::S(format!("ORG#{}", row.org_id())),
+        ),
+        (
+            "user_id".to_owned(),
+            AttributeValue::S(row.sub().to_string()),
+        ),
+        (
+            "org_id".to_owned(),
+            AttributeValue::S(row.org_id().to_string()),
+        ),
+        ("groups".to_owned(), AttributeValue::L(groups)),
+        (
+            "joined_at".to_owned(),
+            AttributeValue::S(row.created_at().to_rfc3339()),
+        ),
+        (
+            "email".to_owned(),
+            AttributeValue::S(row.email().to_owned()),
+        ),
+        (
+            "created_by".to_owned(),
+            AttributeValue::S(row.created_by().to_string()),
+        ),
+    ]
 }
 
 /// Decode the canonical policy name from a VP `description` field that uses
