@@ -2,7 +2,8 @@
 //!
 //! Exercises the handlers end-to-end against `InMemoryOrgStore` via the
 //! test-only router built by [`super::super::test_support::test_app`]. Covers
-//! the 11 cases enumerated in §10 of the V2 plan.
+//! the GET cases plus the PUT Draft branch and non-Draft state gating; the V4
+//! Active-branch Cognito flow is exercised in `user_schema_active.rs`.
 
 use std::sync::Arc;
 
@@ -226,16 +227,23 @@ async fn put_user_schema_draft_if_match_on_absent_row_returns_412() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn put_user_schema_active_org_returns_409() {
+async fn put_user_schema_active_org_without_pool_returns_409() {
     let store = empty_in_memory_store();
     seed_org_with_status(&store, "org-us", OrgStatus::Active).await;
     let app = test_app(Arc::clone(&store) as Arc<dyn OrgStore>);
 
-    let resp = put_user_schema(&app, name_required_payload(), None).await;
+    // An empty payload is diff-clean against the absent schema row, so the
+    // Active flow reaches the pool-id guard: an org seeded without a
+    // `cognito_user_pool_id` returns `409 pool_not_provisioned`.
+    let empty = serde_json::to_vec(&serde_json::json!({
+        "standard": {},
+        "custom": {}
+    }))
+    .unwrap();
+    let resp = put_user_schema(&app, empty, None).await;
     assert_eq!(resp.status(), StatusCode::CONFLICT);
     let json = body_json(resp).await;
-    assert_eq!(json["error"], "not_implemented");
-    assert_eq!(json["reason"], "active_schema_put_requires_v4");
+    assert_eq!(json["error"], "pool_not_provisioned");
 }
 
 #[tokio::test]

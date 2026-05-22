@@ -668,7 +668,7 @@ pub(super) mod test_support {
             .route(
                 "/api/v1/organizations/{org_id}/user-schema",
                 axum::routing::get(super::user_schema::get_user_schema_handler)
-                    .put(super::user_schema::put_user_schema_handler),
+                    .put(super::user_schema::put_user_schema_handler::<StubVpClient>),
             )
             .route(
                 "/api/v1/organizations/{org_id}/users",

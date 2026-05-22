@@ -486,7 +486,7 @@ fn build_router<V: VpClient + 'static>(state: AppState<V>, fg: Arc<ForgeGuard>) 
         .route(
             "/api/v1/organizations/{org_id}/user-schema",
             get(handlers::user_schema::get_user_schema_handler)
-                .put(handlers::user_schema::put_user_schema_handler),
+                .put(handlers::user_schema::put_user_schema_handler::<V>),
         )
         .route(
             "/api/v1/organizations/{org_id}/users",

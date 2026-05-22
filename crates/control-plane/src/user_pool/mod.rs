@@ -53,8 +53,7 @@ pub(crate) trait UserPoolClient: Send + Sync {
 
     /// Schema sync — UpdateUserPool with the rebuilt attribute list.
     ///
-    /// V3 surfaces [`UserPoolError::AttributeAlreadyExists`] as a typed error;
-    /// V4 will tolerate it as success in the schema-apply path.
-    #[allow(dead_code)] // wired in V4 schema-apply handler
+    /// Surfaces [`UserPoolError::AttributeAlreadyExists`] as a typed error;
+    /// the V4 Active schema-apply handler tolerates it as success.
     async fn update_user_pool(&self, params: UpdatePoolParams) -> Result<(), UserPoolError>;
 }
