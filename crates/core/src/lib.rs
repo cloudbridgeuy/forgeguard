@@ -8,6 +8,7 @@ pub mod default_policy;
 pub mod error;
 pub mod features;
 pub mod fgrn;
+pub mod native_id;
 pub mod org;
 pub mod percentage;
 pub mod permission;
@@ -32,6 +33,7 @@ pub use features::{
     FlagDefinitionParams, FlagName, FlagOverride, FlagType, FlagValue, ResolutionReason,
     ResolvedFlag, ResolvedFlags,
 };
+pub use native_id::NativeId;
 pub use org::{OrgStatus, Organization};
 pub use percentage::Percentage;
 pub use permission::{
