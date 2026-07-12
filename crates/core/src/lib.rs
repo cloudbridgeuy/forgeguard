@@ -12,6 +12,7 @@ pub mod native_id;
 pub mod org;
 pub mod percentage;
 pub mod permission;
+pub mod principal;
 pub mod saga_id;
 pub mod segment;
 pub mod spine;
@@ -42,6 +43,7 @@ pub use permission::{
     ActionPattern, CedarEntityRef, Effect, GroupDefinition, PatternSegment, Policy,
     PolicyStatement, ResourceConstraint,
 };
+pub use principal::Principal;
 pub use saga_id::SagaId;
 pub use segment::{
     FlowId, GroupName, OrganizationId, PolicyName, ProjectId, Segment, TenantId, UserId,
