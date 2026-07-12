@@ -602,4 +602,57 @@ mod tests {
             .unwrap_err();
         assert!(err.to_string().contains("unknown parent"));
     }
+
+    /// Guards the `unreachable!` in `Spine::path`: every parent chain must
+    /// resolve inside the map no matter how the tree has been mutated.
+    /// Chains `add` and `reparent` across several rounds, then walks
+    /// `path` on the deepest surviving node — if a mutation ever left a
+    /// dangling parent pointer, this trips the `unreachable!` before it
+    /// would trip in production.
+    #[test]
+    fn path_survives_chained_mutations_without_panicking() {
+        let mut spine = fixture();
+
+        // backend, platform: a fresh branch under engineering.
+        spine
+            .add(OrgUnit::try_new(ou("acme", "backend"), Some(ou("acme", "engineering"))).unwrap())
+            .unwrap();
+        spine
+            .add(OrgUnit::try_new(ou("acme", "platform"), Some(ou("acme", "backend"))).unwrap())
+            .unwrap();
+        // Move finance (with accounting still attached) from under root to
+        // under engineering.
+        spine
+            .reparent(&ou("acme", "finance"), &ou("acme", "engineering"))
+            .unwrap();
+        // payroll: a new leaf under the moved finance subtree.
+        spine
+            .add(OrgUnit::try_new(ou("acme", "payroll"), Some(ou("acme", "finance"))).unwrap())
+            .unwrap();
+        // Detach accounting from finance and reattach it under the
+        // separate backend/platform branch.
+        spine
+            .reparent(&ou("acme", "accounting"), &ou("acme", "platform"))
+            .unwrap();
+
+        assert_eq!(
+            spine.path(&ou("acme", "payroll")).unwrap(),
+            vec![
+                &ou("acme", "root"),
+                &ou("acme", "engineering"),
+                &ou("acme", "finance"),
+                &ou("acme", "payroll"),
+            ]
+        );
+        assert_eq!(
+            spine.path(&ou("acme", "accounting")).unwrap(),
+            vec![
+                &ou("acme", "root"),
+                &ou("acme", "engineering"),
+                &ou("acme", "backend"),
+                &ou("acme", "platform"),
+                &ou("acme", "accounting"),
+            ]
+        );
+    }
 }
