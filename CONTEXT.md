@@ -4,6 +4,23 @@ All agentic context references for this project MUST be included in this file.
 
 Actual agentic context documents MUST be kept under [`.claude/context/`](./.claude/context/). Do not add context-document indexes to `CLAUDE.md`; keep `CLAUDE.md` focused on operating guidelines and link back here.
 
+## Product Documents (Brief v1.4 set)
+
+The July 2026 re-founding document set lives under [`docs/`](./docs/). The brief is the specification; everything else — including the legacy context documents below — is subordinate to it. See [ADR-0004](./docs/adr/0004-brief-v1.4-supersedes-resolution-engine-framing.md) for the supersession of the resolution-engine framing.
+
+| Document | Purpose |
+| --- | --- |
+| [Problem & Product Brief v1.4](./docs/brief.md) | **The specification.** Problem, core model (spine + grants DAG), contracts, consistency model, fitness criteria. |
+| [Repository Reconciliation](./docs/repo-reconciliation.md) | Repo vs. brief: keep/refit/freeze/delete plan and the 5-phase execution sequence. |
+| [Engineering Design A1](./docs/design-a1.md) | Candidate design A1 + serverless variant A1.1 (preferred), spike results, cost model, wary list. |
+| [ADR-0004](./docs/adr/0004-brief-v1.4-supersedes-resolution-engine-framing.md) | Supersedes ADR-0003's resolution-engine framing. |
+| [Competitive Teardown](./docs/competitive-teardown.md) | Market analysis; why nothing surfaced in search. |
+| [Lessons Learned](./docs/lessons-learned.md) | Field lessons with adopted/deferred/rejected dispositions. |
+| [Build vs. Compete](./docs/build-vs-compete.md) | Foundation analysis (v2.1): classes A–E, clouds. |
+| [A1 Hosting Topology](./docs/diagrams/a1-hosting.mermaid) | Hosting topology for the A1.1 control plane. |
+
+The measured cedar-policy spike (seven conformance assertions S1–S5, toolchain pins) is local-only at `.local/forgeguard-handoff/spikes/cedar-spike/` — its assertions become conformance test cases in Phase 2.
+
 ## Context Documents
 
 | Document | Purpose |

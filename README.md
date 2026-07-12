@@ -1,6 +1,8 @@
 # ForgeGuard
 
-Authorization-as-a-service platform built on AWS. Smithy-based schema language, typestate authentication flows, Cedar-based authorization, and multi-language SDKs.
+Multi-tenant authorization for B2B applications: one enforcement point where "who can do what, on which part of the tenant tree, under which entitlement" lives. Hierarchy-aware policy over an organizational spine, a signed header contract, entitlements unified with permissions, and audit as free exhaust of enforcement.
+
+The product specification is [`docs/brief.md`](docs/brief.md) (Brief v1.4). The execution plan against this repository is [`docs/repo-reconciliation.md`](docs/repo-reconciliation.md); the candidate engineering design is [`docs/design-a1.md`](docs/design-a1.md). See [ADR-0004](docs/adr/0004-brief-v1.4-supersedes-resolution-engine-framing.md) for why this framing supersedes earlier ones.
 
 ## Architecture
 
