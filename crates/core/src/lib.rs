@@ -33,6 +33,7 @@ pub use features::{
     FlagDefinitionParams, FlagName, FlagOverride, FlagType, FlagValue, ResolutionReason,
     ResolvedFlag, ResolvedFlags,
 };
+pub use fgrn::{Fgrn, FgrnKind};
 pub use native_id::NativeId;
 pub use org::{OrgStatus, Organization};
 pub use percentage::Percentage;
