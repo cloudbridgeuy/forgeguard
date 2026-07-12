@@ -1,0 +1,7 @@
+[
+  { "input": "fgrn:acme:orgunit:ou_finance",              "organization": "acme", "kind": "orgunit",       "id": "ou_finance" },
+  { "input": "fgrn:acme:principal:usr_8f3k2",             "organization": "acme", "kind": "principal",     "id": "usr_8f3k2" },
+  { "input": "fgrn:acme:principal-set:proj_alpha_readers","organization": "acme", "kind": "principal-set", "id": "proj_alpha_readers" },
+  { "input": "fgrn:acme:resource:document/doc_123",       "organization": "acme", "kind": "resource",      "id": "document/doc_123", "resource_type": "document", "native_id": "doc_123" },
+  { "input": "fgrn:acme:resource:invoice/2024/Q3-001",    "organization": "acme", "kind": "resource",      "id": "invoice/2024/Q3-001", "resource_type": "invoice", "native_id": "2024/Q3-001" }
+]

@@ -1,0 +1,10 @@
+[
+  { "input": "",                                        "reason": "empty" },
+  { "input": "fgrn:acme:principal",                     "reason": "missing id position" },
+  { "input": "fgrn:acme:widget:x",                      "reason": "unknown kind" },
+  { "input": "fgrn:Acme:principal:usr_1",               "reason": "organization must be a valid segment" },
+  { "input": "fgrn:acme:resource:doc_123",              "reason": "resource id must be {resource_type}/{native_id}" },
+  { "input": "fgrn:acme:principal:*",                   "reason": "wildcards are selectors, not FGRNs" },
+  { "input": "fgrn:acme-app:acme-corp:iam:user:alice",  "reason": "six-positional legacy format" },
+  { "input": "fgrn:acme:principal:has space",           "reason": "id must be visible ASCII" }
+]
