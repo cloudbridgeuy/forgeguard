@@ -12,12 +12,14 @@ use std::collections::BTreeMap;
 
 use aws_sdk_dynamodb::types::AttributeValue;
 use chrono::{DateTime, Utc};
+use forgeguard_authn_core::user_pool::PoolId;
 use forgeguard_authn_core::{
-    AttrType, CustomAttrName, CustomAttrSpec, MembershipRow, RawAttrMap, StandardAttrName,
-    StandardAttrSpec, UserSchema,
+    validate_attributes, AttrType, CustomAttrName, CustomAttrSpec, MembershipRow, RawAttrMap,
+    StandardAttrName, StandardAttrSpec, UserSchema, ValidationErrors,
 };
 use forgeguard_authz_core::rbac::{validate_group_name, CYCLE_PREFIX};
 use forgeguard_authz_core::{resolve_inherits, RbacEntry};
+use forgeguard_core::{GroupName, OrganizationId};
 
 use crate::control_plane::schema::orgs_schema;
 use crate::control_plane::seed_core::{SeedGroup, SeedOrg, SeedUser, SeedUserSchema};
@@ -424,6 +426,98 @@ pub(crate) fn is_seeded_cp_rbac_policy(description: Option<&str>, scope: &Seeded
         rest.strip_prefix(&format!("{org_id}-"))
             .is_some_and(|role| !role.is_empty())
     })
+}
+
+/// Errors surfaced by `preflight_validate`. A single ADT lets `run()` report
+/// the first failing org/user with a precise stage label instead of a generic
+/// "validation failed" message.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum PreflightError {
+    #[error("org_id '{org}' is invalid: {reason}")]
+    InvalidOrgId { org: String, reason: String },
+    #[error("cognito_user_pool_id for org '{org}' is invalid: {reason}")]
+    InvalidPoolId { org: String, reason: String },
+    #[error("group name '{group}' in org '{org}' is invalid: {reason}")]
+    InvalidGroupName {
+        org: String,
+        group: String,
+        reason: String,
+    },
+    #[error("user_schema for org '{org}' is invalid: {source}")]
+    Schema {
+        org: String,
+        #[source]
+        source: SeedSchemaConversionError,
+    },
+    #[error("groups for org '{org}' failed validation: {source}")]
+    Groups {
+        org: String,
+        #[source]
+        source: SeedGroupConversionError,
+    },
+    #[error("attribute validation failed for user '{user}' in org '{org}': {errors:?}")]
+    Attrs {
+        org: String,
+        user: String,
+        errors: ValidationErrors,
+    },
+}
+
+/// Phase 0 of the seed pipeline (pure). Validates every newtype boundary and
+/// schema/attribute constraint across the entire `SeedConfig` before any AWS
+/// call. Returns one `UserSchema` per org, aligned by index with `orgs`, so
+/// the imperative shells in Phase 2 and Phase 4 reuse the validated schema
+/// instead of re-parsing it.
+///
+/// Order matches the plan §5 Phase 0:
+/// 1. `OrganizationId::new(org_id)`
+/// 2. `PoolId::try_new(cognito_user_pool_id)`
+/// 3. `seed_user_schema_to_domain` → domain `UserSchema`
+/// 4. `validate_attributes` for every user
+/// 5. group names + inheritance graph via existing `validate_seed_groups`
+pub(crate) fn preflight_validate(orgs: &[SeedOrg]) -> Result<Vec<UserSchema>, PreflightError> {
+    let mut schemas = Vec::with_capacity(orgs.len());
+    for org in orgs {
+        OrganizationId::new(org.org_id()).map_err(|e| PreflightError::InvalidOrgId {
+            org: org.org_id().to_owned(),
+            reason: e.to_string(),
+        })?;
+        PoolId::try_new(org.cognito_user_pool_id()).map_err(|e| PreflightError::InvalidPoolId {
+            org: org.org_id().to_owned(),
+            reason: e.to_string(),
+        })?;
+
+        let schema =
+            seed_user_schema_to_domain(org.user_schema()).map_err(|e| PreflightError::Schema {
+                org: org.org_id().to_owned(),
+                source: e,
+            })?;
+
+        for user in org.users() {
+            let attrs = seed_user_attrs_to_domain(user);
+            validate_attributes(&schema, &attrs).map_err(|errors| PreflightError::Attrs {
+                org: org.org_id().to_owned(),
+                user: user.email().to_owned(),
+                errors,
+            })?;
+            for group in user.groups() {
+                GroupName::new(group).map_err(|e| PreflightError::InvalidGroupName {
+                    org: org.org_id().to_owned(),
+                    group: group.clone(),
+                    reason: e.to_string(),
+                })?;
+            }
+        }
+
+        let entries = seed_groups_to_rbac_entries(org.groups());
+        validate_seed_groups(&entries).map_err(|e| PreflightError::Groups {
+            org: org.org_id().to_owned(),
+            source: e,
+        })?;
+
+        schemas.push(schema);
+    }
+    Ok(schemas)
 }
 
 #[cfg(test)]

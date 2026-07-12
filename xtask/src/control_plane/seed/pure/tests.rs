@@ -533,3 +533,166 @@ attributes = { name = "Alice", undeclared = "x" }
         .iter()
         .any(|e| matches!(e.reason, FieldErrorKind::Unknown) && e.field == "undeclared"));
 }
+
+// -- preflight_validate (Phase 0) ------------------------------------------
+
+#[test]
+fn preflight_validate_happy_path() {
+    let org = parse_seed_org(
+        r#"
+[[organization]]
+org_id               = "org-acme"
+name                 = "Acme"
+cognito_user_pool_id = "us-east-2_acme"
+
+[organization.user_schema.standard]
+name = { required = true }
+
+[[organization.user]]
+email      = "admin@acme.test"
+groups     = ["admin"]
+attributes = { name = "Acme Admin" }
+
+[[organization.group]]
+name  = "member"
+allow = ["cp-organization-read"]
+
+[[organization.group]]
+name     = "admin"
+inherits = ["member"]
+allow    = ["cp-organization-update"]
+"#,
+    );
+    let schemas = preflight_validate(std::slice::from_ref(&org)).unwrap();
+    assert_eq!(schemas.len(), 1);
+    assert!(schemas[0].standard().contains_key(&StandardAttrName::Name));
+}
+
+#[test]
+fn preflight_validate_rejects_invalid_org_id() {
+    let org = parse_seed_org(
+        r#"
+[[organization]]
+org_id               = "Bad ID"
+name                 = "Acme"
+cognito_user_pool_id = "us-east-2_acme"
+"#,
+    );
+    let err = preflight_validate(std::slice::from_ref(&org)).unwrap_err();
+    assert!(
+        matches!(err, PreflightError::InvalidOrgId { ref org, .. } if org == "Bad ID"),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn preflight_validate_rejects_invalid_pool_id() {
+    let org = parse_seed_org(
+        r#"
+[[organization]]
+org_id               = "org-acme"
+name                 = "Acme"
+cognito_user_pool_id = ""
+"#,
+    );
+    let err = preflight_validate(std::slice::from_ref(&org)).unwrap_err();
+    assert!(
+        matches!(err, PreflightError::InvalidPoolId { ref org, .. } if org == "org-acme"),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn preflight_validate_rejects_malformed_schema() {
+    let org = parse_seed_org(
+        r#"
+[[organization]]
+org_id               = "org-acme"
+name                 = "Acme"
+cognito_user_pool_id = "us-east-2_acme"
+
+[organization.user_schema.standard]
+bogus_attr = { required = true }
+"#,
+    );
+    let err = preflight_validate(std::slice::from_ref(&org)).unwrap_err();
+    assert!(matches!(err, PreflightError::Schema { .. }), "got: {err:?}");
+}
+
+#[test]
+fn preflight_validate_rejects_missing_required_attr() {
+    let org = parse_seed_org(
+        r#"
+[[organization]]
+org_id               = "org-acme"
+name                 = "Acme"
+cognito_user_pool_id = "us-east-2_acme"
+
+[organization.user_schema.standard]
+name = { required = true }
+
+[[organization.user]]
+email      = "missing@acme.test"
+groups     = ["admin"]
+attributes = { }
+"#,
+    );
+    let err = preflight_validate(std::slice::from_ref(&org)).unwrap_err();
+    match err {
+        PreflightError::Attrs { user, .. } => assert_eq!(user, "missing@acme.test"),
+        other => panic!("expected Attrs, got {other:?}"),
+    }
+}
+
+#[test]
+fn preflight_validate_rejects_invalid_membership_group_name() {
+    let org = parse_seed_org(
+        r#"
+[[organization]]
+org_id               = "org-acme"
+name                 = "Acme"
+cognito_user_pool_id = "us-east-2_acme"
+
+[organization.user_schema.standard]
+name = { required = true }
+
+[[organization.user]]
+email      = "admin@acme.test"
+groups     = ["Bad Group"]
+attributes = { name = "Acme Admin" }
+"#,
+    );
+    let err = preflight_validate(std::slice::from_ref(&org)).unwrap_err();
+    match err {
+        PreflightError::InvalidGroupName { group, .. } => assert_eq!(group, "Bad Group"),
+        other => panic!("expected InvalidGroupName, got {other:?}"),
+    }
+}
+
+#[test]
+fn preflight_validate_rejects_dangling_inherit() {
+    let org = parse_seed_org(
+        r#"
+[[organization]]
+org_id               = "org-acme"
+name                 = "Acme"
+cognito_user_pool_id = "us-east-2_acme"
+
+[organization.user_schema.standard]
+name = { required = true }
+
+[[organization.group]]
+name     = "admin"
+inherits = ["nonexistent"]
+allow    = ["cp-organization-update"]
+"#,
+    );
+    let err = preflight_validate(std::slice::from_ref(&org)).unwrap_err();
+    match err {
+        PreflightError::Groups {
+            source: SeedGroupConversionError::DanglingInherit { parent, .. },
+            ..
+        } => assert_eq!(parent, "nonexistent"),
+        other => panic!("expected Groups::DanglingInherit, got {other:?}"),
+    }
+}

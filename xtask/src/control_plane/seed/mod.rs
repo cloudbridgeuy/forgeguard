@@ -1,10 +1,10 @@
 //! `cargo xtask control-plane seed` — tear down V0 state, then re-seed
 //! organizations into DynamoDB as `OrgStatus::Draft`.
 //!
-//! ## V5 invariant
-//! No Cognito users, no VP push. Per-org Cognito pools and the V3 Active-org
-//! VP write-path are owned by the saga ticket (separate from #102); user
-//! provisioning lives in issue #100.
+//! ## V6 invariant
+//! No VP push. Every seeded org is `Draft`; Cognito users are created in Phase 4
+//! and the V3 Active-org VP write-path is owned by the saga ticket (separate
+//! from #102).
 //!
 //! ## 1Password dependencies
 //! - `op://forgeguard-{env}/dynamodb/table-name` — DDB table for the seed.
@@ -28,6 +28,7 @@ use aws_sdk_dynamodb::config::{BehaviorVersion, Credentials, Region};
 use chrono::{DateTime, Utc};
 use clap::Args;
 use color_eyre::eyre::{self, Context, Result};
+use forgeguard_authn::user_pool::{AwsCognitoUserPoolClient, UserPoolClient};
 
 use super::op::{build_aws_config, read_op};
 use super::op_core::{build_vault_name, ForgeguardEnv};
@@ -36,13 +37,16 @@ use super::seed_core::{DynamoTarget, SeedConfig};
 use groups::write_groups;
 use orgs::write_orgs;
 use pure::SeededOrgScope;
+use schema::write_user_schemas;
 use teardown::{teardown_cp_vp_policies, teardown_users};
+use users::write_users;
 
 /// Wiring carried into every imperative-shell helper.
 pub(crate) struct SeedContext<'a> {
     pub(crate) dynamo: &'a aws_sdk_dynamodb::Client,
     pub(crate) cognito: &'a aws_sdk_cognitoidentityprovider::Client,
     pub(crate) vp: &'a aws_sdk_verifiedpermissions::Client,
+    pub(crate) user_pool_client: &'a dyn UserPoolClient,
     pub(crate) table_name: String,
     pub(crate) pool_id: String,
     pub(crate) cp_dogfood_policy_store_id: String,
@@ -96,6 +100,7 @@ struct SeedWiring {
     dynamo: aws_sdk_dynamodb::Client,
     cognito: aws_sdk_cognitoidentityprovider::Client,
     vp: aws_sdk_verifiedpermissions::Client,
+    user_pool_client: AwsCognitoUserPoolClient,
     table_name: String,
     pool_id: String,
     cp_dogfood_policy_store_id: String,
@@ -122,6 +127,7 @@ async fn build_seed_context(args: &SeedArgs) -> Result<SeedWiring> {
     };
     let cognito = aws_sdk_cognitoidentityprovider::Client::new(&sdk_config);
     let vp = aws_sdk_verifiedpermissions::Client::new(&sdk_config);
+    let user_pool_client = AwsCognitoUserPoolClient::new(cognito.clone());
 
     let vault = build_vault_name(args.env);
     let op_account = Some(args.op_account.as_str());
@@ -151,6 +157,7 @@ async fn build_seed_context(args: &SeedArgs) -> Result<SeedWiring> {
         dynamo,
         cognito,
         vp,
+        user_pool_client,
         table_name,
         pool_id,
         cp_dogfood_policy_store_id,
@@ -166,6 +173,7 @@ pub(crate) async fn run(args: &SeedArgs) -> Result<()> {
         dynamo,
         cognito,
         vp,
+        user_pool_client,
         table_name,
         pool_id,
         cp_dogfood_policy_store_id,
@@ -177,6 +185,7 @@ pub(crate) async fn run(args: &SeedArgs) -> Result<()> {
         dynamo: &dynamo,
         cognito: &cognito,
         vp: &vp,
+        user_pool_client: &user_pool_client,
         table_name,
         pool_id,
         cp_dogfood_policy_store_id,
@@ -193,6 +202,15 @@ pub(crate) async fn run(args: &SeedArgs) -> Result<()> {
     }
     println!();
 
+    println!("== Phase 0: validate seed config ==");
+    let schemas = pure::preflight_validate(ctx.config.organizations())
+        .map_err(|e| eyre::eyre!("seed pre-flight failed: {e}"))?;
+    println!(
+        "Validated {} org(s); every user schema parsed and every declared attribute checked.",
+        schemas.len()
+    );
+    println!();
+
     println!("== Teardown phase ==");
     let mut report = teardown_users(&ctx).await?;
     report.cp_vp_policies = teardown_cp_vp_policies(&ctx).await?;
@@ -206,10 +224,14 @@ pub(crate) async fn run(args: &SeedArgs) -> Result<()> {
 
     println!("== Re-seed phase ==");
     write_orgs(&ctx, ctx.config.organizations()).await?;
+    write_user_schemas(&ctx, ctx.config.organizations(), &schemas).await?;
     write_groups(&ctx, ctx.config.organizations()).await?;
+    for (org, schema) in ctx.config.organizations().iter().zip(&schemas) {
+        write_users(&ctx, org, ctx.user_pool_client, schema).await?;
+    }
 
     println!();
-    println!("Seed complete. All seeded orgs are Draft; no Cognito users created.");
+    println!("Seed complete. All seeded orgs are Draft; users created in Cognito and DDB.");
     Ok(())
 }
 
@@ -229,25 +251,23 @@ fn build_local_dynamo_client(endpoint: &str) -> aws_sdk_dynamodb::Client {
     aws_sdk_dynamodb::Client::from_conf(dynamo_config)
 }
 
-/// Verify the committed `xtask/seed.toml` parses as the V5-shape `SeedConfig`
-/// and that every declared role passes name/inherit/cycle validation. The
-/// orchestrator's pre-flight uses the same pure helper, so a green test here
-/// proves a real `cargo xtask control-plane seed` run will not fail validation
-/// on `xtask/seed.toml`.
+/// Verify the committed `xtask/seed.toml` parses as the V6-shape `SeedConfig`
+/// and passes the same `preflight_validate` pure helper the orchestrator runs
+/// before any AWS call. A green test here proves a real
+/// `cargo xtask control-plane seed` run will not fail Phase 0 on
+/// `xtask/seed.toml`.
 ///
-/// Negative cases (dangling inherit, cycle, invalid name) are covered by the
-/// pure unit tests in `seed/pure/tests.rs`. Because `write_groups` runs the
-/// same `validate_seed_groups` up-front before any `PutItem`, those cover the
-/// V5 acceptance criterion ("dangling inherit aborts the seed before any DDB
-/// write happens") without needing `dynamodb-local`.
+/// Negative cases (dangling inherit, cycle, invalid name, malformed schema,
+/// missing required attr) live in `seed/pure/tests.rs` so this test stays
+/// focused on the V6 shape of the committed file.
 #[cfg(test)]
-mod seed_toml_v5_shape_tests {
+mod seed_toml_shape_tests {
     #![allow(clippy::unwrap_used)]
     use std::fs;
 
     use crate::control_plane::seed_core::SeedConfig;
 
-    use super::pure::{seed_groups_to_rbac_entries, validate_seed_groups};
+    use super::pure::preflight_validate;
 
     fn load_seed_config() -> SeedConfig {
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("seed.toml");
@@ -256,13 +276,17 @@ mod seed_toml_v5_shape_tests {
     }
 
     #[test]
-    fn seed_toml_parses_into_v5_shape() {
+    fn seed_toml_parses_into_v6_shape() {
         let config = load_seed_config();
         let orgs = config.organizations();
         assert_eq!(orgs.len(), 2, "expected exactly two seeded orgs");
 
         let names: Vec<&str> = orgs.iter().map(|o| o.org_id()).collect();
         assert_eq!(names, ["org-acme", "org-globex"]);
+        assert!(
+            !names.contains(&"forgeguard"),
+            "seed.toml must not declare the platform org `forgeguard` (see plan §10)"
+        );
 
         for org in orgs {
             let group_names: Vec<&str> = org.groups().iter().map(|g| g.name()).collect();
@@ -273,57 +297,48 @@ mod seed_toml_v5_shape_tests {
                 org.org_id()
             );
 
-            let member = org.groups().iter().find(|g| g.name() == "member").unwrap();
-            assert!(member.inherits().is_empty());
             assert_eq!(
-                member.allow(),
-                &["cp-organization-read", "cp-key-read", "cp-config-read"],
-                "member allow list must match forgeguard.toml for org '{}'",
+                org.users().len(),
+                2,
+                "org '{}' must declare exactly two users",
                 org.org_id()
             );
 
-            let admin = org.groups().iter().find(|g| g.name() == "admin").unwrap();
-            assert_eq!(admin.inherits(), &["member"]);
-            assert_eq!(
-                admin.allow(),
-                &[
-                    "cp-organization-create",
-                    "cp-organization-update",
-                    "cp-member-invite",
-                    "cp-member-remove",
-                    "cp-member-change-role",
-                    "cp-config-write",
-                    "cp-key-generate",
-                    "cp-key-revoke",
-                    "cp-key-rotate",
-                ],
-                "admin allow list must match forgeguard.toml for org '{}'",
+            let name_spec = org
+                .user_schema()
+                .standard()
+                .get("name")
+                .unwrap_or_else(|| panic!("org '{}' must declare `name` schema", org.org_id()));
+            assert!(
+                name_spec.required(),
+                "org '{}' `name` must be required",
+                org.org_id()
+            );
+            assert!(
+                org.user_schema().custom().is_empty(),
+                "org '{}' declares no custom attrs in V6",
                 org.org_id()
             );
 
-            let owner = org.groups().iter().find(|g| g.name() == "owner").unwrap();
-            assert_eq!(owner.inherits(), &["admin"]);
-            assert_eq!(
-                owner.allow(),
-                &["cp-organization-delete", "cp-member-promote-owner"],
-                "owner allow list must match forgeguard.toml for org '{}'",
-                org.org_id()
-            );
+            for user in org.users() {
+                let name = user.attributes().get("name").unwrap_or_else(|| {
+                    panic!("user '{}' must declare a `name` attribute", user.email())
+                });
+                assert!(
+                    !name.is_empty(),
+                    "user '{}' `name` attribute must be non-empty",
+                    user.email()
+                );
+            }
         }
     }
 
     #[test]
-    fn seed_toml_groups_validate() {
+    fn seed_toml_passes_preflight() {
         let config = load_seed_config();
-        for org in config.organizations() {
-            let entries = seed_groups_to_rbac_entries(org.groups());
-            let result = validate_seed_groups(&entries);
-            assert!(
-                result.is_ok(),
-                "seed.toml groups for '{}' failed validation: {:?}",
-                org.org_id(),
-                result.unwrap_err()
-            );
-        }
+        let schemas = preflight_validate(config.organizations()).unwrap_or_else(|e| {
+            panic!("seed.toml failed Phase 0 preflight: {e}");
+        });
+        assert_eq!(schemas.len(), config.organizations().len());
     }
 }
