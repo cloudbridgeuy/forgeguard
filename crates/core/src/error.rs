@@ -25,6 +25,10 @@ pub enum Error {
     /// A saga id string that is empty or otherwise malformed.
     #[error("invalid saga id: {raw}")]
     InvalidSagaId { raw: String },
+    /// A structural violation of the organizational spine (Brief v1.4):
+    /// the hierarchy edges must form a single-rooted tree.
+    #[error("spine violation: {reason}: {fgrn}")]
+    Spine { fgrn: String, reason: &'static str },
 }
 
 /// Convenience alias used throughout this crate.
@@ -58,5 +62,17 @@ mod tests {
     fn invalid_flag_type_display() {
         let err = Error::InvalidFlagType("complex".to_string());
         assert_eq!(err.to_string(), "unknown feature flag type: complex");
+    }
+
+    #[test]
+    fn spine_error_display() {
+        let err = Error::Spine {
+            fgrn: "fgrn:acme:orgunit:ou_x".to_string(),
+            reason: "unknown parent",
+        };
+        assert_eq!(
+            err.to_string(),
+            "spine violation: unknown parent: fgrn:acme:orgunit:ou_x"
+        );
     }
 }
