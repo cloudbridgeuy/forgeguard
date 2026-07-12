@@ -13,6 +13,7 @@ pub mod percentage;
 pub mod permission;
 pub mod saga_id;
 pub mod segment;
+pub mod vp_fgrn;
 
 pub use action::{
     Action, Entity, Namespace, PrincipalKind, PrincipalRef, QualifiedAction, ResourceId,
@@ -31,7 +32,6 @@ pub use features::{
     FlagDefinitionParams, FlagName, FlagOverride, FlagType, FlagValue, ResolutionReason,
     ResolvedFlag, ResolvedFlags,
 };
-pub use fgrn::{Fgrn, FgrnSegment};
 pub use org::{OrgStatus, Organization};
 pub use percentage::Percentage;
 pub use permission::{
@@ -42,3 +42,4 @@ pub use saga_id::SagaId;
 pub use segment::{
     FlowId, GroupName, OrganizationId, PolicyName, ProjectId, Segment, TenantId, UserId,
 };
+pub use vp_fgrn::{FgrnSegment, VpFgrn};

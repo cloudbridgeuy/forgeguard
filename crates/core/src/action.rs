@@ -10,9 +10,9 @@ use serde::de::Deserializer;
 use serde::ser::Serializer;
 use serde::{Deserialize, Serialize};
 
-use crate::fgrn::known_segments;
+use crate::vp_fgrn::known_segments;
 use crate::{
-    CedarEntityType, CedarNamespace, Error, Fgrn, ProjectId, Result, Segment, TenantId, UserId,
+    CedarEntityType, CedarNamespace, Error, ProjectId, Result, Segment, TenantId, UserId, VpFgrn,
 };
 
 // ---------------------------------------------------------------------------
@@ -420,8 +420,8 @@ impl ResourceRef {
 
     /// Build the FGRN for this resource. Used as the Verified Permissions entity ID.
     /// Requires tenant because FGRNs include the tenant segment.
-    pub fn to_fgrn(&self, project: &ProjectId, tenant: &TenantId) -> Fgrn {
-        Fgrn::resource(project, tenant, &self.namespace, &self.entity, &self.id)
+    pub fn to_fgrn(&self, project: &ProjectId, tenant: &TenantId) -> VpFgrn {
+        VpFgrn::resource(project, tenant, &self.namespace, &self.entity, &self.id)
     }
 
     /// Borrow the namespace.
@@ -536,10 +536,10 @@ impl PrincipalRef {
     ///
     /// - `User`    → `fgrn:<project>:<tenant>:iam:user:<user_id>`
     /// - `Machine` → `fgrn:<project>:<tenant>:iam:machine:<user_id>`
-    pub fn to_fgrn(&self, project: &ProjectId, tenant: &TenantId) -> Fgrn {
+    pub fn to_fgrn(&self, project: &ProjectId, tenant: &TenantId) -> VpFgrn {
         match self.kind {
-            PrincipalKind::User => Fgrn::user(project, tenant, &self.user_id),
-            PrincipalKind::Machine => Fgrn::machine(project, tenant, &self.user_id),
+            PrincipalKind::User => VpFgrn::user(project, tenant, &self.user_id),
+            PrincipalKind::Machine => VpFgrn::machine(project, tenant, &self.user_id),
         }
     }
 }
