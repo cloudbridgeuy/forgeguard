@@ -57,7 +57,18 @@ pub(crate) async fn write_users(
     sync_pool_custom_attrs(org, &pool_id, user_pool_client, schema).await?;
 
     for user in org.users() {
-        provision_user(ctx, org, user, &pool_id, &org_id, user_pool_client, schema).await?;
+        provision_user(
+            ctx,
+            ProvisionUserParams {
+                org,
+                user,
+                pool_id: &pool_id,
+                org_id: &org_id,
+                user_pool_client,
+                schema,
+            },
+        )
+        .await?;
     }
     Ok(())
 }
@@ -106,15 +117,25 @@ async fn sync_pool_custom_attrs(
     }
 }
 
-async fn provision_user(
-    ctx: &SeedContext<'_>,
-    org: &SeedOrg,
-    user: &SeedUser,
-    pool_id: &PoolId,
-    org_id: &OrganizationId,
-    user_pool_client: &dyn UserPoolClient,
-    schema: &UserSchema,
-) -> Result<()> {
+struct ProvisionUserParams<'a> {
+    org: &'a SeedOrg,
+    user: &'a SeedUser,
+    pool_id: &'a PoolId,
+    org_id: &'a OrganizationId,
+    user_pool_client: &'a dyn UserPoolClient,
+    schema: &'a UserSchema,
+}
+
+async fn provision_user(ctx: &SeedContext<'_>, params: ProvisionUserParams<'_>) -> Result<()> {
+    let ProvisionUserParams {
+        org,
+        user,
+        pool_id,
+        org_id,
+        user_pool_client,
+        schema,
+    } = params;
+
     let mut attributes = pure::seed_user_attrs_to_domain(user);
     validate_attributes(schema, &attributes).map_err(|errs| {
         eyre!(

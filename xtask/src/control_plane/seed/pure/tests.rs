@@ -502,9 +502,7 @@ fn membership_row_to_dynamo_attrs_emits_groups_list_even_when_empty() {
     });
     let by_key: std::collections::HashMap<_, _> =
         membership_row_to_dynamo_attrs(&row).into_iter().collect();
-    let groups = by_key["groups"]
-        .as_l()
-        .expect("groups must be a List even when empty");
+    let groups = by_key["groups"].as_l().unwrap();
     assert!(groups.is_empty());
 }
 
