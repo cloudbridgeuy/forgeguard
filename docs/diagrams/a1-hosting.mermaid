@@ -1,0 +1,49 @@
+flowchart TB
+
+subgraph CUST["CUSTOMER RUNTIME — self-hosted body (free tier · MVP: founder's app on homelab k3s)"]
+    direction TB
+    U["End users / M2M clients / Agents"] -->|HTTPS| APP
+    subgraph APP["Application process"]
+        MW["fg-middleware (Tower layer)\nenforce | observe per endpoint\n· authN federation (OIDC/JWKS)\n· fg-engine: in-process Cedar eval\n  (p99 ≈ 15µs measured)\n· signs X-Fg-* headers (Org key)\n· sets fg.scope_path / fg.granted_ids"]
+        H["App handlers\n(auth decision logic deleted —\ntrusts signed headers)"]
+        MW -->|"signed identity + scope headers"| H
+    end
+    PG[("Customer PostgreSQL\n· app tables + RLS templates\n· fg schema: spine · grants ·\n  event log (gap-free seq) ·\n  decision buffer\n· MVCC = single-revision eval")]
+    MW <-->|"slice read @ one snapshot\nmutations return revision"| PG
+    H -->|"session vars feed RLS\n(list filtering)"| PG
+    CUR["Cursor endpoint\n(pull replay of event log)"] --- PG
+end
+
+subgraph FG["FORGEGUARD HOSTED CONTROL PLANE — A1.1 serverless ($17–117/mo fixed, scale-to-zero)"]
+    direction TB
+    ALB["API Gateway (HTTP API)"] --> API["Control-plane Lambdas\n(Rust · Graviton ARM64)\n· snapshot compiler (fg-compiler)\n· operational plane (entitlements)\n· principal upserts · tombstones\n· revision tokens · 1s long-poll\n  cursor = deny hot channel"]
+    API --> RDS[("DynamoDB (on-demand)\nevent-sourced truth:\nevent log (TransactWrite\ncounter+event = gap-free seq)\nstate@N = fold(events ≤ N)\nsnapshots → S3, pointer item")]
+    API --> S3[("S3 + lifecycle rules\ndecision-log archive\nretention = tier quota\n(≈$1/mo entry · ≈$42/mo B2B)")]
+    WH["Webhook delivery (bought, Class E)\nSvix-class · Standard Webhooks\nsequence + Org signature in payload\n(vendor replaceable)"]
+    API --> WH
+    BILL["Stripe — tenant-metered billing"]
+    OBS["CloudWatch / observability"]
+    API -.-> BILL
+    API -.-> OBS
+end
+
+subgraph PROXY["LATER PHASE — proxy body (B2B / polyglot microservices persona)"]
+    PXY["fg-proxy fleet (Pingora)\nat/behind API Gateway\n⚠ distributed deny hot-channel\n& cache invalidation: deferred,\nnot yet designed"]
+    SVCS["Customer microservices\n(EKS etc.) — trust signed headers"]
+    PXY -->|"signed X-Fg-* headers"| SVCS
+end
+
+%% Cross-plane flows
+MW -->|"decision-log shipping (batched)"| S3
+API -->|"snapshot vN + deny hot channel\n(≤1s revocation while connected)"| MW
+API -->|"snapshots + denies"| PXY
+WH -->|"push: at-least-once, idempotent,\nreplayable events"| CONS["Customer consumers\n(dimension-table sync,\nprovisioning hooks)"]
+CONS -.->|"pull fallback: cursor replay"| CUR
+API <-->|"grants/entitlements mutations\nreturn revision tokens"| MW
+
+classDef truth fill:#f4e8d0,stroke:#8a6d3b,color:#000
+classDef deferred fill:#fdecea,stroke:#c0392b,color:#000
+classDef bought fill:#e8f0f4,stroke:#31708f,color:#000
+class PG,RDS,S3 truth
+class PXY deferred
+class WH,BILL bought
