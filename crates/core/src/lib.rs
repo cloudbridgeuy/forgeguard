@@ -46,5 +46,5 @@ pub use saga_id::SagaId;
 pub use segment::{
     FlowId, GroupName, OrganizationId, PolicyName, ProjectId, Segment, TenantId, UserId,
 };
-pub use spine::OrgUnit;
+pub use spine::{OrgUnit, Spine};
 pub use vp_fgrn::{FgrnSegment, VpFgrn};
