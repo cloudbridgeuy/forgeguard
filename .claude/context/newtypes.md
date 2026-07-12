@@ -114,7 +114,9 @@ The test for "is this newtype shaped correctly?" is: can a downstream consumer e
 | `ConfigVersion` | `core` | `config_version` | `chrono::NaiveDate`, formatted `YYYY-MM-DD` | string |
 | `SagaId` | `core` | `saga_id` | non-empty, no `#`; `from_pk` strips `SAGA#` | bare; PK form `SAGA#<id>` |
 | `Etag` | `control-plane` | `etag` | quoted strong etag, non-empty | identical (RFC 7232) |
-| `Fgrn` | `core` | `fgrn` | namespaced resource name | identical |
+| `Fgrn` | `core` | `fgrn` | Brief v1.4 stable identity: `fgrn:{organization}:{kind}:{id}`, closed `FgrnKind` (`orgunit`\|`principal`\|`principal-set`\|`resource`), no wildcards | identical |
+| `NativeId` | `core` | `native_id` | non-empty, visible ASCII (`0x21..=0x7E`), no `:` or `*` — `/`, `_`, uppercase allowed | identical |
+| `VpFgrn` | `core` | `vp_fgrn` | legacy six-positional `fgrn:<project>:<tenant>:<namespace>:<resource-type>:<resource-id>`, frozen for the VP-era path only — do not extend | identical |
 | `FlagName` | `core` | `features` | non-empty identifier | identical |
 | `PolicyName` | `core` | `segment` | non-empty, no `#` | identical |
 | `ProjectId` | `core` | `segment` | non-empty, no `#` | identical |
