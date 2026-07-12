@@ -126,7 +126,7 @@ fn etag_header(etag: &Etag) -> HeaderMap {
 }
 
 /// Extract and parse the `If-Match` header. Returns `None` when absent or
-/// unparseable (treated identically to "header not sent").
+/// unparsable (treated identically to "header not sent").
 fn parse_if_match_header(headers: &HeaderMap) -> Option<etag::IfMatch> {
     headers
         .get(axum::http::header::IF_MATCH)
