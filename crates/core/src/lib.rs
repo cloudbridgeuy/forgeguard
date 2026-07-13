@@ -37,7 +37,7 @@ pub use cedar::{
 pub use cedar_ident::{CedarEntityType, CedarIdent, CedarNamespace};
 pub use config_version::ConfigVersion;
 pub use default_policy::DefaultPolicy;
-pub use delegation::DelegationChain;
+pub use delegation::{effective_verbs, DelegationChain, EffectiveScopeQuery};
 pub use error::{Error, Result};
 pub use features::{
     evaluate_flags, evaluate_flags_detailed, DetailedResolvedFlags, FlagConfig, FlagDefinition,
