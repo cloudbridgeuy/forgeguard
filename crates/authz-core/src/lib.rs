@@ -6,6 +6,7 @@ pub mod engine;
 pub mod error;
 pub mod query;
 pub mod rbac;
+pub mod store;
 
 #[cfg(feature = "test-support")]
 pub mod static_engine;
@@ -21,6 +22,7 @@ pub use rbac::{
     GroupValidationError, MaterializeCompileError, NamedPermit, RbacEntry, TenantConfig,
     ValidatedRbacEntry,
 };
+pub use store::Revision;
 
 #[cfg(feature = "test-support")]
 pub use static_engine::StaticPolicyEngine;
