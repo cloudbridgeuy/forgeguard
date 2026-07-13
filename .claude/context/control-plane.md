@@ -208,6 +208,8 @@ BYOC Proxy                              Control Plane
 
 **VP Authorization (V4):** When auth is enabled and a VP client is available (`--store=dynamodb` + `--jwks-url` + `--policy-store-id`), the policy engine is `VpPolicyEngine`. The Cedar project namespace is `forgeguard` (from `ProjectId::new("forgeguard")`). The tenant is read per request from `PolicyContext::tenant_id()` — populated from the `X-ForgeGuard-Org-Id` header during pipeline Phase 5b (membership enrichment) — so the engine is no longer bound to a static tenant at construction time. `DefaultPolicy::Deny` is used — unmatched routes are denied. See the Authorization section below for the route-to-action mapping and PrincipalKind routing.
 
+`forgeguard_authz` (the `VpPolicyEngine` crate) is gated behind the control-plane's `vp` Cargo feature, default ON — nothing changes for existing deployments. Building with `--no-default-features` drops `forgeguard_authz` from the dependency graph; if a policy store ID is configured in that build, startup fails fast with an error instead of silently falling back to allow-all.
+
 ## Authorization
 
 ### Mode Selection
