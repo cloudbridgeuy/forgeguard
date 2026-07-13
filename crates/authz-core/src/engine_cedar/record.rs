@@ -2,7 +2,7 @@
 //! names the snapshot version and store revision that decided it (R3), so
 //! any historical decision can be replayed exactly.
 
-use forgeguard_core::{Fgrn, Verb};
+use forgeguard_core::{DelegationChain, Fgrn, Verb};
 
 use crate::snapshot::SnapshotVersion;
 use crate::store::Revision;
@@ -14,6 +14,7 @@ pub struct DecisionQuery {
     action: Verb,
     resource: Fgrn,
     revision: Option<Revision>,
+    chain: Option<DelegationChain>,
 }
 
 impl DecisionQuery {
@@ -25,6 +26,7 @@ impl DecisionQuery {
             action,
             resource,
             revision: None,
+            chain: None,
         }
     }
 
@@ -32,6 +34,25 @@ impl DecisionQuery {
     pub fn at_revision(mut self, revision: Revision) -> Self {
         self.revision = Some(revision);
         self
+    }
+
+    /// Attach a delegation chain. The query's principal must be the chain's
+    /// actor — a chained decision is "may this actor act, on behalf of every
+    /// link down to the subject".
+    pub fn with_chain(mut self, chain: DelegationChain) -> crate::Result<Self> {
+        if chain.actor() != &self.principal {
+            return Err(crate::Error::ChainActorMismatch {
+                principal: self.principal.to_string(),
+                actor: chain.actor().to_string(),
+            });
+        }
+        self.chain = Some(chain);
+        Ok(self)
+    }
+
+    /// The delegation chain, when this is a delegated decision.
+    pub fn chain(&self) -> Option<&DelegationChain> {
+        self.chain.as_ref()
     }
 
     /// The acting principal.
@@ -118,25 +139,48 @@ mod tests {
         s.parse().unwrap()
     }
 
-    #[test]
-    fn query_defaults_to_no_revision() {
-        let q = DecisionQuery::new(
+    /// A `maria writes invoice/inv_1` query, the shared fixture for the
+    /// tests below.
+    fn maria_writes_invoice() -> DecisionQuery {
+        DecisionQuery::new(
             fgrn("fgrn:acme:principal:maria"),
             Verb::try_new("invoice-write").unwrap(),
             fgrn("fgrn:acme:resource:invoice/inv_1"),
-        );
+        )
+    }
+
+    #[test]
+    fn query_defaults_to_no_revision() {
+        let q = maria_writes_invoice();
         assert_eq!(q.revision(), None);
     }
 
     #[test]
     fn at_revision_pins_query() {
-        let q = DecisionQuery::new(
-            fgrn("fgrn:acme:principal:maria"),
-            Verb::try_new("invoice-write").unwrap(),
-            fgrn("fgrn:acme:resource:invoice/inv_1"),
-        )
-        .at_revision(Revision::new(2));
+        let q = maria_writes_invoice().at_revision(Revision::new(2));
         assert_eq!(q.revision(), Some(Revision::new(2)));
+    }
+
+    #[test]
+    fn with_chain_accepts_matching_actor() {
+        let chain = DelegationChain::try_new(vec![
+            fgrn("fgrn:acme:principal:maria"),
+            fgrn("fgrn:acme:principal:bob"),
+        ])
+        .unwrap();
+        let q = maria_writes_invoice().with_chain(chain).unwrap();
+        assert!(q.chain().is_some());
+    }
+
+    #[test]
+    fn with_chain_rejects_mismatched_actor() {
+        let chain = DelegationChain::try_new(vec![
+            fgrn("fgrn:acme:principal:bob"),
+            fgrn("fgrn:acme:principal:maria"),
+        ])
+        .unwrap();
+        let err = maria_writes_invoice().with_chain(chain).unwrap_err();
+        assert!(matches!(err, crate::Error::ChainActorMismatch { .. }));
     }
 
     #[test]

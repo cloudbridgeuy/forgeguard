@@ -27,6 +27,15 @@ pub enum Error {
     /// Policy text failed to compile into a snapshot.
     #[error("invalid policy: {0}")]
     InvalidPolicy(String),
+
+    /// A chained query's principal must be the chain's actor.
+    #[error("chain actor mismatch: query principal {principal}, chain actor {actor}")]
+    ChainActorMismatch {
+        /// The query's principal.
+        principal: String,
+        /// The chain's actor (head link).
+        actor: String,
+    },
 }
 
 /// Convenience alias used throughout this crate.
@@ -59,5 +68,17 @@ mod tests {
     fn display_unknown_entity() {
         let err = Error::UnknownEntity("fgrn:acme:principal:maria".into());
         assert_eq!(err.to_string(), "unknown entity: fgrn:acme:principal:maria");
+    }
+
+    #[test]
+    fn display_chain_actor_mismatch() {
+        let err = Error::ChainActorMismatch {
+            principal: "fgrn:acme:principal:maria".into(),
+            actor: "fgrn:acme:principal:bob".into(),
+        };
+        assert_eq!(
+            err.to_string(),
+            "chain actor mismatch: query principal fgrn:acme:principal:maria, chain actor fgrn:acme:principal:bob"
+        );
     }
 }
