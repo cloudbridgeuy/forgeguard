@@ -7,8 +7,10 @@ use std::fmt;
 use std::str::FromStr;
 
 use crate::error::{Error, Result};
+use crate::fgrn::Fgrn;
 use crate::native_id::NativeId;
 use crate::segment::Segment;
+use crate::spine::Spine;
 
 /// Whether a selector addresses a single node or its whole subtree.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -52,6 +54,45 @@ impl Selector {
     /// Node or subtree.
     pub fn scope(&self) -> SelectorScope {
         self.scope
+    }
+
+    /// Resolve this selector against a spine snapshot to concrete org-unit
+    /// FGRNs, sorted for reproducibility. `Node` yields exactly one FGRN;
+    /// `Subtree` yields the node and all descendants.
+    pub fn resolve(&self, spine: &Spine) -> Result<Vec<Fgrn>> {
+        if spine.organization() != &self.organization {
+            return Err(Error::Spine {
+                fgrn: self.to_string(),
+                reason: "selector organization does not match spine",
+            });
+        }
+        let mut current = spine.root().clone();
+        for segment in &self.path {
+            let mut next: Option<Fgrn> = None;
+            for unit in spine.units() {
+                if unit.id() == segment && spine.parent(unit)? == Some(&current) {
+                    next = Some(unit.clone());
+                    break;
+                }
+            }
+            current = next.ok_or_else(|| Error::Spine {
+                fgrn: self.to_string(),
+                reason: "selector path does not match any org unit",
+            })?;
+        }
+        match self.scope {
+            SelectorScope::Node => Ok(vec![current]),
+            SelectorScope::Subtree => {
+                let mut resolved = Vec::new();
+                for unit in spine.units() {
+                    if spine.is_at_or_below(unit, &current)? {
+                        resolved.push(unit.clone());
+                    }
+                }
+                resolved.sort();
+                Ok(resolved)
+            }
+        }
     }
 }
 
@@ -104,6 +145,97 @@ impl FromStr for Selector {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use crate::spine::OrgUnit;
+
+    fn ou(org: &str, id: &str) -> Fgrn {
+        Fgrn::org_unit(
+            &Segment::try_new(org).unwrap(),
+            &NativeId::try_new(id).unwrap(),
+        )
+    }
+
+    /// root ── finance ── accounting
+    ///     └── engineering
+    fn fixture() -> Spine {
+        Spine::try_new(vec![
+            OrgUnit::try_new(ou("acme", "root"), None).unwrap(),
+            OrgUnit::try_new(ou("acme", "finance"), Some(ou("acme", "root"))).unwrap(),
+            OrgUnit::try_new(ou("acme", "accounting"), Some(ou("acme", "finance"))).unwrap(),
+            OrgUnit::try_new(ou("acme", "engineering"), Some(ou("acme", "root"))).unwrap(),
+        ])
+        .unwrap()
+    }
+
+    #[test]
+    fn resolves_node_selector() {
+        let spine = fixture();
+        let selector: Selector = "org:acme.finance".parse().unwrap();
+        assert_eq!(
+            selector.resolve(&spine).unwrap(),
+            vec![ou("acme", "finance")]
+        );
+    }
+
+    #[test]
+    fn resolves_root_node_selector() {
+        let spine = fixture();
+        let selector: Selector = "org:acme".parse().unwrap();
+        assert_eq!(selector.resolve(&spine).unwrap(), vec![ou("acme", "root")]);
+    }
+
+    #[test]
+    fn resolves_subtree_selector_sorted() {
+        let spine = fixture();
+        let selector: Selector = "org:acme.finance/**".parse().unwrap();
+        let mut expected = vec![ou("acme", "finance"), ou("acme", "accounting")];
+        expected.sort();
+        assert_eq!(selector.resolve(&spine).unwrap(), expected);
+    }
+
+    #[test]
+    fn resolves_whole_org_subtree() {
+        let spine = fixture();
+        let selector: Selector = "org:acme/**".parse().unwrap();
+        assert_eq!(selector.resolve(&spine).unwrap().len(), 4);
+    }
+
+    #[test]
+    fn deep_path_resolves_through_levels() {
+        let spine = fixture();
+        let selector: Selector = "org:acme.finance.accounting".parse().unwrap();
+        assert_eq!(
+            selector.resolve(&spine).unwrap(),
+            vec![ou("acme", "accounting")]
+        );
+    }
+
+    #[test]
+    fn wrong_org_is_rejected() {
+        let spine = fixture();
+        let selector: Selector = "org:globex.finance/**".parse().unwrap();
+        let err = selector.resolve(&spine).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("selector organization does not match spine"));
+    }
+
+    #[test]
+    fn unknown_path_is_rejected() {
+        let spine = fixture();
+        let selector: Selector = "org:acme.marketing".parse().unwrap();
+        let err = selector.resolve(&spine).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("selector path does not match any org unit"));
+    }
+
+    #[test]
+    fn path_segments_must_chain_from_root() {
+        // "accounting" exists but is not a child of root
+        let spine = fixture();
+        let selector: Selector = "org:acme.accounting".parse().unwrap();
+        assert!(selector.resolve(&spine).is_err());
+    }
 
     #[test]
     fn parses_the_brief_example() {

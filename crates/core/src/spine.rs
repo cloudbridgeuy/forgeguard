@@ -242,6 +242,12 @@ impl Spine {
         Ok(path.contains(&ancestor))
     }
 
+    /// Iterate every org-unit FGRN in the spine, in no particular order.
+    /// Callers needing determinism must sort (`Fgrn: Ord`).
+    pub fn units(&self) -> impl Iterator<Item = &Fgrn> {
+        self.units.keys()
+    }
+
     /// Add a new org unit. The unit's parent must be `Some` and already
     /// present in the spine; a second root is unrepresentable this way.
     pub fn add(&mut self, unit: OrgUnit) -> Result<()> {
@@ -387,6 +393,13 @@ mod tests {
             OrgUnit::try_new(ou("acme", "engineering"), Some(ou("acme", "root"))).unwrap(),
         ])
         .unwrap()
+    }
+
+    #[test]
+    fn units_iterates_every_node() {
+        let spine = fixture();
+        assert_eq!(spine.units().count(), 4);
+        assert!(spine.units().any(|f| f == spine.root()));
     }
 
     #[test]
