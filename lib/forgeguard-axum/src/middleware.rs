@@ -98,7 +98,7 @@ pub async fn forgeguard_layer(
             let mut request = request;
             request
                 .extensions_mut()
-                .insert(ForgeGuardIdentity(identity));
+                .insert(ForgeGuardIdentity(identity.map(|boxed| *boxed)));
             request.extensions_mut().insert(ForgeGuardFlags(flags));
             next.run(request).await
         }

@@ -208,14 +208,14 @@ pub async fn evaluate_pipeline(
         }
 
         PipelineOutcome::Forward {
-            identity,
+            identity: identity.map(Box::new),
             flags,
             matched_route: Some(Box::new(matched_route)),
         }
     } else if public_match.is_public() {
         // Public route with no [[routes]] entry — passthrough to upstream
         PipelineOutcome::Forward {
-            identity,
+            identity: identity.map(Box::new),
             flags,
             matched_route: None,
         }
@@ -230,7 +230,7 @@ pub async fn evaluate_pipeline(
                 }
             }
             DefaultPolicy::Passthrough => PipelineOutcome::Forward {
-                identity,
+                identity: identity.map(Box::new),
                 flags,
                 matched_route: None,
             },

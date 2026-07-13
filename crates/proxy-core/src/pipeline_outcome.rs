@@ -29,7 +29,9 @@ pub enum PipelineOutcome {
     /// The pipeline approved the request for forwarding to upstream.
     Forward {
         /// The resolved identity, if authentication succeeded.
-        identity: Option<Identity>,
+        /// Boxed to reduce enum variant size disparity (`Identity` grew once
+        /// `serde_json`'s `preserve_order` feature got unified in workspace-wide).
+        identity: Option<Box<Identity>>,
         /// Evaluated feature flags, if flag config is present.
         flags: Option<ResolvedFlags>,
         /// The matched route with action/resource, if a route matched.

@@ -206,7 +206,7 @@ impl ProxyHttp for ForgeGuardProxy {
                 if matched_route.is_some() {
                     POLICY_DECISIONS.with_label_values(&["allow"]).inc();
                 }
-                ctx.identity = identity;
+                ctx.identity = identity.map(|boxed| *boxed);
                 ctx.flags = flags;
                 ctx.matched_route = matched_route.map(|r| *r);
                 Ok(false)
