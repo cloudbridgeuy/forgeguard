@@ -63,11 +63,28 @@ fn promotion_anchor_type(kind: FgrnKind) -> &'static str {
 }
 
 /// Cedar principal clause for a grant target.
-fn grant_principal_clause(to: &Fgrn) -> String {
+///
+/// A `Principal`-kind grantee's Cedar entity type depends on its
+/// `PrincipalKind` (`Human` → `User`, `Service`/`Agent` → `Machine`, via
+/// [`cedar_principal_type`]) — but that kind isn't known from the FGRN
+/// alone, and reading it here would violate `decide`'s single-read
+/// invariant. When the grantee *is* the slice's own principal (the common
+/// case: the querying principal is the grantee), its kind is already in the
+/// slice for free — use it. Otherwise fall back to `User`, which is exactly
+/// the pre-existing gap this can't structurally close without a second read
+/// (tracked alongside `promotion_anchor_type`'s owner-kind limitation).
+fn grant_principal_clause(to: &Fgrn, slice: &EntitySlice) -> String {
     match to.kind() {
         FgrnKind::PrincipalSet => format!(r#"principal in PSet::"{to}""#),
         FgrnKind::OrgUnit => format!(r#"principal in OrgUnit::"{to}""#),
-        _ => format!(r#"principal == User::"{to}""#),
+        _ => {
+            let entity_type = if slice.principal().fgrn() == to {
+                cedar_principal_type(slice.principal().kind())
+            } else {
+                "User"
+            };
+            format!(r#"principal == {entity_type}::"{to}""#)
+        }
     }
 }
 
@@ -133,7 +150,7 @@ pub(crate) fn grant_policies(slice: &EntitySlice) -> Result<String> {
     for grant in slice.grants() {
         let to = grant.to();
         validate_cedar_ident(&to.to_string(), "grant target").map_err(Error::InvalidPolicy)?;
-        let principal_clause = grant_principal_clause(to);
+        let principal_clause = grant_principal_clause(to, slice);
 
         let resource = grant.resource();
         validate_cedar_ident(&resource.to_string(), "grant resource")
@@ -318,5 +335,33 @@ mod tests {
 
         let slice = select_slice(&m, &maria, promotion.fgrn(), Revision::new(1)).unwrap();
         assert!(grant_policies(&slice).is_err());
+    }
+
+    #[test]
+    fn grant_policies_emits_machine_clause_for_agent_grantee() {
+        let finance = Fgrn::org_unit(&org(), &nid("finance"));
+        let bot = Fgrn::principal(&org(), &nid("bot"));
+        let mut m = ModelState::new(spine());
+        m.upsert_principal(Principal::try_new(bot.clone(), PrincipalKind::Agent, finance).unwrap());
+
+        let (promotion, grant) = share(ShareRequest {
+            resource: AnchoredResource::try_new(
+                Segment::try_new("invoice").unwrap(),
+                Fgrn::org_unit(&org(), &nid("finance_ap")),
+            )
+            .unwrap(),
+            native_id: nid("inv_1"),
+            to: bot.clone(),
+            actions: vec![Verb::try_new("invoice-write").unwrap()],
+        })
+        .unwrap();
+        m.upsert_promotion(promotion.clone());
+        m.add_grant(grant);
+
+        let slice = select_slice(&m, &bot, promotion.fgrn(), Revision::new(1)).unwrap();
+        let text = grant_policies(&slice).unwrap();
+
+        assert!(text.contains(&format!(r#"principal == Machine::"{bot}""#)));
+        PolicySet::from_str(&text).unwrap();
     }
 }
