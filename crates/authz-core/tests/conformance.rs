@@ -82,6 +82,8 @@ struct CaseFixture {
     action: String,
     resource_type: String,
     resource_id: String,
+    #[serde(default)]
+    chain: Vec<String>,
     expect: String,
 }
 
@@ -262,16 +264,40 @@ async fn conformance() {
         );
 
         for case in &fixture.cases {
-            let principal = principal_fgrns
-                .get(&case.principal)
-                .unwrap_or_else(|| panic!("unknown principal in case: {}", case.principal));
+            let resolve_principal = |id: &str, context: &str| -> Fgrn {
+                principal_fgrns
+                    .get(id)
+                    .cloned()
+                    .unwrap_or_else(|| panic!("unknown principal in {context}: {id}"))
+            };
+            let principal = resolve_principal(&case.principal, "case");
             let resource_key = format!("{}/{}", case.resource_type, case.resource_id);
             let resource = resource_fgrns
                 .get(&resource_key)
                 .unwrap_or_else(|| panic!("unknown resource in case: {resource_key}"));
             let action = Verb::try_new(case.action.clone()).expect("valid verb");
 
-            let query = DecisionQuery::new(principal.clone(), action, resource.clone());
+            let mut query = DecisionQuery::new(principal.clone(), action, resource.clone());
+            if !case.chain.is_empty() {
+                assert_eq!(
+                    case.chain.first().map(String::as_str),
+                    Some(case.principal.as_str()),
+                    "{}/{}: chain[0] must equal the case principal",
+                    fixture.name,
+                    case.name
+                );
+                let links = case
+                    .chain
+                    .iter()
+                    .map(|id| resolve_principal(id, "chain"))
+                    .collect();
+                let chain = forgeguard_core::DelegationChain::try_new(links)
+                    .expect("valid delegation chain");
+                query = query
+                    .with_chain(chain)
+                    .expect("chain actor matches principal");
+            }
+
             let record = engine
                 .decide(&store, &query)
                 .await

@@ -1,0 +1,31 @@
+{
+  "name": "s5-chain-intersection",
+  "description": "S5: a delegation chain allows iff every link allows — one denying link denies the whole chain",
+  "organization": "acme",
+  "spine": [
+    { "id": "root", "parent": null },
+    { "id": "finance", "parent": "root" },
+    { "id": "finance_ap", "parent": "finance" },
+    { "id": "engineering", "parent": "root" }
+  ],
+  "principals": [
+    { "id": "maria", "kind": "human", "anchor": "finance" },
+    { "id": "bob", "kind": "human", "anchor": "engineering" }
+  ],
+  "principal_sets": [],
+  "grants": [],
+  "promotions": [
+    {
+      "resource_type": "invoice",
+      "resource_id": "inv_1",
+      "anchor": "finance_ap",
+      "to": "maria",
+      "actions": ["invoice-write"]
+    }
+  ],
+  "policies": "permit(principal in OrgUnit::\"fgrn:acme:orgunit:finance\", action == Action::\"invoice-write\", resource in OrgUnit::\"fgrn:acme:orgunit:finance\");",
+  "cases": [
+    { "name": "maria alone allows", "principal": "maria", "action": "invoice-write", "resource_type": "invoice", "resource_id": "inv_1", "expect": "allow" },
+    { "name": "chain through bob denies", "principal": "maria", "action": "invoice-write", "resource_type": "invoice", "resource_id": "inv_1", "chain": ["maria", "bob"], "expect": "deny" }
+  ]
+}
