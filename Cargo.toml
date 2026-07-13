@@ -66,6 +66,9 @@ base64 = "0.22"
 # Binary data
 bytes = "1"
 
+# Cedar policy engine
+cedar-policy = "4"
+
 # Date/time
 chrono = { version = "0.4", features = ["serde"] }
 

@@ -17,6 +17,7 @@ path = "src/lib.rs"
 test-support = []
 
 [dependencies]
+cedar-policy = { workspace = true }
 forgeguard_core = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }
