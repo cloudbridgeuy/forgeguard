@@ -1,8 +1,15 @@
 # forgeguard_authz
 
-**Classification:** I/O crate
+**Classification:** I/O crate — optional VP backend
 
 Authorization I/O shell implementing `PolicyEngine` (from `forgeguard_authz_core`) via AWS Verified Permissions.
+
+Class-C backend for AWS-committed deployments; not on the default decision
+path. `forgeguard_authz_core::EmbeddedPolicyEngine` (in-process Cedar) is the
+phase-2 default. Consumers (`control-plane`, `proxy`) gate this crate behind
+a `vp` cargo feature — default ON, so nothing changes for existing
+deployments — and `cargo build --no-default-features` proves the gate by
+compiling without this crate in the dependency graph.
 
 ## What it owns
 

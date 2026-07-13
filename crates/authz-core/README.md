@@ -92,8 +92,27 @@ grant; `engine_cedar::translate` does that at decision time.
 - `translate` — pure `EntitySlice` → Cedar entity translation and per-decision grant-policy synthesis. Its module doc comment carries the full **entity-mapping table** (model type → Cedar entity type → UID → parents) that the conformance fixtures depend on exactly, plus the documented `PrincipalKind` collapse (`Human` → `User`; `Service`/`Agent` → `Machine`).
 - `record` — the `DecisionRecord`/`Decision` types themselves.
 - `engine` — `CedarEngine` and its `decide` orchestration.
+- `adapter` — see **`EmbeddedPolicyEngine` adapter (phase 2 / V4)** below.
 
 See `conformance/engine/README.md` for the end-to-end fixture format that exercises this module.
+
+#### `EmbeddedPolicyEngine` adapter (phase 2 / V4)
+
+`EmbeddedPolicyEngine` (`engine_cedar::adapter`, re-exported from the crate
+root) is the existing-trait face of the embedded engine: it wraps a
+`CedarEngine` + `Arc<dyn AuthzStore>` and implements `PolicyEngine`, so
+today's five `Arc<dyn PolicyEngine>` consumers (control-plane, proxy) can
+point at embedded Cedar without changing shape. It translates a flat
+`PolicyQuery` (`PrincipalRef`/`QualifiedAction`/`ResourceRef`) into an
+org-scoped `DecisionQuery` via the pure `adapter::map_query` function; the
+full mapping contract (principal → FGRN, action → `Verb`, resource →
+FGRN or the `app/app` fallback, context dropped) is documented in that
+module's doc comment.
+
+This adapter is scheduled for retirement on #111 during the middleware
+refit, once `PolicyEngine` itself is retired or evolved into the
+`DecisionRecord` shape — it exists only to bridge today's consumers, not
+as a long-term interface.
 
 #### Pure validation (V2)
 
