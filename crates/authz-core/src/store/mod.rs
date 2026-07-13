@@ -4,6 +4,8 @@
 
 pub mod model;
 pub mod revision;
+pub mod slice;
 
 pub use model::ModelState;
 pub use revision::Revision;
+pub use slice::{select_slice, EntitySlice};
