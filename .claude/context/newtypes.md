@@ -124,6 +124,9 @@ The test for "is this newtype shaped correctly?" is: can a downstream consumer e
 | `Verb` | `core` | `verb` | non-empty, ≤64 chars, `a..=z` first char, then `a..=z`\|`0..=9`\|`-` | identical (no serde yet) |
 | `PrincipalSet` | `core` | `principal_set` | DAG node: fgrn kind `principal-set`, anchor kind `orgunit`, same-org anchor; members must be `principal`\|`principal-set`, same-org, non-self; `assert_acyclic` proves no cross-set membership cycle | n/a (no serde yet) |
 | `Grant` | `core` | `grant` | permit-only lateral edge: non-empty `BTreeSet<Verb>` actions, resource kind `resource`, grantee kind `principal`\|`principal-set`, same-org grantee | n/a (no serde yet) |
+| `UserBoundary` | `core` | `resource_type` | `opaque`\|`transparent`; `Default` is `Opaque` | n/a (no serde yet) |
+| `ResourceTypeDecl` | `core` | `resource_type` | pairs a `Segment` name with an `Anchoring` (`OrgUnit`\|`Principal { user_boundary }`\|`PrincipalSet`); boundary only representable on the `Principal` variant | n/a (no serde yet) |
+| `AnchoredResource` | `core` | `anchored_resource` | pairs a resource-type `Segment` with an anchor `Fgrn` whose kind must be `orgunit`\|`principal`\|`principal-set` (not `resource`) | n/a (no serde yet) |
 
 Two extra points of consistency:
 
