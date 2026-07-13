@@ -22,7 +22,10 @@ pub use rbac::{
     GroupValidationError, MaterializeCompileError, NamedPermit, RbacEntry, TenantConfig,
     ValidatedRbacEntry,
 };
-pub use store::Revision;
+pub use store::{
+    select_slice, AuthzStore, EntitySlice, MemoryStore, ModelState, Revision, SliceQuery,
+    StoreWrite,
+};
 
 #[cfg(feature = "test-support")]
 pub use static_engine::StaticPolicyEngine;

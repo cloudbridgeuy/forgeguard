@@ -6,6 +6,36 @@ Owns Cedar policy types, permission check types, role/resource/action definition
 
 ## Modules
 
+### `store`
+
+Snapshot-at-revision reads and revision-returning writes over the phase-1
+core model (`Spine`, `Principal`, `PrincipalSet`, `Grant`, `PromotedResource`).
+The change stream is deliberately absent — it arrives with the event log
+(#110).
+
+**Public types:**
+
+- `Revision` — the monotonic consistency token every write returns and every
+  read can pin to.
+- `ModelState` — a Vec-backed snapshot of the model at one revision.
+- `EntitySlice` — everything one decision needs, read at one revision.
+  Built only by `select_slice`.
+- `SliceQuery` — a decision-scoped read request (`principal`, `resource`,
+  optional pinned `revision`).
+- `StoreWrite` — the mutation ADT (`PutOrgUnit`, `PutPrincipal`,
+  `PutPrincipalSet`, `PutGrant`, `RemoveGrant`, `PutPromotion`).
+- `AuthzStore` — the store trait (`slice`, `apply`, `latest_revision`),
+  object-safe via boxed futures (same style as `PolicyEngine`).
+- `MemoryStore` — an in-memory reference implementation. **Tests and
+  conformance only** — a full `ModelState` clone per revision, not meant
+  for production scale. The phase-3 DynamoDB store implements the same
+  `AuthzStore` trait and reuses `select_slice` for slice selection.
+
+**Public functions:**
+
+- `select_slice(model, principal, resource, revision)` — pure selection of
+  the `EntitySlice` for one decision from a `ModelState` snapshot.
+
 ### `rbac`
 
 Pure RBAC compiler — no I/O, no clock, no randomness. Compiles `RbacEntry`
