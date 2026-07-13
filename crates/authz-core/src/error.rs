@@ -23,6 +23,10 @@ pub enum Error {
     /// An underlying core-model operation failed.
     #[error(transparent)]
     Core(#[from] forgeguard_core::Error),
+
+    /// Policy text failed to compile into a snapshot.
+    #[error("invalid policy: {0}")]
+    InvalidPolicy(String),
 }
 
 /// Convenience alias used throughout this crate.

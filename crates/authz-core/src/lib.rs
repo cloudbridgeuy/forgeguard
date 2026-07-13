@@ -23,7 +23,7 @@ pub use rbac::{
     GroupValidationError, MaterializeCompileError, NamedPermit, RbacEntry, TenantConfig,
     ValidatedRbacEntry,
 };
-pub use snapshot::SnapshotVersion;
+pub use snapshot::{Snapshot, SnapshotVersion};
 pub use store::{
     select_slice, AuthzStore, EntitySlice, MemoryStore, ModelState, Revision, SliceQuery,
     StoreWrite,
