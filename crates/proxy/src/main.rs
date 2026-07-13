@@ -13,8 +13,8 @@ use tracing_subscriber::EnvFilter;
 
 use forgeguard_authn_core::signing::SigningKey;
 use forgeguard_authn_core::IdentityChain;
-use forgeguard_authz::VpEngineConfig;
-use forgeguard_authz::VpPolicyEngine;
+#[cfg(feature = "vp")]
+use forgeguard_authz::{VpEngineConfig, VpPolicyEngine};
 use forgeguard_http::{
     apply_overrides, load_config, ConfigOverrides, PublicRouteMatcher, RouteMatcher,
 };
@@ -233,6 +233,19 @@ fn build_api_key_map(
         .collect()
 }
 
+#[cfg(not(feature = "vp"))]
+fn build_policy_engine(
+    config: &forgeguard_http::ProxyConfig,
+) -> color_eyre::Result<Arc<dyn forgeguard_authz_core::PolicyEngine>> {
+    if config.authz().is_some() {
+        return Err(color_eyre::eyre::eyre!(
+            "a VP policy store is configured but forgeguard_proxy was built without the vp feature"
+        ));
+    }
+    Ok(Arc::new(AllowAllEngine))
+}
+
+#[cfg(feature = "vp")]
 fn build_policy_engine(
     config: &forgeguard_http::ProxyConfig,
 ) -> color_eyre::Result<Arc<dyn forgeguard_authz_core::PolicyEngine>> {
