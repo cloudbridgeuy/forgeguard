@@ -16,6 +16,7 @@ pub mod principal;
 pub mod saga_id;
 pub mod segment;
 pub mod spine;
+pub mod verb;
 pub mod vp_fgrn;
 
 pub use action::{
@@ -49,4 +50,5 @@ pub use segment::{
     FlowId, GroupName, OrganizationId, PolicyName, ProjectId, Segment, TenantId, UserId,
 };
 pub use spine::{OrgUnit, Spine};
+pub use verb::Verb;
 pub use vp_fgrn::{FgrnSegment, VpFgrn};

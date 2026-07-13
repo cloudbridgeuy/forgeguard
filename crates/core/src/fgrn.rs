@@ -85,7 +85,7 @@ impl FromStr for FgrnKind {
 ///
 /// Parse Don't Validate: if you hold an `Fgrn`, every position is
 /// guaranteed valid.
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct Fgrn {
     organization: Segment,
     kind: FgrnKind,
