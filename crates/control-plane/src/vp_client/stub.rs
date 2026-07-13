@@ -1,4 +1,4 @@
-//! In-process [`VpClient`] for tests, with failure-injection knobs.
+//! In-process `VpClient` for tests, with failure-injection knobs.
 //!
 //! Exposed at `cfg(any(test, feature = "test-support"))` so integration tests
 //! can construct it. Production code paths must not depend on this type.

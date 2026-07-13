@@ -1,4 +1,4 @@
-//! Production [`VpClient`] backed by [`aws_sdk_verifiedpermissions::Client`].
+//! Production `VpClient` backed by [`aws_sdk_verifiedpermissions::Client`].
 
 use aws_sdk_verifiedpermissions::types::{
     PolicyDefinition, PolicyDefinitionDetail, PolicyType, StaticPolicyDefinition,

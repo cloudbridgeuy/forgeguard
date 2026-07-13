@@ -20,7 +20,7 @@ use crate::user_pool::UserPoolClient;
 
 /// Shared router state for the control-plane Axum app.
 ///
-/// Carries the object-safe [`OrgStore`] handle and the [`VpClient`] used by
+/// Carries the object-safe [`OrgStore`] handle and the `VpClient` used by
 /// the V3 Active write path. Non-group handlers extract
 /// `State<Arc<dyn OrgStore>>` via the `FromRef` impl below; group handlers
 /// extract the full [`AppState<V>`].

@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 
-/// Prefix emitted by [`resolve_inherits`] (and [`InheritanceWalker::collect`])
-/// when a cycle is detected in the role-inheritance graph.
+/// Prefix emitted by [`resolve_inherits`] (and the internal inheritance
+/// walker) when a cycle is detected in the role-inheritance graph.
 ///
 /// [`map_resolve_err`](crate::rbac::validation) uses this constant as the
 /// single source of truth so error classification cannot silently drift if the
