@@ -9,7 +9,8 @@
     { "id": "engineering", "parent": "root" }
   ],
   "principals": [
-    { "id": "maria", "kind": "human", "anchor": "finance" }
+    { "id": "maria", "kind": "human", "anchor": "finance" },
+    { "id": "bob", "kind": "human", "anchor": "engineering" }
   ],
   "principal_sets": [],
   "grants": [],
@@ -24,6 +25,7 @@
   ],
   "policies": "permit(principal in OrgUnit::\"fgrn:acme:orgunit:finance\", action == Action::\"invoice-write\", resource in OrgUnit::\"fgrn:acme:orgunit:finance\");",
   "cases": [
-    { "name": "maria writes invoice under her subtree", "principal": "maria", "action": "invoice-write", "resource_type": "invoice", "resource_id": "inv_1", "expect": "allow" }
+    { "name": "maria writes invoice under her subtree", "principal": "maria", "action": "invoice-write", "resource_type": "invoice", "resource_id": "inv_1", "expect": "allow" },
+    { "name": "bob outside the subtree is denied", "principal": "bob", "action": "invoice-write", "resource_type": "invoice", "resource_id": "inv_1", "expect": "deny" }
   ]
 }

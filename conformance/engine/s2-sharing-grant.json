@@ -1,0 +1,31 @@
+{
+  "name": "s2-sharing-grant",
+  "description": "S2: sharing a resource to a principal set grants its members via the minted grant (grants-as-live-data)",
+  "organization": "acme",
+  "spine": [
+    { "id": "root", "parent": null },
+    { "id": "finance", "parent": "root" },
+    { "id": "engineering", "parent": "root" }
+  ],
+  "principals": [
+    { "id": "alice", "kind": "human", "anchor": "finance" },
+    { "id": "bob", "kind": "human", "anchor": "engineering" }
+  ],
+  "principal_sets": [
+    { "id": "proj_alpha_readers", "anchor": "root", "members": ["bob"] }
+  ],
+  "grants": [],
+  "promotions": [
+    {
+      "resource_type": "document",
+      "resource_id": "doc_123",
+      "anchor": "alice",
+      "to": "proj_alpha_readers",
+      "actions": ["read"]
+    }
+  ],
+  "policies": "",
+  "cases": [
+    { "name": "bob reads shared doc via set", "principal": "bob", "action": "read", "resource_type": "document", "resource_id": "doc_123", "expect": "allow" }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "name": "s3-owner-boundary",
+  "description": "S3: owner rule allows the anchor principal, denies same-org-unit peers (boundary opacity)",
+  "organization": "acme",
+  "spine": [
+    { "id": "root", "parent": null },
+    { "id": "finance", "parent": "root" }
+  ],
+  "principals": [
+    { "id": "alice", "kind": "human", "anchor": "finance" },
+    { "id": "maria", "kind": "human", "anchor": "finance" }
+  ],
+  "principal_sets": [],
+  "grants": [],
+  "promotions": [
+    {
+      "resource_type": "document",
+      "resource_id": "alice_note",
+      "anchor": "alice",
+      "to": "alice",
+      "actions": ["read"]
+    }
+  ],
+  "policies": "permit(principal, action == Action::\"read\", resource) when { resource in principal };",
+  "cases": [
+    { "name": "alice reads her anchored note", "principal": "alice", "action": "read", "resource_type": "document", "resource_id": "alice_note", "expect": "allow" },
+    { "name": "maria cannot read alice's note", "principal": "maria", "action": "read", "resource_type": "document", "resource_id": "alice_note", "expect": "deny" }
+  ]
+}

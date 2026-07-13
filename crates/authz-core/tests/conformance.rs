@@ -104,6 +104,15 @@ fn load_fixtures() -> Vec<Fixture> {
     fixtures
 }
 
+/// Resolve `id` against the given lookup maps in order, falling back to
+/// `fallback` if none contain it. Backs the fixture id-resolution helpers
+/// below, which each check a different combination of maps.
+fn resolve_or(maps: &[&HashMap<String, Fgrn>], id: &str, fallback: impl Fn() -> Fgrn) -> Fgrn {
+    maps.iter()
+        .find_map(|map| map.get(id).cloned())
+        .unwrap_or_else(fallback)
+}
+
 /// Build the `MemoryStore` a fixture describes, plus a lookup from fixture
 /// id to the corresponding `Fgrn` for principals and resources.
 async fn build_store(
@@ -112,15 +121,26 @@ async fn build_store(
     let org = Segment::try_new(&fixture.organization).expect("valid organization segment");
     let nid = |s: &str| NativeId::try_new(s).expect("valid native id");
     let org_unit_or = |map: &HashMap<String, Fgrn>, id: &str| {
-        map.get(id)
-            .cloned()
-            .unwrap_or_else(|| Fgrn::org_unit(&org, &nid(id)))
+        resolve_or(&[map], id, || Fgrn::org_unit(&org, &nid(id)))
     };
     let principal_or = |map: &HashMap<String, Fgrn>, id: &str| {
-        map.get(id)
-            .cloned()
-            .unwrap_or_else(|| Fgrn::principal(&org, &nid(id)))
+        resolve_or(&[map], id, || Fgrn::principal(&org, &nid(id)))
     };
+    // A promotion anchor may be an org unit or a principal — check org
+    // units first (spine ids are known upfront), then principals, falling
+    // back to a bare org-unit FGRN.
+    let anchor_or =
+        |org_units: &HashMap<String, Fgrn>, principals: &HashMap<String, Fgrn>, id: &str| {
+            resolve_or(&[org_units, principals], id, || {
+                Fgrn::org_unit(&org, &nid(id))
+            })
+        };
+    // Grantees may be a principal or a principal set — check the principal
+    // map first, then sets, falling back to a bare principal FGRN.
+    let grantee_or =
+        |principals: &HashMap<String, Fgrn>, sets: &HashMap<String, Fgrn>, id: &str| {
+            resolve_or(&[principals, sets], id, || Fgrn::principal(&org, &nid(id)))
+        };
 
     let mut org_units = Vec::new();
     let mut org_unit_fgrns = HashMap::new();
@@ -150,11 +170,12 @@ async fn build_store(
         principal_fgrns.insert(p.id.clone(), fgrn);
     }
 
+    let mut set_fgrns = HashMap::new();
     for set in &fixture.principal_sets {
         let fgrn = Fgrn::principal_set(&org, &nid(&set.id));
         let anchor = org_unit_or(&org_unit_fgrns, &set.anchor);
-        let mut principal_set =
-            forgeguard_core::PrincipalSet::try_new(fgrn, anchor).expect("valid principal set");
+        let mut principal_set = forgeguard_core::PrincipalSet::try_new(fgrn.clone(), anchor)
+            .expect("valid principal set");
         for member in &set.members {
             let member_fgrn = principal_or(&principal_fgrns, member);
             principal_set
@@ -165,12 +186,13 @@ async fn build_store(
             .apply(StoreWrite::PutPrincipalSet(principal_set))
             .await
             .expect("PutPrincipalSet applies");
+        set_fgrns.insert(set.id.clone(), fgrn);
     }
 
     let mut resource_fgrns = HashMap::new();
     for promo in &fixture.promotions {
-        let anchor = org_unit_or(&org_unit_fgrns, &promo.anchor);
-        let to = principal_or(&principal_fgrns, &promo.to);
+        let anchor = anchor_or(&org_unit_fgrns, &principal_fgrns, &promo.anchor);
+        let to = grantee_or(&principal_fgrns, &set_fgrns, &promo.to);
         let actions = promo
             .actions
             .iter()
@@ -212,7 +234,7 @@ async fn build_store(
                     &nid(&grant.resource_id),
                 )
             });
-        let to = principal_or(&principal_fgrns, &grant.to);
+        let to = grantee_or(&principal_fgrns, &set_fgrns, &grant.to);
         let actions = grant
             .actions
             .iter()

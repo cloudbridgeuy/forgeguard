@@ -1,0 +1,27 @@
+{
+  "name": "s4-deny-overrides",
+  "description": "S4: an explicit forbid on a principal beats any permit that would otherwise apply",
+  "organization": "acme",
+  "spine": [
+    { "id": "root", "parent": null },
+    { "id": "engineering", "parent": "root" }
+  ],
+  "principals": [
+    { "id": "contractor_bob", "kind": "human", "anchor": "engineering" }
+  ],
+  "principal_sets": [],
+  "grants": [],
+  "promotions": [
+    {
+      "resource_type": "document",
+      "resource_id": "eng_doc",
+      "anchor": "engineering",
+      "to": "contractor_bob",
+      "actions": ["read"]
+    }
+  ],
+  "policies": "permit(principal in OrgUnit::\"fgrn:acme:orgunit:engineering\", action == Action::\"read\", resource in OrgUnit::\"fgrn:acme:orgunit:engineering\");\n\nforbid(principal == User::\"fgrn:acme:principal:contractor_bob\", action, resource in OrgUnit::\"fgrn:acme:orgunit:engineering\");",
+  "cases": [
+    { "name": "forbid overrides engineering permit", "principal": "contractor_bob", "action": "read", "resource_type": "document", "resource_id": "eng_doc", "expect": "deny" }
+  ]
+}
