@@ -16,7 +16,9 @@ pub mod static_engine;
 pub use context::PolicyContext;
 pub use decision::{DenyReason, PolicyDecision};
 pub use engine::{CacheStats, PolicyEngine};
-pub use engine_cedar::{CedarEngine, Decision, DecisionQuery, DecisionRecord};
+pub use engine_cedar::{
+    CedarEngine, Decision, DecisionQuery, DecisionRecord, EmbeddedPolicyEngine,
+};
 pub use error::{Error, Result};
 pub use query::PolicyQuery;
 pub use rbac::{
