@@ -3,6 +3,7 @@
 pub mod context;
 pub mod decision;
 pub mod engine;
+pub mod engine_cedar;
 pub mod error;
 pub mod query;
 pub mod rbac;
@@ -15,6 +16,7 @@ pub mod static_engine;
 pub use context::PolicyContext;
 pub use decision::{DenyReason, PolicyDecision};
 pub use engine::{CacheStats, PolicyEngine};
+pub use engine_cedar::{Decision, DecisionQuery, DecisionRecord};
 pub use error::{Error, Result};
 pub use query::PolicyQuery;
 pub use rbac::{
