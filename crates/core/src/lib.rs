@@ -17,6 +17,7 @@ pub mod percentage;
 pub mod permission;
 pub mod principal;
 pub mod principal_set;
+pub mod promotion;
 pub mod resource_type;
 pub mod saga_id;
 pub mod segment;
@@ -55,6 +56,7 @@ pub use permission::{
 };
 pub use principal::Principal;
 pub use principal_set::PrincipalSet;
+pub use promotion::{share, PromotedResource, ShareRequest};
 pub use resource_type::{Anchoring, ResourceTypeDecl, UserBoundary};
 pub use saga_id::SagaId;
 pub use segment::{
