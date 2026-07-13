@@ -21,6 +21,7 @@ pub mod promotion;
 pub mod resource_type;
 pub mod saga_id;
 pub mod segment;
+pub mod selector;
 pub mod spine;
 pub mod verb;
 pub mod visibility;
@@ -62,6 +63,7 @@ pub use saga_id::SagaId;
 pub use segment::{
     FlowId, GroupName, OrganizationId, PolicyName, ProjectId, Segment, TenantId, UserId,
 };
+pub use selector::{Selector, SelectorScope};
 pub use spine::{OrgUnit, Spine};
 pub use verb::Verb;
 pub use visibility::{subtree_visible, ResolvedAnchor, VisibilityQuery};
