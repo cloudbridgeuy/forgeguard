@@ -1,6 +1,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used)]
 
 pub mod action;
+pub mod anchored_resource;
 pub mod cedar;
 pub mod cedar_ident;
 pub mod config_version;
@@ -26,6 +27,7 @@ pub use action::{
     Action, Entity, Namespace, PrincipalKind, PrincipalRef, QualifiedAction, ResourceId,
     ResourceOrgSource, ResourceRef,
 };
+pub use anchored_resource::AnchoredResource;
 pub use cedar::{
     compile_all_to_cedar, compile_policy_to_cedar, generate_cedar_schema, CedarAttributeType,
     EntitySchemaConfig,
