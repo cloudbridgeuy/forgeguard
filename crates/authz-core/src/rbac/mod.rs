@@ -60,13 +60,18 @@ impl Default for TenantConfig {
 }
 
 /// Validate that a string is safe to interpolate into a Cedar policy.
-/// Rejects empty strings, double quotes, and control characters (including
-/// newlines and carriage returns).
+/// Rejects empty strings, double quotes, backslashes (Cedar string-escape
+/// characters — either would let a crafted value break out of its quoted
+/// literal), and control characters (including newlines and carriage
+/// returns).
 pub fn validate_cedar_ident(value: &str, label: &str) -> Result<(), String> {
     if value.is_empty() {
         return Err(format!("{label} must not be empty"));
     }
-    if value.chars().any(|c| c == '"' || c.is_control()) {
+    if value
+        .chars()
+        .any(|c| c == '"' || c == '\\' || c.is_control())
+    {
         return Err(format!("{label} contains invalid characters: {value:?}"));
     }
     Ok(())
