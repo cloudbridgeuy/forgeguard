@@ -15,6 +15,7 @@ pub mod percentage;
 pub mod permission;
 pub mod principal;
 pub mod principal_set;
+pub mod resource_type;
 pub mod saga_id;
 pub mod segment;
 pub mod spine;
@@ -49,6 +50,7 @@ pub use permission::{
 };
 pub use principal::Principal;
 pub use principal_set::PrincipalSet;
+pub use resource_type::{Anchoring, ResourceTypeDecl, UserBoundary};
 pub use saga_id::SagaId;
 pub use segment::{
     FlowId, GroupName, OrganizationId, PolicyName, ProjectId, Segment, TenantId, UserId,
