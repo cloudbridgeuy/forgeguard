@@ -5,13 +5,15 @@ use std::str::FromStr;
 
 use cedar_policy::{Authorizer, Context, EntityId, EntityTypeName, EntityUid, PolicySet, Request};
 
+use forgeguard_core::{Fgrn, Verb};
+
 use crate::engine_cedar::record::{Decision, DecisionQuery, DecisionRecord};
 use crate::engine_cedar::translate::{
     cedar_principal_type, grant_policies, slice_to_entities, uid,
 };
 use crate::error::{Error, Result};
 use crate::snapshot::Snapshot;
-use crate::store::{AuthzStore, EntitySlice, SliceQuery};
+use crate::store::{AuthzStore, EntitySlice, Revision, SliceQuery};
 
 /// In-process Cedar evaluation against a pinned snapshot.
 pub struct CedarEngine {
@@ -31,52 +33,98 @@ impl CedarEngine {
 
     /// Decide one query: ONE store read at ONE revision (R2), evaluate,
     /// record snapshot version + revision (R3).
+    ///
+    /// Without a delegation chain, evaluates `query.principal()` alone.
+    /// With a chain, evaluates every link (actor through subject), each
+    /// against its own entity slice read at the same pinned revision —
+    /// Allow iff every link allows (Brief v1.4's chain intersection); the
+    /// first Deny short-circuits the rest.
     pub async fn decide(
         &self,
         store: &dyn AuthzStore,
         query: &DecisionQuery,
     ) -> Result<DecisionRecord> {
-        let mut slice_query = SliceQuery::new(query.principal().clone(), query.resource().clone());
-        if let Some(revision) = query.revision() {
-            slice_query = slice_query.at_revision(revision);
+        let revision = match query.revision() {
+            Some(revision) => revision,
+            None => store.latest_revision().await?,
+        };
+
+        let links: Vec<&Fgrn> = match query.chain() {
+            Some(chain) => chain.links().collect(),
+            None => vec![query.principal()],
+        };
+
+        let mut decision = Decision::Allow;
+        for link in links {
+            let link_query = LinkQuery {
+                principal: link,
+                action: query.action(),
+                resource: query.resource(),
+                revision,
+            };
+            decision = self.evaluate_link(store, &link_query).await?;
+            if decision == Decision::Deny {
+                break;
+            }
         }
+
+        Ok(DecisionRecord::new(
+            decision,
+            self.snapshot.version().clone(),
+            revision,
+        ))
+    }
+
+    /// Evaluate one principal's entity slice, read at `link.revision`.
+    async fn evaluate_link(
+        &self,
+        store: &dyn AuthzStore,
+        link: &LinkQuery<'_>,
+    ) -> Result<Decision> {
+        let slice_query = SliceQuery::new(link.principal.clone(), link.resource.clone())
+            .at_revision(link.revision);
         let slice = store.slice(&slice_query).await?;
 
-        let entities = slice_to_entities(&slice, query.resource())?;
+        let entities = slice_to_entities(&slice, link.resource)?;
 
         let grants = grant_policies(&slice)?;
         let combined = format!("{}\n\n{}", self.snapshot.policy_text(), grants);
         let policies = PolicySet::from_str(&combined)
             .map_err(|e| Error::InvalidPolicy(format!("snapshot+grants: {e}")))?;
 
-        let request = build_request(&slice, query)?;
+        let request = build_request(&slice, link.action, link.resource)?;
         let answer = Authorizer::new().is_authorized(&request, &policies, &entities);
-        let decision = match answer.decision() {
+        Ok(match answer.decision() {
             cedar_policy::Decision::Allow => Decision::Allow,
             cedar_policy::Decision::Deny => Decision::Deny,
-        };
-
-        Ok(DecisionRecord::new(
-            decision,
-            self.snapshot.version().clone(),
-            slice.revision(),
-        ))
+        })
     }
+}
+
+/// One delegation-chain link's evaluation inputs — one principal's slice,
+/// read at the chain-wide pinned revision. Params struct (see
+/// .claude/context/params-struct-rule.md) to keep `evaluate_link` under the
+/// argument-count lint.
+struct LinkQuery<'a> {
+    principal: &'a Fgrn,
+    action: &'a Verb,
+    resource: &'a Fgrn,
+    revision: Revision,
 }
 
 /// Assemble the Cedar `Request` from the entity-mapping contract: principal
 /// UID typed by the slice principal's kind, action `Action::"<verb>"`,
 /// resource `Resource::"<FGRN>"`, empty context, no schema.
-fn build_request(slice: &EntitySlice, query: &DecisionQuery) -> Result<Request> {
+fn build_request(slice: &EntitySlice, action: &Verb, resource: &Fgrn) -> Result<Request> {
     let principal = slice.principal();
     let principal_uid = uid(cedar_principal_type(principal.kind()), principal.fgrn())?;
 
     let action_type = EntityTypeName::from_str("Action")
         .map_err(|e| Error::EvaluationFailed(format!("bad entity type Action: {e}")))?;
     let action_uid =
-        EntityUid::from_type_name_and_id(action_type, EntityId::new(query.action().to_string()));
+        EntityUid::from_type_name_and_id(action_type, EntityId::new(action.to_string()));
 
-    let resource_uid = uid("Resource", query.resource())?;
+    let resource_uid = uid("Resource", resource)?;
 
     Request::new(
         principal_uid,
@@ -180,5 +228,112 @@ mod tests {
         let record = engine.decide(&store, &query).await.unwrap();
 
         assert_eq!(record.snapshot_version(), engine.snapshot().version());
+    }
+
+    fn maria2() -> forgeguard_core::Fgrn {
+        forgeguard_core::Fgrn::principal(&org(), &nid("maria2"))
+    }
+
+    fn bob() -> forgeguard_core::Fgrn {
+        forgeguard_core::Fgrn::principal(&org(), &nid("bob"))
+    }
+
+    fn chain(links: Vec<forgeguard_core::Fgrn>) -> forgeguard_core::DelegationChain {
+        forgeguard_core::DelegationChain::try_new(links).unwrap()
+    }
+
+    /// Store at revision 1: spine + maria + maria2 + bob, each granted
+    /// `read` on `doc()` except bob.
+    async fn store_with_chain_world() -> MemoryStore {
+        let root = forgeguard_core::Fgrn::org_unit(&org(), &nid("root"));
+        let spine = Spine::try_new(vec![OrgUnit::try_new(root.clone(), None).unwrap()]).unwrap();
+        let mut model = ModelState::new(spine);
+        model.upsert_principal(
+            Principal::try_new(maria(), PrincipalKind::Human, root.clone()).unwrap(),
+        );
+        model.upsert_principal(
+            Principal::try_new(maria2(), PrincipalKind::Human, root.clone()).unwrap(),
+        );
+        model.upsert_principal(Principal::try_new(bob(), PrincipalKind::Human, root).unwrap());
+        let store = MemoryStore::new(model);
+
+        let read = Verb::try_new("read").unwrap();
+        store
+            .apply(StoreWrite::PutGrant(
+                Grant::try_new(doc(), vec![read.clone()], maria()).unwrap(),
+            ))
+            .await
+            .unwrap();
+        store
+            .apply(StoreWrite::PutGrant(
+                Grant::try_new(doc(), vec![read], maria2()).unwrap(),
+            ))
+            .await
+            .unwrap();
+
+        store
+    }
+
+    #[tokio::test]
+    async fn chain_all_allow_allows() {
+        let store = store_with_chain_world().await;
+        let engine = engine();
+        let query = DecisionQuery::new(maria(), Verb::try_new("read").unwrap(), doc())
+            .with_chain(chain(vec![maria(), maria2()]))
+            .unwrap();
+
+        let record = engine.decide(&store, &query).await.unwrap();
+
+        assert!(record.is_allow());
+    }
+
+    #[tokio::test]
+    async fn chain_one_deny_denies() {
+        let store = store_with_chain_world().await;
+        let engine = engine();
+        let query = DecisionQuery::new(maria(), Verb::try_new("read").unwrap(), doc())
+            .with_chain(chain(vec![maria(), bob()]))
+            .unwrap();
+
+        let record = engine.decide(&store, &query).await.unwrap();
+
+        assert!(!record.is_allow());
+    }
+
+    #[tokio::test]
+    async fn chain_uses_one_revision() {
+        let store = store_with_chain_world().await;
+        let query = DecisionQuery::new(maria(), Verb::try_new("read").unwrap(), doc())
+            .with_chain(chain(vec![maria(), bob()]))
+            .unwrap()
+            .at_revision(crate::store::Revision::new(2));
+        let engine = engine();
+
+        // Pre-check: at revision 2, bob had no grant yet.
+        let record = engine.decide(&store, &query).await.unwrap();
+        assert!(!record.is_allow());
+
+        // Grant bob read AFTER the pinned revision; the chained decision,
+        // still pinned to revision 2, must not see it (R2 chain-wide).
+        store
+            .apply(StoreWrite::PutGrant(
+                Grant::try_new(doc(), vec![Verb::try_new("read").unwrap()], bob()).unwrap(),
+            ))
+            .await
+            .unwrap();
+
+        let record = engine.decide(&store, &query).await.unwrap();
+        assert!(!record.is_allow());
+    }
+
+    #[tokio::test]
+    async fn chainless_behavior_unchanged() {
+        let store = store_with_grant_at_revision_2().await;
+        let engine = engine();
+        let query = DecisionQuery::new(maria(), Verb::try_new("read").unwrap(), doc());
+
+        let record = engine.decide(&store, &query).await.unwrap();
+
+        assert!(record.is_allow());
     }
 }
