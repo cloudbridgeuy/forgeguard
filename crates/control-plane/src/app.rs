@@ -13,7 +13,9 @@ use axum::routing::{get, post};
 use axum::Router;
 use forgeguard_authn::{CognitoJwtResolver, Ed25519SignatureResolver, JwtResolverConfig};
 use forgeguard_authn_core::{IdentityChain, IdentityResolver};
+#[cfg(feature = "vp")]
 use forgeguard_authz::cache::AuthzCache;
+#[cfg(feature = "vp")]
 use forgeguard_authz::{TieredCache, VpEngineConfig, VpPolicyEngine};
 use forgeguard_authz_core::{PolicyDecision, StaticPolicyEngine};
 use forgeguard_axum::{forgeguard_layer, ForgeGuard};
@@ -45,6 +47,8 @@ pub struct AuthConfig {
     jwks_url: url::Url,
     issuer: String,
     audience: Option<String>,
+    // Only read building the `VpEngineConfig` in the `vp`-feature engine arm.
+    #[cfg_attr(not(feature = "vp"), allow(dead_code))]
     policy_store_id: String,
 }
 
@@ -382,6 +386,7 @@ fn build_forgeguard(
 
             // Build the policy engine: VP when a client is available, static allow otherwise.
             let engine: Arc<dyn forgeguard_authz_core::PolicyEngine> = match vp_client {
+                #[cfg(feature = "vp")]
                 Some(client) => {
                     let vp_config = VpEngineConfig::new(&auth.policy_store_id);
                     let l1 = AuthzCache::new(vp_config.cache_ttl(), vp_config.cache_max_entries());
@@ -392,6 +397,13 @@ fn build_forgeguard(
                         project_id.clone(),
                         cache,
                     ))
+                }
+                #[cfg(not(feature = "vp"))]
+                Some(_) => {
+                    return Err(color_eyre::eyre::eyre!(
+                        "a VP policy store is configured but forgeguard_control_plane was built \
+                         without the vp feature"
+                    ));
                 }
                 None => Arc::new(StaticPolicyEngine::new(PolicyDecision::Allow)),
             };

@@ -19,8 +19,10 @@ name = "forgeguard-control-plane"
 path = "src/main.rs"
 
 [features]
+default = ["vp"]
 dynamodb-tests = []
 test-support = []
+vp = ["dep:forgeguard_authz"]
 
 [dependencies]
 async-trait = { workspace = true }
@@ -36,7 +38,7 @@ ed25519-dalek = { workspace = true, features = ["rand_core"] }
 forgeguard-axum = { workspace = true }
 forgeguard_authn = { workspace = true }
 forgeguard_authn_core = { workspace = true }
-forgeguard_authz = { workspace = true }
+forgeguard_authz = { workspace = true, optional = true }
 forgeguard_authz_core = { workspace = true }
 forgeguard_core = { workspace = true }
 forgeguard_http = { workspace = true }
