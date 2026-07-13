@@ -127,6 +127,8 @@ The test for "is this newtype shaped correctly?" is: can a downstream consumer e
 | `UserBoundary` | `core` | `resource_type` | `opaque`\|`transparent`; `Default` is `Opaque` | n/a (no serde yet) |
 | `ResourceTypeDecl` | `core` | `resource_type` | pairs a `Segment` name with an `Anchoring` (`OrgUnit`\|`Principal { user_boundary }`\|`PrincipalSet`); boundary only representable on the `Principal` variant | n/a (no serde yet) |
 | `AnchoredResource` | `core` | `anchored_resource` | pairs a resource-type `Segment` with an anchor `Fgrn` whose kind must be `orgunit`\|`principal`\|`principal-set` (not `resource`) | n/a (no serde yet) |
+| `PromotedResource` | `core` | `promotion` | minted resource `Fgrn` + its anchor; no public constructor — obtainable only through `share()`, which mints the FGRN and the first `Grant` together | n/a (no serde yet) |
+| `Selector` | `core` | `selector` | position query: organization `Segment` + path of `NativeId` + `SelectorScope`; `FromStr`/`Display` grammar `org:{org}(.{segment})*(/**)?` | n/a (no serde yet) |
 
 Two extra points of consistency:
 
