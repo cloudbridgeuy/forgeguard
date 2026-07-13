@@ -6,6 +6,7 @@ pub mod engine;
 pub mod error;
 pub mod query;
 pub mod rbac;
+pub mod snapshot;
 pub mod store;
 
 #[cfg(feature = "test-support")]
@@ -22,6 +23,7 @@ pub use rbac::{
     GroupValidationError, MaterializeCompileError, NamedPermit, RbacEntry, TenantConfig,
     ValidatedRbacEntry,
 };
+pub use snapshot::SnapshotVersion;
 pub use store::{
     select_slice, AuthzStore, EntitySlice, MemoryStore, ModelState, Revision, SliceQuery,
     StoreWrite,
