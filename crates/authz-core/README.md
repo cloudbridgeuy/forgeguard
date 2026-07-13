@@ -51,10 +51,49 @@ values to Cedar `permit(...)` statements with optional tenant scoping.
 
 - `compile_rbac_to_cedar(entry, tenant, namespace)` — produces a single Cedar permit block.
 - `resolve_inherits(entries, target)` — depth-first action collection over the inheritance graph with cycle detection.
-- `validate_cedar_ident(value, label)` — rejects empty strings, double quotes, and control characters. Called by `compile_rbac_to_cedar`; exposed so external callers can apply the same hygiene check.
+- `validate_cedar_ident(value, label)` — rejects empty strings, double quotes, backslashes, and control characters (`"` and `\` are Cedar's string-escape characters — either would let a crafted value break out of its quoted literal when interpolated into generated policy text). Called by `compile_rbac_to_cedar` and by `engine_cedar`'s grant-policy synthesis; exposed so external callers can apply the same hygiene check.
 
 **Consumers:** `xtask` (`cargo xtask control-plane cedar sync`) and
 `forgeguard_control_plane` Groups handlers (V2+).
+
+### `snapshot`
+
+The immutable, versioned compiled policy (Design A1's `fg-compiler` output;
+phase-2 scope is the RBAC bridge only — multi-source merge and provenance are
+phase 5, #112). A snapshot is *static*: once built, nobody edits it, and it
+carries its own content hash so a decision can always be replayed against the
+exact policy text that produced it.
+
+**Public types:**
+
+- `Snapshot` — a Cedar `PolicySet` plus its raw policy text and `SnapshotVersion`. Built via `Snapshot::from_rbac(entries, tenant, namespace)` (compiles `RbacEntry` values through `rbac::compile_rbac_to_cedar`) or `Snapshot::from_policy_text(text)` (parses raw Cedar text directly — used by the conformance harness).
+- `SnapshotVersion` — content-addressed version: FNV-1a 64 over the compiled policy text. Deterministic across Rust releases, so `DecisionRecord`s stay replayable against the snapshot that decided them.
+
+### `engine_cedar`
+
+The embedded Cedar engine (Design A1's `fg-engine`): one consistent store
+read, in-process Cedar evaluation, and a `DecisionRecord` that carries both
+the `SnapshotVersion` and the store `Revision` it was decided against.
+
+This is where the brief's two-tier split lives: the `snapshot` module above
+is *static* compiled policy (roles/permissions), while **grants are live
+data** — read fresh from the store on every `decide` call and compiled into
+one-off Cedar policies for that single decision. A snapshot never encodes a
+grant; `engine_cedar::translate` does that at decision time.
+
+**Public types:**
+
+- `CedarEngine` — holds a `Snapshot`; `decide(store, query)` does the one store read (`select_slice`), translates the resulting `EntitySlice` to Cedar entities, synthesizes grant policies, evaluates via `cedar_policy::Authorizer`, and returns a `DecisionRecord`.
+- `DecisionQuery` — a decision request (`principal`, `action`, `resource`).
+- `DecisionRecord` / `Decision` — the decision outcome (`Allow`/`Deny`) plus the `SnapshotVersion` and `Revision` it was decided against.
+
+**Submodules (not re-exported, internal to the engine):**
+
+- `translate` — pure `EntitySlice` → Cedar entity translation and per-decision grant-policy synthesis. Its module doc comment carries the full **entity-mapping table** (model type → Cedar entity type → UID → parents) that the conformance fixtures depend on exactly, plus the documented `PrincipalKind` collapse (`Human` → `User`; `Service`/`Agent` → `Machine`).
+- `record` — the `DecisionRecord`/`Decision` types themselves.
+- `engine` — `CedarEngine` and its `decide` orchestration.
+
+See `conformance/engine/README.md` for the end-to-end fixture format that exercises this module.
 
 #### Pure validation (V2)
 
