@@ -21,6 +21,7 @@ pub mod saga_id;
 pub mod segment;
 pub mod spine;
 pub mod verb;
+pub mod visibility;
 pub mod vp_fgrn;
 
 pub use action::{
@@ -59,4 +60,5 @@ pub use segment::{
 };
 pub use spine::{OrgUnit, Spine};
 pub use verb::Verb;
+pub use visibility::{subtree_visible, ResolvedAnchor, VisibilityQuery};
 pub use vp_fgrn::{FgrnSegment, VpFgrn};
