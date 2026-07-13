@@ -29,6 +29,11 @@ pub enum Error {
     /// the hierarchy edges must form a single-rooted tree.
     #[error("spine violation: {reason}: {fgrn}")]
     Spine { fgrn: String, reason: &'static str },
+    /// A violation of the lateral grant graph (Brief v1.4): grant edges
+    /// and principal-set membership. Spine/anchoring violations use
+    /// [`Error::Spine`] instead.
+    #[error("grant violation: {reason}: {fgrn}")]
+    Grant { fgrn: String, reason: &'static str },
 }
 
 /// Convenience alias used throughout this crate.
@@ -73,6 +78,18 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "spine violation: unknown parent: fgrn:acme:orgunit:ou_x"
+        );
+    }
+
+    #[test]
+    fn grant_error_display() {
+        let err = Error::Grant {
+            fgrn: "fgrn:acme:resource:document/doc_123".to_string(),
+            reason: "grant must carry at least one action",
+        };
+        assert_eq!(
+            err.to_string(),
+            "grant violation: grant must carry at least one action: fgrn:acme:resource:document/doc_123"
         );
     }
 }
