@@ -1,0 +1,29 @@
+{
+  "name": "s1-subtree-role",
+  "description": "S1: role at org-node grants action on resources anchored below it",
+  "organization": "acme",
+  "spine": [
+    { "id": "root", "parent": null },
+    { "id": "finance", "parent": "root" },
+    { "id": "finance_ap", "parent": "finance" },
+    { "id": "engineering", "parent": "root" }
+  ],
+  "principals": [
+    { "id": "maria", "kind": "human", "anchor": "finance" }
+  ],
+  "principal_sets": [],
+  "grants": [],
+  "promotions": [
+    {
+      "resource_type": "invoice",
+      "resource_id": "inv_1",
+      "anchor": "finance_ap",
+      "to": "maria",
+      "actions": ["invoice-write"]
+    }
+  ],
+  "policies": "permit(principal in OrgUnit::\"fgrn:acme:orgunit:finance\", action == Action::\"invoice-write\", resource in OrgUnit::\"fgrn:acme:orgunit:finance\");",
+  "cases": [
+    { "name": "maria writes invoice under her subtree", "principal": "maria", "action": "invoice-write", "resource_type": "invoice", "resource_id": "inv_1", "expect": "allow" }
+  ]
+}
