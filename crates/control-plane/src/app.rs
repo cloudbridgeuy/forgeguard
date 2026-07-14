@@ -32,6 +32,9 @@ use crate::dynamo_store::saga::DynamoSagaTicketStore;
 use crate::dynamo_store::DynamoOrgStore;
 use crate::handlers::AppState;
 use crate::membership_store::DynamoMembershipResolver;
+use crate::principal_store::{
+    DynamoPrincipalEventStore, InMemoryPrincipalEventStore, PrincipalEventStore,
+};
 use crate::signing_key_store::DynamoSigningKeyStore;
 use crate::store::{self, InMemorySagaTicketStore, OrgStore, SagaTicketStore};
 use crate::user_pool::{AwsCognitoUserPoolClient, InMemoryUserPoolClient, UserPoolClient};
@@ -107,6 +110,10 @@ pub async fn dynamodb_router(
         dynamo_client.clone(),
         sagas_table_name.to_string(),
     ));
+    let principals: Arc<dyn PrincipalEventStore> = Arc::new(DynamoPrincipalEventStore::new(
+        dynamo_client.clone(),
+        table_name.to_string(),
+    ));
     let membership_resolver: Option<Arc<dyn MembershipResolver>> = if auth.is_some() {
         Some(Arc::new(DynamoMembershipResolver::new(
             dynamo_client.clone(),
@@ -133,6 +140,7 @@ pub async fn dynamodb_router(
             vp,
             user_pool,
             saga_tickets,
+            principals,
         },
         fg,
     ))
@@ -161,6 +169,7 @@ pub async fn memory_router(
     // keeps `POST /users` exercisable end-to-end against a dev JSON config.
     let user_pool: Arc<dyn UserPoolClient> = Arc::new(InMemoryUserPoolClient::new());
     let saga_tickets: Arc<dyn SagaTicketStore> = Arc::new(InMemorySagaTicketStore::new());
+    let principals: Arc<dyn PrincipalEventStore> = Arc::new(InMemoryPrincipalEventStore::new());
     // Ed25519 resolver requires DynamoDB for key lookup; memory mode has no DynamoDB client.
     // VP engine is also unavailable in memory mode — StaticPolicyEngine(Allow) is used instead.
     let fg = build_forgeguard(auth, None, None, None)?;
@@ -170,6 +179,7 @@ pub async fn memory_router(
             vp,
             user_pool,
             saga_tickets,
+            principals,
         },
         fg,
     ))
@@ -207,6 +217,10 @@ const API_ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/v1/organizations/{org_id}/user-schema"),
     ("PUT", "/api/v1/organizations/{org_id}/user-schema"),
     ("POST", "/api/v1/organizations/{org_id}/users"),
+    (
+        "PUT",
+        "/api/v1/organizations/{org_id}/principals/{native_id}",
+    ),
 ];
 
 /// Route-to-action mappings for all control-plane API routes.
@@ -318,6 +332,12 @@ fn cp_route_actions() -> forgeguard_http::Result<Vec<RouteMapping>> {
             "POST",
             "/api/v1/organizations/{org_id}/users",
             "cp:user:create",
+            Some("org_id"),
+        ),
+        (
+            "PUT",
+            "/api/v1/organizations/{org_id}/principals/{native_id}",
+            "cp:principal:upsert",
             Some("org_id"),
         ),
     ];
@@ -504,6 +524,10 @@ fn build_router<V: VpClient + 'static>(state: AppState<V>, fg: Arc<ForgeGuard>) 
             "/api/v1/organizations/{org_id}/users",
             post(handlers::users::create_handler::<V>),
         )
+        .route(
+            "/api/v1/organizations/{org_id}/principals/{native_id}",
+            axum::routing::put(handlers::principals::upsert_principal::<V>),
+        )
         .with_state(state)
         .layer(axum::middleware::from_fn_with_state(fg, forgeguard_layer))
         .layer(TraceLayer::new_for_http())
@@ -523,8 +547,8 @@ mod tests {
         let mappings = cp_route_actions().expect("cp_route_actions must not fail");
         assert_eq!(
             mappings.len(),
-            18,
-            "expected 18 route mappings, got {}",
+            19,
+            "expected 19 route mappings, got {}",
             mappings.len()
         );
         // Confirm each action string round-trips correctly through QualifiedAction
@@ -547,6 +571,7 @@ mod tests {
             "cp:user-schema:read",
             "cp:user-schema:update",
             "cp:user:create",
+            "cp:principal:upsert",
         ];
         for (mapping, expected) in mappings.iter().zip(expected_actions.iter()) {
             assert_eq!(

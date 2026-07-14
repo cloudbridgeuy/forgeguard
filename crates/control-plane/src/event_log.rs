@@ -4,10 +4,6 @@
 //! trait's per-org contract: `events_after`/`latest_revision` take no
 //! `org_id`). The counter, event, and state items written here deliberately
 //! omit `GSI1PK`/`GSI1SK` so they stay out of the sparse GSI1 index (D10).
-//!
-//! Not yet wired into a handler (that lands with the principal upsert
-//! endpoint), so the production build sees these items as unused until then.
-#![allow(dead_code)]
 
 use std::collections::HashMap;
 use std::future::Future;

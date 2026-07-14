@@ -1,20 +1,30 @@
 //! Principal state item mapping (D6): the imperative shell around
 //! [`forgeguard_authz_core::decide_upsert`].
 //!
-//! Not yet wired into a handler (that lands with the principal upsert
-//! endpoint), so the production build sees these items as unused until then.
-#![allow(dead_code)]
+//! Also carries the `PrincipalEventStore` seam (Task 7): the trait-object
+//! boundary the `upsert_principal` handler uses so `InMemoryPrincipalEventStore`
+//! can stand in for `DynamoPrincipalEventStore` in handler tests without a
+//! DynamoDB Local dependency.
 
 use std::collections::HashMap;
+use std::sync::Mutex;
 
+use async_trait::async_trait;
 use aws_sdk_dynamodb::types::AttributeValue;
+use forgeguard_authn_core::signing::{sign_bytes, SigningKey};
+use forgeguard_authz_core::{
+    canonical_event_bytes, Actor, EventDraft, EventDraftParams, EventId, EventKind, EventLog,
+    InMemoryEventLog, Revision,
+};
 use forgeguard_core::NativeId;
 
 use crate::dynamo_store::{get_s, map_sdk_error, pk, sk, ORG_PREFIX};
 use crate::error::{Error, Result};
-use crate::event_log::StatePut;
+use crate::event_log::{DynamoEventLog, StatePut};
 
 const PRINCIPAL_PREFIX: &str = "PRINCIPAL#";
+const SK_EVENT_SIGNING_KEY: &str = "EVENT_SIGNING_KEY";
+const EVENT_SIGNING_KEY_ID: &str = "event-signing-key-1";
 
 /// Build the `StatePut` for a principal's current payload.
 ///
@@ -80,6 +90,329 @@ pub(crate) async fn get_principal(
     serde_json::from_str(&payload)
         .map_err(|e| Error::Store(format!("deserialize principal payload: {e}")))
         .map(Some)
+}
+
+// ---------------------------------------------------------------------------
+// PrincipalEventStore — the seam `upsert_principal` (Task 7) is written against
+// ---------------------------------------------------------------------------
+
+/// Everything the `PUT /organizations/{org_id}/principals/{native_id}` handler
+/// needs: a strongly-consistent principal read, the log's current revision,
+/// and the full "mint + sign + append" shell for a `Changed` decision.
+///
+/// Bundling all three into one trait (rather than composing `EventLog` +
+/// `get_principal` + a signing helper at the call site) keeps the handler
+/// generic over `Arc<dyn PrincipalEventStore>` — the same object-safe seam
+/// `OrgStore`/`SagaTicketStore` already establish — so `InMemoryPrincipalEventStore`
+/// can stand in for the DynamoDB implementation in handler tests.
+#[async_trait]
+pub(crate) trait PrincipalEventStore: Send + Sync {
+    /// Strongly-consistent read of a principal's current payload.
+    async fn get_principal(
+        &self,
+        org_id: &str,
+        native_id: &NativeId,
+    ) -> Result<Option<serde_json::Value>>;
+
+    /// The event log's current revision for `org_id`.
+    async fn latest_revision(&self, org_id: &str) -> Result<Revision>;
+
+    /// Mint an `EventId`/`occurred_at`, build+sign the envelope, and append it
+    /// alongside the principal's new state item — all inside one transaction.
+    async fn upsert_changed(
+        &self,
+        org_id: &str,
+        native_id: &NativeId,
+        actor: Actor,
+        payload: serde_json::Value,
+    ) -> Result<Revision>;
+}
+
+/// Parameters for [`build_principal_event`].
+///
+/// `native_id` isn't threaded into the signed bytes — the event envelope
+/// carries no subject field of its own, since the principal's identity is
+/// already implicit in the `StatePut` key it lands alongside — so this struct
+/// carries no `native_id` field at all.
+struct BuildPrincipalEventParams<'a> {
+    org_id: &'a str,
+    actor: Actor,
+    payload: serde_json::Value,
+    signing_key: &'a SigningKey,
+    key_id: &'a str,
+    occurred_at: &'a str,
+    revision: Revision,
+}
+
+/// Build the signed `EventEnvelope` + canonical payload bytes for a principal
+/// upsert at `revision`, given an already-loaded signing key.
+fn build_principal_event(
+    params: BuildPrincipalEventParams<'_>,
+) -> (forgeguard_authz_core::EventEnvelope, Vec<u8>) {
+    let BuildPrincipalEventParams {
+        org_id,
+        actor,
+        payload,
+        signing_key,
+        key_id,
+        occurred_at,
+        revision,
+    } = params;
+
+    let event_id = EventId::try_new(ulid::Ulid::new().to_string())
+        .unwrap_or_else(|_| unreachable!("ulid string is always non-empty"));
+    let draft = EventDraft::new(EventDraftParams {
+        event_id,
+        seq: revision,
+        kind: EventKind::PrincipalUpserted,
+        occurred_at: occurred_at.to_string(),
+        actor,
+        payload: payload.clone(),
+    });
+    let payload_bytes = serde_json::to_vec(&payload).unwrap_or_default();
+    let canonical_bytes = canonical_event_bytes(&draft, org_id);
+    let signature = sign_bytes(signing_key, &canonical_bytes);
+    let signature_b64 = base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        signature.to_bytes(),
+    );
+    let envelope =
+        forgeguard_authz_core::EventEnvelope::from_signed(draft, key_id.to_string(), signature_b64);
+    (envelope, payload_bytes)
+}
+
+// ---------------------------------------------------------------------------
+// DynamoDB implementation
+// ---------------------------------------------------------------------------
+
+/// DynamoDB-backed [`PrincipalEventStore`].
+pub(crate) struct DynamoPrincipalEventStore {
+    client: aws_sdk_dynamodb::Client,
+    table_name: String,
+}
+
+impl DynamoPrincipalEventStore {
+    pub(crate) fn new(client: aws_sdk_dynamodb::Client, table_name: String) -> Self {
+        Self { client, table_name }
+    }
+
+    /// Read the org's Ed25519 event-signing key, minting and persisting one
+    /// lazily on first use. The private key material lives only in this
+    /// dedicated item (`SK=EVENT_SIGNING_KEY`) — distinct from the public
+    /// `signing_keys` list `crate::store::generate_key_material` populates for
+    /// externally-verifiable request signing, since here the control plane is
+    /// the signer, not the verifier.
+    async fn ensure_signing_key(&self, org_id: &str) -> Result<(SigningKey, String)> {
+        let pk_value = format!("{ORG_PREFIX}{org_id}");
+
+        let existing = self
+            .client
+            .get_item()
+            .table_name(&self.table_name)
+            .key(pk(), AttributeValue::S(pk_value.clone()))
+            .key(sk(), AttributeValue::S(SK_EVENT_SIGNING_KEY.to_string()))
+            .consistent_read(true)
+            .send()
+            .await
+            .map_err(map_sdk_error)?;
+
+        if let Some(item) = existing.item {
+            let private_pem = get_s(&item, "private_key_pem")?;
+            let key_id = get_s(&item, "key_id")?;
+            let signing_key = SigningKey::from_pkcs8_pem(&private_pem)
+                .map_err(|e| Error::Store(format!("stored event signing key invalid: {e}")))?;
+            return Ok((signing_key, key_id));
+        }
+
+        // Not present — mint one. Reuses `generate_key_material`, the same
+        // Ed25519-keypair-generation routine `OrgStore::generate_key` uses,
+        // so keygen logic lives in exactly one place.
+        let generated = crate::store::generate_key_material()?;
+
+        let mut item = HashMap::new();
+        item.insert(pk().to_string(), AttributeValue::S(pk_value));
+        item.insert(
+            sk().to_string(),
+            AttributeValue::S(SK_EVENT_SIGNING_KEY.to_string()),
+        );
+        item.insert(
+            "key_id".to_string(),
+            AttributeValue::S(EVENT_SIGNING_KEY_ID.to_string()),
+        );
+        item.insert(
+            "private_key_pem".to_string(),
+            AttributeValue::S(generated.private_key_pem().to_string()),
+        );
+
+        // Conditional put: if a concurrent request minted the key first, fall
+        // back to re-reading its item rather than clobbering it.
+        let put_result = self
+            .client
+            .put_item()
+            .table_name(&self.table_name)
+            .set_item(Some(item))
+            .condition_expression(format!("attribute_not_exists({})", sk()))
+            .send()
+            .await;
+
+        match put_result {
+            Ok(_) => {
+                let signing_key =
+                    SigningKey::from_pkcs8_pem(generated.private_key_pem()).map_err(|e| {
+                        Error::Store(format!("generated event signing key invalid: {e}"))
+                    })?;
+                Ok((signing_key, EVENT_SIGNING_KEY_ID.to_string()))
+            }
+            Err(sdk_err) => {
+                let is_conflict = matches!(
+                    &sdk_err,
+                    aws_sdk_dynamodb::error::SdkError::ServiceError(e)
+                        if e.err().is_conditional_check_failed_exception()
+                );
+                if !is_conflict {
+                    return Err(map_sdk_error(sdk_err));
+                }
+                // Lost the race — re-read the winner's key.
+                Box::pin(self.ensure_signing_key(org_id)).await
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl PrincipalEventStore for DynamoPrincipalEventStore {
+    async fn get_principal(
+        &self,
+        org_id: &str,
+        native_id: &NativeId,
+    ) -> Result<Option<serde_json::Value>> {
+        get_principal(&self.client, &self.table_name, org_id, native_id).await
+    }
+
+    async fn latest_revision(&self, org_id: &str) -> Result<Revision> {
+        let log = DynamoEventLog::new(self.client.clone(), self.table_name.clone(), org_id);
+        EventLog::latest_revision(&log)
+            .await
+            .map_err(|e| Error::Store(e.to_string()))
+    }
+
+    async fn upsert_changed(
+        &self,
+        org_id: &str,
+        native_id: &NativeId,
+        actor: Actor,
+        payload: serde_json::Value,
+    ) -> Result<Revision> {
+        let (signing_key, key_id) = self.ensure_signing_key(org_id).await?;
+        let occurred_at = chrono::Utc::now().to_rfc3339();
+        let log = DynamoEventLog::new(self.client.clone(), self.table_name.clone(), org_id);
+
+        let org_id_owned = org_id.to_string();
+        let payload_for_state = payload.clone();
+        let build = move |revision: Revision| {
+            build_principal_event(BuildPrincipalEventParams {
+                org_id: &org_id_owned,
+                actor: actor.clone(),
+                payload: payload_for_state.clone(),
+                signing_key: &signing_key,
+                key_id: &key_id,
+                occurred_at: &occurred_at,
+                revision,
+            })
+        };
+
+        // Peek the payload bytes once up front for the `StatePut` — the
+        // exact bytes stored are `serde_json::to_vec(&payload)`, matching
+        // what `build_principal_event` embeds in the envelope.
+        let payload_bytes = serde_json::to_vec(&payload)
+            .map_err(|e| Error::Store(format!("serialize principal payload: {e}")))?;
+        let updated_at = chrono::Utc::now().to_rfc3339();
+        let state = principal_state_put(org_id, native_id, &payload_bytes, &updated_at)?;
+
+        log.append(build, state).await
+    }
+}
+
+// ---------------------------------------------------------------------------
+// In-memory implementation — dev-mode `--store=memory` backing and handler
+// tests
+// ---------------------------------------------------------------------------
+
+/// In-memory [`PrincipalEventStore`]. Backs `--store=memory` dev mode and lets
+/// handler tests exercise the full upsert flow (including a real Ed25519
+/// signature) without DynamoDB Local.
+pub(crate) struct InMemoryPrincipalEventStore {
+    principals: Mutex<HashMap<(String, NativeId), serde_json::Value>>,
+    log: InMemoryEventLog,
+    signing_key: SigningKey,
+}
+
+impl InMemoryPrincipalEventStore {
+    pub(crate) fn new() -> Self {
+        Self {
+            principals: Mutex::new(HashMap::new()),
+            log: InMemoryEventLog::new(),
+            signing_key: SigningKey::from_bytes(&[7u8; 32]),
+        }
+    }
+}
+
+impl Default for InMemoryPrincipalEventStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl PrincipalEventStore for InMemoryPrincipalEventStore {
+    async fn get_principal(
+        &self,
+        org_id: &str,
+        native_id: &NativeId,
+    ) -> Result<Option<serde_json::Value>> {
+        let guard = self
+            .principals
+            .lock()
+            .map_err(|e| Error::Store(format!("in-memory principal store lock poisoned: {e}")))?;
+        Ok(guard.get(&(org_id.to_string(), native_id.clone())).cloned())
+    }
+
+    async fn latest_revision(&self, _org_id: &str) -> Result<Revision> {
+        EventLog::latest_revision(&self.log)
+            .await
+            .map_err(|e| Error::Store(e.to_string()))
+    }
+
+    async fn upsert_changed(
+        &self,
+        org_id: &str,
+        native_id: &NativeId,
+        actor: Actor,
+        payload: serde_json::Value,
+    ) -> Result<Revision> {
+        let current = EventLog::latest_revision(&self.log)
+            .await
+            .map_err(|e| Error::Store(e.to_string()))?;
+        let revision = current.next();
+        let occurred_at = chrono::Utc::now().to_rfc3339();
+        let (envelope, _payload_bytes) = build_principal_event(BuildPrincipalEventParams {
+            org_id,
+            actor,
+            payload: payload.clone(),
+            signing_key: &self.signing_key,
+            key_id: "in-memory-test-key",
+            occurred_at: &occurred_at,
+            revision,
+        });
+        self.log.push(envelope);
+
+        let mut guard = self
+            .principals
+            .lock()
+            .map_err(|e| Error::Store(format!("in-memory principal store lock poisoned: {e}")))?;
+        guard.insert((org_id.to_string(), native_id.clone()), payload);
+        Ok(revision)
+    }
 }
 
 #[cfg(test)]

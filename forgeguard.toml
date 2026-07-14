@@ -36,6 +36,7 @@ actions = [
   "cp-user-schema-read",
   "cp-user-schema-update",
   "cp-user-create",
+  "cp-principal-upsert",
 ]
 
 [schema.entities.User.attributes]
@@ -83,6 +84,7 @@ allow = [
   "cp-group-create", "cp-group-update", "cp-group-delete",
   "cp-user-schema-update",
   "cp-user-create",
+  "cp-principal-upsert",
 ]
 
 [[policies]]
@@ -117,7 +119,8 @@ permit(
   action in [
     forgeguard::Action::"cp-user-schema-read",
     forgeguard::Action::"cp-user-schema-update",
-    forgeguard::Action::"cp-user-create"
+    forgeguard::Action::"cp-user-create",
+    forgeguard::Action::"cp-principal-upsert"
   ],
   resource
 ) when { principal.org_id == "forgeguard" };

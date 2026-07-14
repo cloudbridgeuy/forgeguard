@@ -2038,6 +2038,7 @@ dependencies = [
  "aws-sdk-dynamodb",
  "aws-sdk-verifiedpermissions",
  "axum",
+ "base64 0.22.1",
  "chrono",
  "clap",
  "color-eyre",
@@ -2062,6 +2063,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "ulid",
  "url",
  "xxhash-rust",
 ]

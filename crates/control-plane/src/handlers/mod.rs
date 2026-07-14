@@ -1,5 +1,6 @@
 pub(crate) mod groups;
 mod keys;
+pub(crate) mod principals;
 pub(crate) mod user_schema;
 pub(crate) mod users;
 
@@ -15,6 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::OrgConfig;
 use crate::etag::{self, Etag, IfNoneMatchResult, ResolvedIfMatch};
+use crate::principal_store::PrincipalEventStore;
 use crate::store::{OrgRecord, OrgStore, SagaTicketStore};
 use crate::user_pool::UserPoolClient;
 
@@ -28,11 +30,18 @@ use crate::user_pool::UserPoolClient;
 /// V3 adds `user_pool` and `saga_tickets` for the inline `POST /users` saga
 /// driver. The trait objects let production wire `AwsCognitoUserPoolClient` +
 /// `DynamoSagaTicketStore` while tests wire the in-memory equivalents.
+///
+/// V1-append-spine adds `principals` — the [`PrincipalEventStore`] seam the
+/// `PUT /principals/{native_id}` handler upserts through, wiring
+/// `DynamoPrincipalEventStore` in production and
+/// `InMemoryPrincipalEventStore` for `--store=memory` dev mode and handler
+/// tests.
 pub(crate) struct AppState<V> {
     pub(crate) store: Arc<dyn OrgStore>,
     pub(crate) vp: Arc<V>,
     pub(crate) user_pool: Arc<dyn UserPoolClient>,
     pub(crate) saga_tickets: Arc<dyn SagaTicketStore>,
+    pub(crate) principals: Arc<dyn PrincipalEventStore>,
 }
 
 impl<V> Clone for AppState<V> {
@@ -42,6 +51,7 @@ impl<V> Clone for AppState<V> {
             vp: Arc::clone(&self.vp),
             user_pool: Arc::clone(&self.user_pool),
             saga_tickets: Arc::clone(&self.saga_tickets),
+            principals: Arc::clone(&self.principals),
         }
     }
 }
@@ -61,6 +71,12 @@ impl<V> FromRef<AppState<V>> for Arc<dyn UserPoolClient> {
 impl<V> FromRef<AppState<V>> for Arc<dyn SagaTicketStore> {
     fn from_ref(input: &AppState<V>) -> Arc<dyn SagaTicketStore> {
         Arc::clone(&input.saga_tickets)
+    }
+}
+
+impl<V> FromRef<AppState<V>> for Arc<dyn PrincipalEventStore> {
+    fn from_ref(input: &AppState<V>) -> Arc<dyn PrincipalEventStore> {
+        Arc::clone(&input.principals)
     }
 }
 
@@ -525,6 +541,7 @@ pub(super) mod test_support {
     };
     use forgeguard_proxy_core::{PipelineConfig, PipelineConfigParams};
 
+    use crate::principal_store::PrincipalEventStore;
     use crate::store::{
         build_org_store, InMemoryOrgStore, InMemorySagaTicketStore, OrgStore, SagaTicketStore,
     };
@@ -620,11 +637,14 @@ pub(super) mod test_support {
 
         let user_pool: Arc<dyn UserPoolClient> = Arc::new(InMemoryUserPoolClient::new());
         let saga_tickets: Arc<dyn SagaTicketStore> = Arc::new(InMemorySagaTicketStore::new());
+        let principals: Arc<dyn PrincipalEventStore> =
+            Arc::new(crate::principal_store::InMemoryPrincipalEventStore::new());
         let state = super::AppState {
             store,
             vp,
             user_pool,
             saga_tickets,
+            principals,
         };
         Router::new()
             .route(
@@ -673,6 +693,10 @@ pub(super) mod test_support {
             .route(
                 "/api/v1/organizations/{org_id}/users",
                 axum::routing::post(super::users::create_handler::<StubVpClient>),
+            )
+            .route(
+                "/api/v1/organizations/{org_id}/principals/{native_id}",
+                axum::routing::put(super::principals::upsert_principal::<StubVpClient>),
             )
             .route("/metrics", axum::routing::get(super::metrics_handler))
             // Test-only probe route — never compiled into production binaries.
