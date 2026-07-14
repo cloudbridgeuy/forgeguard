@@ -21,7 +21,7 @@ pub use engine_cedar::{
     CedarEngine, Decision, DecisionQuery, DecisionRecord, EmbeddedPolicyEngine,
 };
 pub use error::{Error, Result};
-pub use event::EventKind;
+pub use event::{Actor, EventDraft, EventDraftParams, EventEnvelope, EventId, EventKind};
 pub use query::PolicyQuery;
 pub use rbac::{
     compile_rbac_to_cedar, groups_to_permits, policy_name_for_group, resolve_inherits,
