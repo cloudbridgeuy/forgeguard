@@ -121,7 +121,7 @@ lambda_runtime = "1.1"
 libc = "0.2"
 
 # Caching
-lru = "0.16"
+lru = "0.17"
 
 # Routing
 matchit = "0.9"
