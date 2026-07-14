@@ -15,13 +15,6 @@ export class DynamoDbStack extends cdk.Stack {
 
     const GSI1_INDEX_NAME = "GSI1";
 
-    // Exclude the primary region from the replica list to avoid CDK errors.
-    const primaryRegion = cdk.Stack.of(this).region;
-    const allReplicaRegions = ["us-east-1", "us-east-2", "us-west-2"];
-    const replicas = allReplicaRegions
-      .filter((r) => r !== primaryRegion)
-      .map((region) => ({ region }));
-
     this.table = new dynamodb.TableV2(this, "OrgsTable", {
       tableName: `forgeguard-${props.environment}-orgs`,
       partitionKey: { name: schema.partitionKey, type: dynamodb.AttributeType.STRING },
@@ -29,14 +22,18 @@ export class DynamoDbStack extends cdk.Stack {
       billing: dynamodb.Billing.onDemand(),
       removalPolicy: cdk.RemovalPolicy.RETAIN,
       dynamoStream: dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
+      // Sparse (D10): only items that explicitly carry GSI1PK/GSI1SK — today
+      // just `membership` — appear in this index. The append-spine's `seq`
+      // counter and `event`/`principal` items never set these attributes, so
+      // they stay out of it entirely, instead of the old full-table PK/SK
+      // inversion where every item was indexed.
       globalSecondaryIndexes: [
         {
           indexName: GSI1_INDEX_NAME,
-          partitionKey: { name: schema.sortKey, type: dynamodb.AttributeType.STRING },
-          sortKey: { name: schema.partitionKey, type: dynamodb.AttributeType.STRING },
+          partitionKey: { name: "GSI1PK", type: dynamodb.AttributeType.STRING },
+          sortKey: { name: "GSI1SK", type: dynamodb.AttributeType.STRING },
         },
       ],
-      replicas,
     });
 
     cdk.Tags.of(this).add("project", "forgeguard");

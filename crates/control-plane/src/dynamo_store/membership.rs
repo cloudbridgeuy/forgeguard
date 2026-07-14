@@ -12,6 +12,9 @@
 //! - `email`     (S, required) — audit metadata for the saga driver
 //! - `created_by`(S, required) — audit metadata (the admin sub that issued
 //!   the `POST /users` request)
+//! - `GSI1PK`    = `ORG#{org_id}` (S, required) — sparse GSI1 inverted index,
+//!   listing users per org
+//! - `GSI1SK`    = `USER#{sub}` (S, required)
 //!
 //! `groups` must always be a List, even when empty, because
 //! `membership_store.rs::parse_groups` calls `as_l()` and treats a missing
@@ -68,6 +71,14 @@ pub(crate) fn to_membership_item(row: &MembershipRow) -> HashMap<String, Attribu
     item.insert(
         "created_by".to_owned(),
         AttributeValue::S(row.created_by().to_string()),
+    );
+    item.insert(
+        "GSI1PK".to_owned(),
+        AttributeValue::S(format!("{ORG_PREFIX}{}", row.org_id())),
+    );
+    item.insert(
+        "GSI1SK".to_owned(),
+        AttributeValue::S(format!("{USER_PREFIX}{}", row.sub())),
     );
     item
 }
@@ -162,6 +173,14 @@ mod tests {
         );
         let joined = item.get("joined_at").and_then(|v| v.as_s().ok()).unwrap();
         assert!(joined.starts_with("2026-05-15T12:00:00"));
+        assert_eq!(
+            item.get("GSI1PK").and_then(|v| v.as_s().ok()),
+            Some(&"ORG#acme".to_owned())
+        );
+        assert_eq!(
+            item.get("GSI1SK").and_then(|v| v.as_s().ok()),
+            Some(&"USER#user-123".to_owned())
+        );
     }
 
     #[test]

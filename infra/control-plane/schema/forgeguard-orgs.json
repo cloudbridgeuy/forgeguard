@@ -26,7 +26,11 @@
         "user_id": { "type": "S", "required": true },
         "org_id": { "type": "S", "required": true },
         "groups": { "type": "L", "required": true },
-        "joined_at": { "type": "S", "required": true }
+        "joined_at": { "type": "S", "required": true },
+        "email": { "type": "S", "required": true },
+        "created_by": { "type": "S", "required": true },
+        "GSI1PK": { "type": "S", "required": true, "value": "ORG#{org_id}" },
+        "GSI1SK": { "type": "S", "required": true, "value": "USER#{user_id}" }
       }
     },
     "group": {
@@ -43,6 +47,37 @@
       "attributes": {
         "schema": { "type": "S", "required": true, "format": "json" },
         "etag": { "type": "S", "required": true }
+      }
+    },
+    "seq_counter": {
+      "pk": "ORG#{org_id}",
+      "sk": "SEQ",
+      "attributes": {
+        "seq": { "type": "N", "required": true }
+      }
+    },
+    "event": {
+      "pk": "ORG#{org_id}",
+      "sk": "EVT#{seq:020}",
+      "attributes": {
+        "event_id": { "type": "S", "required": true },
+        "seq": { "type": "N", "required": true },
+        "kind": { "type": "S", "required": true },
+        "occurred_at": { "type": "S", "required": true },
+        "actor": { "type": "S", "required": true },
+        "narrowing": { "type": "S", "required": true },
+        "schema_version": { "type": "N", "required": true },
+        "payload": { "type": "S", "required": true, "format": "json" },
+        "key_id": { "type": "S", "required": true },
+        "signature": { "type": "S", "required": true }
+      }
+    },
+    "principal": {
+      "pk": "ORG#{org_id}",
+      "sk": "PRINCIPAL#{native_id}",
+      "attributes": {
+        "payload": { "type": "S", "required": true, "format": "json" },
+        "updated_at": { "type": "S", "required": true }
       }
     }
   }
