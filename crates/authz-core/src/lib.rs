@@ -24,8 +24,8 @@ pub use error::{Error, Result};
 #[cfg(feature = "test-support")]
 pub use event::InMemoryEventLog;
 pub use event::{
-    canonical_event_bytes, Actor, EventDraft, EventDraftParams, EventEnvelope, EventId, EventKind,
-    EventLog,
+    canonical_event_bytes, decide_upsert, Actor, EventDraft, EventDraftParams, EventEnvelope,
+    EventId, EventKind, EventLog, UpsertDecision,
 };
 pub use query::PolicyQuery;
 pub use rbac::{

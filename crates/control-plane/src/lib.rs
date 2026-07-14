@@ -10,6 +10,7 @@ mod event_log;
 mod handlers;
 mod membership_store;
 pub(crate) mod metrics;
+mod principal_store;
 mod signing_key;
 mod signing_key_store;
 mod store;

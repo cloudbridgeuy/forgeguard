@@ -5,11 +5,13 @@ mod canonical;
 mod envelope;
 mod kind;
 mod log;
+mod upsert;
 
 pub use canonical::canonical_event_bytes;
 pub use envelope::{Actor, EventDraft, EventDraftParams, EventEnvelope, EventId, SCHEMA_VERSION};
 pub use kind::EventKind;
 pub use log::EventLog;
+pub use upsert::{decide_upsert, UpsertDecision};
 
 #[cfg(any(test, feature = "test-support"))]
 pub use log::InMemoryEventLog;
