@@ -6,6 +6,7 @@ mod config;
 mod dynamo_store;
 mod error;
 pub(crate) mod etag;
+mod event_log;
 mod handlers;
 mod membership_store;
 pub(crate) mod metrics;
