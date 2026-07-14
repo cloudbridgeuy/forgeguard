@@ -221,6 +221,7 @@ const API_ROUTES: &[(&str, &str)] = &[
         "PUT",
         "/api/v1/organizations/{org_id}/principals/{native_id}",
     ),
+    ("GET", "/api/v1/organizations/{org_id}/events"),
 ];
 
 /// Route-to-action mappings for all control-plane API routes.
@@ -338,6 +339,12 @@ fn cp_route_actions() -> forgeguard_http::Result<Vec<RouteMapping>> {
             "PUT",
             "/api/v1/organizations/{org_id}/principals/{native_id}",
             "cp:principal:upsert",
+            Some("org_id"),
+        ),
+        (
+            "GET",
+            "/api/v1/organizations/{org_id}/events",
+            "cp:events:read",
             Some("org_id"),
         ),
     ];
@@ -528,6 +535,10 @@ fn build_router<V: VpClient + 'static>(state: AppState<V>, fg: Arc<ForgeGuard>) 
             "/api/v1/organizations/{org_id}/principals/{native_id}",
             axum::routing::put(handlers::principals::upsert_principal::<V>),
         )
+        .route(
+            "/api/v1/organizations/{org_id}/events",
+            axum::routing::get(handlers::events::list_events_handler::<V>),
+        )
         .with_state(state)
         .layer(axum::middleware::from_fn_with_state(fg, forgeguard_layer))
         .layer(TraceLayer::new_for_http())
@@ -547,8 +558,8 @@ mod tests {
         let mappings = cp_route_actions().expect("cp_route_actions must not fail");
         assert_eq!(
             mappings.len(),
-            19,
-            "expected 19 route mappings, got {}",
+            20,
+            "expected 20 route mappings, got {}",
             mappings.len()
         );
         // Confirm each action string round-trips correctly through QualifiedAction
@@ -572,6 +583,7 @@ mod tests {
             "cp:user-schema:update",
             "cp:user:create",
             "cp:principal:upsert",
+            "cp:events:read",
         ];
         for (mapping, expected) in mappings.iter().zip(expected_actions.iter()) {
             assert_eq!(

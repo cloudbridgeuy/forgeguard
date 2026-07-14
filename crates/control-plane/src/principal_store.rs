@@ -13,8 +13,8 @@ use async_trait::async_trait;
 use aws_sdk_dynamodb::types::AttributeValue;
 use forgeguard_authn_core::signing::{sign_bytes, SigningKey};
 use forgeguard_authz_core::{
-    canonical_event_bytes, Actor, EventDraft, EventDraftParams, EventId, EventKind, EventLog,
-    InMemoryEventLog, Revision,
+    canonical_event_bytes, Actor, EventDraft, EventDraftParams, EventEnvelope, EventId, EventKind,
+    EventLog, InMemoryEventLog, Revision,
 };
 use forgeguard_core::NativeId;
 
@@ -126,6 +126,20 @@ pub(crate) trait PrincipalEventStore: Send + Sync {
         actor: Actor,
         payload: serde_json::Value,
     ) -> Result<Revision>;
+
+    /// Events with seq > `after`, ascending, at most `limit` — the read side
+    /// the `GET /organizations/{org_id}/events` cursor handler (Task 8)
+    /// replays through. Bundled onto this seam rather than a second parallel
+    /// trait/`AppState` field: `PrincipalEventStore` already owns the per-org
+    /// `EventLog` handle (`DynamoEventLog`/`InMemoryEventLog`) for the upsert
+    /// path, so exposing `events_after` here reuses the exact same log
+    /// instance instead of standing up a second seam to the same data.
+    async fn events_after(
+        &self,
+        org_id: &str,
+        after: Revision,
+        limit: usize,
+    ) -> Result<Vec<EventEnvelope>>;
 }
 
 /// Parameters for [`build_principal_event`].
@@ -331,6 +345,18 @@ impl PrincipalEventStore for DynamoPrincipalEventStore {
 
         log.append(build, state).await
     }
+
+    async fn events_after(
+        &self,
+        org_id: &str,
+        after: Revision,
+        limit: usize,
+    ) -> Result<Vec<EventEnvelope>> {
+        let log = DynamoEventLog::new(self.client.clone(), self.table_name.clone(), org_id);
+        EventLog::events_after(&log, after, limit)
+            .await
+            .map_err(|e| Error::Store(e.to_string()))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -343,7 +369,11 @@ impl PrincipalEventStore for DynamoPrincipalEventStore {
 /// signature) without DynamoDB Local.
 pub(crate) struct InMemoryPrincipalEventStore {
     principals: Mutex<HashMap<(String, NativeId), serde_json::Value>>,
-    log: InMemoryEventLog,
+    /// One log per org — a shared log would leak one org's events into
+    /// another org's `events_after`/`latest_revision` read. `Arc`-wrapped so
+    /// the map's lock can be dropped before `.await`-ing the log itself
+    /// (`std::sync::MutexGuard` isn't `Send`, and this trait's futures must be).
+    logs: Mutex<HashMap<String, std::sync::Arc<InMemoryEventLog>>>,
     signing_key: SigningKey,
 }
 
@@ -351,9 +381,20 @@ impl InMemoryPrincipalEventStore {
     pub(crate) fn new() -> Self {
         Self {
             principals: Mutex::new(HashMap::new()),
-            log: InMemoryEventLog::new(),
+            logs: Mutex::new(HashMap::new()),
             signing_key: SigningKey::from_bytes(&[7u8; 32]),
         }
+    }
+
+    fn log_for(&self, org_id: &str) -> Result<std::sync::Arc<InMemoryEventLog>> {
+        let mut logs = self
+            .logs
+            .lock()
+            .map_err(|e| Error::Store(format!("in-memory event log map lock poisoned: {e}")))?;
+        Ok(std::sync::Arc::clone(
+            logs.entry(org_id.to_string())
+                .or_insert_with(|| std::sync::Arc::new(InMemoryEventLog::new())),
+        ))
     }
 }
 
@@ -377,8 +418,9 @@ impl PrincipalEventStore for InMemoryPrincipalEventStore {
         Ok(guard.get(&(org_id.to_string(), native_id.clone())).cloned())
     }
 
-    async fn latest_revision(&self, _org_id: &str) -> Result<Revision> {
-        EventLog::latest_revision(&self.log)
+    async fn latest_revision(&self, org_id: &str) -> Result<Revision> {
+        let log = self.log_for(org_id)?;
+        EventLog::latest_revision(log.as_ref())
             .await
             .map_err(|e| Error::Store(e.to_string()))
     }
@@ -390,7 +432,8 @@ impl PrincipalEventStore for InMemoryPrincipalEventStore {
         actor: Actor,
         payload: serde_json::Value,
     ) -> Result<Revision> {
-        let current = EventLog::latest_revision(&self.log)
+        let log = self.log_for(org_id)?;
+        let current = EventLog::latest_revision(log.as_ref())
             .await
             .map_err(|e| Error::Store(e.to_string()))?;
         let revision = current.next();
@@ -404,7 +447,7 @@ impl PrincipalEventStore for InMemoryPrincipalEventStore {
             occurred_at: &occurred_at,
             revision,
         });
-        self.log.push(envelope);
+        log.push(envelope);
 
         let mut guard = self
             .principals
@@ -412,6 +455,18 @@ impl PrincipalEventStore for InMemoryPrincipalEventStore {
             .map_err(|e| Error::Store(format!("in-memory principal store lock poisoned: {e}")))?;
         guard.insert((org_id.to_string(), native_id.clone()), payload);
         Ok(revision)
+    }
+
+    async fn events_after(
+        &self,
+        org_id: &str,
+        after: Revision,
+        limit: usize,
+    ) -> Result<Vec<EventEnvelope>> {
+        let log = self.log_for(org_id)?;
+        EventLog::events_after(log.as_ref(), after, limit)
+            .await
+            .map_err(|e| Error::Store(e.to_string()))
     }
 }
 

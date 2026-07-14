@@ -275,8 +275,11 @@ impl EventLog for DynamoEventLog {
     {
         Box::pin(async move {
             // Inclusive lower bound: the smallest key strictly greater than
-            // `after` is the next integer's zero-padded key.
-            let after_sk = event_sk(after.value() + 1);
+            // `after` is the next integer's zero-padded key. `after` is a
+            // client-controlled cursor, so `after.value() == u64::MAX` must
+            // saturate rather than wrap to 0 (which would turn an
+            // out-of-range cursor into "return the entire history").
+            let after_sk = event_sk(after.value().saturating_add(1));
             let result = self
                 .client
                 .query()

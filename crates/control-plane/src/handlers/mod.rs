@@ -1,3 +1,4 @@
+pub(crate) mod events;
 pub(crate) mod groups;
 mod keys;
 pub(crate) mod principals;
@@ -697,6 +698,10 @@ pub(super) mod test_support {
             .route(
                 "/api/v1/organizations/{org_id}/principals/{native_id}",
                 axum::routing::put(super::principals::upsert_principal::<StubVpClient>),
+            )
+            .route(
+                "/api/v1/organizations/{org_id}/events",
+                axum::routing::get(super::events::list_events_handler::<StubVpClient>),
             )
             .route("/metrics", axum::routing::get(super::metrics_handler))
             // Test-only probe route — never compiled into production binaries.

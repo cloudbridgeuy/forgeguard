@@ -37,6 +37,7 @@ actions = [
   "cp-user-schema-update",
   "cp-user-create",
   "cp-principal-upsert",
+  "cp-events-read",
 ]
 
 [schema.entities.User.attributes]
@@ -69,7 +70,7 @@ name = "member"
 description = "Read-only org access"
 allow = [
   "cp-organization-read", "cp-key-read", "cp-config-read", "cp-group-read",
-  "cp-user-schema-read",
+  "cp-user-schema-read", "cp-events-read",
 ]
 
 [[policies]]
@@ -105,6 +106,18 @@ body = """
 permit(
   principal is forgeguard::Machine,
   action == forgeguard::Action::"cp-proxy-config-read",
+  resource
+) when { resource.org_id == principal.org_id };
+"""
+
+[[policies]]
+type = "cedar"
+name = "machine-events-read"
+description = "Machine principals can read their own org's event log — enforcement points are machines"
+body = """
+permit(
+  principal is forgeguard::Machine,
+  action == forgeguard::Action::"cp-events-read",
   resource
 ) when { resource.org_id == principal.org_id };
 """
