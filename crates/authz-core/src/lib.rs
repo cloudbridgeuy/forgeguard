@@ -21,8 +21,11 @@ pub use engine_cedar::{
     CedarEngine, Decision, DecisionQuery, DecisionRecord, EmbeddedPolicyEngine,
 };
 pub use error::{Error, Result};
+#[cfg(feature = "test-support")]
+pub use event::InMemoryEventLog;
 pub use event::{
     canonical_event_bytes, Actor, EventDraft, EventDraftParams, EventEnvelope, EventId, EventKind,
+    EventLog,
 };
 pub use query::PolicyQuery;
 pub use rbac::{
