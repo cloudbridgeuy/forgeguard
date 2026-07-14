@@ -76,7 +76,8 @@ All flags use clap's `env` attribute — precedence is: CLI flag > env var > def
 - **Keys:** `PK` (String), `SK` (String) — single-table design, defined in `infra/control-plane/schema/forgeguard-orgs.json`
 - **Billing:** on-demand (PAY_PER_REQUEST)
 - **Removal policy:** RETAIN (always — this is prod data)
-- **Replicas:** us-east-1, us-east-2, us-west-2 (primary region auto-excluded from replica list)
+- **Region:** single-region only (`us-east-2`) — no Global Table replicas.
+- **GSI1 (sparse):** partition key `GSI1PK` (String), sort key `GSI1SK` (String). Only items that explicitly set both attributes are indexed — today, only `membership` items (`GSI1PK = ORG#{org_id}`, `GSI1SK = USER#{user_id}`), inverting the users-per-org lookup. `seq_counter`, `event`, and `principal` items (the append-spine — see [control-plane.md](./control-plane.md)) never set these attributes, so they never appear in GSI1.
 - **Tags:** `project=forgeguard`, `environment={env}`
 - **Outputs:** TableName, TableArn
 - **Schema source of truth:** `infra/control-plane/schema/forgeguard-orgs.json` — consumed by CDK (TypeScript `import`) and Rust (`include_str!` at compile time). Both CDK and DynamoDB integration tests read key names from this single file to prevent drift.

@@ -238,6 +238,8 @@ All 10 API routes map to QualifiedActions in the `cp` namespace:
 | `GET` | `/api/v1/organizations/{org_id}/keys` | `cp:key:read` |
 | `DELETE` | `/api/v1/organizations/{org_id}/keys/{key_id}` | `cp:key:revoke` |
 | `POST` | `/api/v1/organizations/{org_id}/keys/{key_id}/rotate` | `cp:key:rotate` |
+| `PUT` | `/api/v1/organizations/{org_id}/principals/{native_id}` | `cp:principal:upsert` |
+| `GET` | `/api/v1/organizations/{org_id}/events` | `cp:events:read` |
 
 ### PrincipalKind Routing
 
@@ -315,8 +317,12 @@ crates/control-plane/src/
     mod.rs            -- health, CRUD, proxy_config handlers
     tests.rs          -- handler integration tests (split from mod.rs to satisfy 1000-line cap)
     keys.rs           -- generate_key, list_keys, revoke_key handlers + tests
+    principals/       -- upsert_principal handler (PUT .../principals/{native_id})
+    events/           -- list_events_handler (GET .../events cursor replay)
   signing_key.rs      -- SigningKeyEntry, KeyStatus, Ed25519 key generation
   signing_key_store.rs -- DynamoSigningKeyStore (implements SigningKeyStore from authn-core)
+  event_log.rs        -- DynamoEventLog: transactional append (TransactWriteItems) + events_after/latest_revision (Query)
+  principal_store.rs  -- PrincipalEventStore trait, DynamoPrincipalEventStore, InMemoryPrincipalEventStore, event signing-key mint
   error.rs            -- Error enum, Result alias
 ```
 
@@ -404,6 +410,44 @@ curl -s -X DELETE \
 ## V2 of #102 — Groups CRUD (Draft only)
 
 Endpoints under `/api/v1/organizations/{org_id}/groups[/{name}]`. ETag/`If-Match` is mandatory on PUT/DELETE (omitting it returns 422). DELETE pre-checks for both live memberships (`count_memberships_for_group`) and inheriting groups (`list_inheritors`); either non-empty set blocks deletion. The Active-org branch that pushes compiled Cedar policies to Verified Permissions is `todo!("V3")` until VP push lands. The `is_declared_group(org_id, name)` predicate is exposed on `OrgStore` for issue #100's `POST /users` validator, which must confirm that a referenced group name is actually declared before accepting a membership assignment.
+
+## Event Append Spine (V1)
+
+Every principal upsert appends a signed, gap-free, per-org event to DynamoDB atomically with its state write, replayable via `GET .../events`. Pure event types (`EventEnvelope`, `EventKind`, `NarrowingFlag`, canonical signing bytes) live in `forgeguard_authz_core::event`; raw Ed25519 sign/verify-over-bytes helpers live in `forgeguard_authn_core::signing`. All I/O — the transactional append, the cursor query, and lazy signing-key mint — lives in `crates/control-plane/src/{event_log,principal_store}.rs`.
+
+### `PUT /api/v1/organizations/{org_id}/principals/{native_id}`
+
+1. `native_id` must parse as a `NativeId` (422 otherwise).
+2. Org must exist and be `Active` (404 / 409 otherwise, mirroring every other org-scoped handler).
+3. Strongly-consistent read of the existing principal, then `decide_upsert(existing, incoming)`:
+   - `NoOp` (canonical JSON equality, key-order insensitive) — responds `200` with the current revision; appends nothing.
+   - `Changed` — mints an `EventId` (ULID), signs the canonical event bytes with the org's Ed25519 event-signing key, and atomically (`TransactWriteItems`) increments the org's `seq` counter, puts the event item, and puts the principal state item. Responds `201` when nothing existed before the write, `200` otherwise.
+4. Every response carries the new revision in both the `X-Fg-Revision` header and the JSON body's `revision` field.
+
+### `GET /api/v1/organizations/{org_id}/events`
+
+Cursor-based replay of the per-org event log, ordered by monotonic `seq`.
+
+- Query params: `after` (u64 cursor, default 0 — returns events with `seq > after`), `limit` (default 100, clamped to 1000; a request for `0` is floored to `1` — both clamps are logged via `tracing::warn!`).
+- `wait` is rejected with `400 {"error": "wait is not supported yet"}` before any store I/O — long-poll replay is a later slice, not this one.
+- Response: `{"events": [...], "next_after": <u64>, "revision": <u64>}` plus an `X-Fg-Revision` header. `next_after` is the last returned event's `seq`, or the unchanged `after` on an empty page (never regresses).
+- Org must exist and be `Active` (404 / 409, same gate as the principal-upsert handler).
+
+### Event signing key
+
+A dedicated per-org Ed25519 keypair (`SK = EVENT_SIGNING_KEY`) signs event envelopes. This is distinct from `signing_key_store.rs`'s key list, which is verification-only (public keys for verifying externally-signed BYOC proxy requests) and never persists a private key. The event-signing private key is lazily minted on first use with a conditional-write (CAS) retry, since it is self-managed by the control plane rather than provisioned by the onboarding saga.
+
+### DynamoDB layout
+
+New sparse item types (never populate `GSI1PK`/`GSI1SK` — see [infra-control-plane.md](./infra-control-plane.md)):
+
+| Item | PK | SK |
+|------|----|----|
+| `seq_counter` | `ORG#{org_id}` | `SEQ` |
+| `event` | `ORG#{org_id}` | `EVT#{seq:020}` (zero-padded so lexicographic order matches numeric order) |
+| `principal` | `ORG#{org_id}` | `PRINCIPAL#{native_id}` |
+
+`event_sk(seq)` computes the sort key; `EVT_SK_MAX` is a sentinel (`EVT#99999999999999999999`) used as the upper bound of a `BETWEEN` query so the counter item's bare `SK="SEQ"` (which lexicographically sorts after all `EVT#...` keys) never leaks into a replay page. The `after` cursor is `saturating_add(1)`'d before use — `after = u64::MAX` must floor to an empty page, not wrap to zero and return the entire history.
 
 ## V3 of #102 — Active-org VP materialization
 
