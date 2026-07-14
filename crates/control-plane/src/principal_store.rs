@@ -29,6 +29,8 @@ pub(crate) fn principal_state_put(
 ) -> Result<StatePut> {
     let payload = std::str::from_utf8(payload_bytes)
         .map_err(|e| Error::Store(format!("principal payload is not valid UTF-8: {e}")))?;
+    serde_json::from_str::<serde_json::Value>(payload)
+        .map_err(|e| Error::Store(format!("principal payload is not valid JSON: {e}")))?;
 
     let mut attributes = HashMap::new();
     attributes.insert(
