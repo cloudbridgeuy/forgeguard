@@ -5,6 +5,7 @@ pub mod decision;
 pub mod engine;
 pub mod engine_cedar;
 pub mod error;
+pub mod event;
 pub mod query;
 pub mod rbac;
 pub mod snapshot;
@@ -20,6 +21,7 @@ pub use engine_cedar::{
     CedarEngine, Decision, DecisionQuery, DecisionRecord, EmbeddedPolicyEngine,
 };
 pub use error::{Error, Result};
+pub use event::EventKind;
 pub use query::PolicyQuery;
 pub use rbac::{
     compile_rbac_to_cedar, groups_to_permits, policy_name_for_group, resolve_inherits,

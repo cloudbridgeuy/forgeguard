@@ -36,6 +36,17 @@ pub enum Error {
         /// The chain's actor (head link).
         actor: String,
     },
+
+    /// An event kind string did not match a known `EventKind` wire name.
+    #[error("unknown event kind: {kind}")]
+    UnknownEventKind {
+        /// The unrecognized wire-format kind string.
+        kind: String,
+    },
+
+    /// An `EventId` failed to parse (e.g. empty string).
+    #[error("invalid event id: {0}")]
+    InvalidEventId(String),
 }
 
 /// Convenience alias used throughout this crate.
