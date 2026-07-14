@@ -257,6 +257,26 @@ pub fn verify(
         .map_err(|_| Error::SignatureInvalid)
 }
 
+/// Sign raw bytes directly, bypassing [`CanonicalPayload`]'s header-oriented
+/// framing. Pure — no I/O, no time, no randomness. For callers (e.g. the
+/// event log) whose canonical byte format isn't the request-signing header
+/// format.
+pub fn sign_bytes(key: &SigningKey, bytes: &[u8]) -> ed25519_dalek::Signature {
+    key.0.sign(bytes)
+}
+
+/// Verify a signature over raw bytes directly, bypassing
+/// [`CanonicalPayload`]'s header-oriented framing. Pure.
+pub fn verify_bytes(
+    key: &VerifyingKey,
+    bytes: &[u8],
+    signature: &ed25519_dalek::Signature,
+) -> Result<()> {
+    key.0
+        .verify(bytes, signature)
+        .map_err(|_| Error::SignatureInvalid)
+}
+
 // ---------------------------------------------------------------------------
 // TimestampValidator
 // ---------------------------------------------------------------------------
@@ -414,6 +434,28 @@ mod tests {
         let signed = sign(&sk, &key_id, &payload, ts, "trace-1".into());
 
         assert!(verify(&wrong_vk, &payload, signed.signature()).is_err());
+    }
+
+    #[test]
+    fn sign_bytes_verify_bytes_roundtrip() {
+        let (sk, vk) = test_keypair();
+        let bytes = b"forgeguard-event-v1\norg:acme\n";
+
+        let signature = sign_bytes(&sk, bytes);
+
+        assert!(verify_bytes(&vk, bytes, &signature).is_ok());
+    }
+
+    #[test]
+    fn verify_bytes_rejects_flipped_byte() {
+        let (sk, vk) = test_keypair();
+        let bytes = b"forgeguard-event-v1\norg:acme\n";
+        let mut tampered = *bytes;
+        tampered[0] ^= 0x01;
+
+        let signature = sign_bytes(&sk, bytes);
+
+        assert!(verify_bytes(&vk, &tampered, &signature).is_err());
     }
 
     #[test]

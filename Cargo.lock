@@ -1972,9 +1972,11 @@ version = "0.0.0"
 dependencies = [
  "cedar-policy",
  "forgeguard_core",
+ "hex",
  "regex",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.18",
  "tokio",
 ]

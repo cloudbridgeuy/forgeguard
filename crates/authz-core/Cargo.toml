@@ -19,9 +19,11 @@ test-support = []
 [dependencies]
 cedar-policy = { workspace = true }
 forgeguard_core = { workspace = true }
+hex = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

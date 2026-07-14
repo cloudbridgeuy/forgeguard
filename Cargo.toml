@@ -107,6 +107,9 @@ forgeguard_http = { version = "0.0.0", path = "crates/http" }
 forgeguard_proxy_core = { version = "0.0.0", path = "crates/proxy-core" }
 forgeguard_sdk = { version = "0.0.0", path = "crates/sdk" }
 
+# Hex encoding
+hex = "0.4"
+
 # HTTP types
 http = "1"
 
@@ -157,6 +160,9 @@ reqwest = { version = "0.13", features = ["json"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_dynamo = "4"
 serde_json = "1.0"
+
+# SHA-256 hashing
+sha2 = "0.10"
 
 # Temp files (testing)
 tempfile = "3"
