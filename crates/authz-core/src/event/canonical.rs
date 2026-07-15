@@ -20,6 +20,34 @@ struct CanonicalFields<'a> {
     payload: &'a serde_json::Value,
 }
 
+impl<'a> From<&'a EventDraft> for CanonicalFields<'a> {
+    fn from(draft: &'a EventDraft) -> Self {
+        CanonicalFields {
+            seq: draft.seq().value(),
+            event_id: draft.event_id().as_str(),
+            kind: draft.kind().as_str(),
+            occurred_at: draft.occurred_at(),
+            narrowing: draft.narrowing(),
+            schema_version: draft.schema_version(),
+            payload: draft.payload(),
+        }
+    }
+}
+
+impl<'a> From<&'a EventEnvelope> for CanonicalFields<'a> {
+    fn from(envelope: &'a EventEnvelope) -> Self {
+        CanonicalFields {
+            seq: envelope.seq().value(),
+            event_id: envelope.event_id().as_str(),
+            kind: envelope.kind().as_str(),
+            occurred_at: envelope.occurred_at(),
+            narrowing: envelope.narrowing(),
+            schema_version: envelope.schema_version(),
+            payload: envelope.payload(),
+        }
+    }
+}
+
 fn canonical_bytes(fields: &CanonicalFields<'_>, org_id: &str) -> Vec<u8> {
     // Unwrap: serializing a `serde_json::Value` never fails.
     let payload_bytes = serde_json::to_vec(fields.payload).unwrap_or_default();
@@ -48,18 +76,7 @@ fn canonical_bytes(fields: &CanonicalFields<'_>, org_id: &str) -> Vec<u8> {
 /// Build the canonical byte representation of `draft` for organization
 /// `org_id`, ready to be passed to a signing function.
 pub fn canonical_event_bytes(draft: &EventDraft, org_id: &str) -> Vec<u8> {
-    canonical_bytes(
-        &CanonicalFields {
-            seq: draft.seq().value(),
-            event_id: draft.event_id().as_str(),
-            kind: draft.kind().as_str(),
-            occurred_at: draft.occurred_at(),
-            narrowing: draft.narrowing(),
-            schema_version: draft.schema_version(),
-            payload: draft.payload(),
-        },
-        org_id,
-    )
+    canonical_bytes(&CanonicalFields::from(draft), org_id)
 }
 
 /// Reconstruct the canonical bytes of a stored [`EventEnvelope`] for external
@@ -67,18 +84,7 @@ pub fn canonical_event_bytes(draft: &EventDraft, org_id: &str) -> Vec<u8> {
 /// envelope and check its Ed25519 signature against the org's published
 /// public key.
 pub fn canonical_envelope_bytes(envelope: &EventEnvelope, org_id: &str) -> Vec<u8> {
-    canonical_bytes(
-        &CanonicalFields {
-            seq: envelope.seq().value(),
-            event_id: envelope.event_id().as_str(),
-            kind: envelope.kind().as_str(),
-            occurred_at: envelope.occurred_at(),
-            narrowing: envelope.narrowing(),
-            schema_version: envelope.schema_version(),
-            payload: envelope.payload(),
-        },
-        org_id,
-    )
+    canonical_bytes(&CanonicalFields::from(envelope), org_id)
 }
 
 #[cfg(test)]
