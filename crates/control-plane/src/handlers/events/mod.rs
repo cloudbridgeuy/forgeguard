@@ -6,11 +6,14 @@
 //! `forgeguard.toml` — the same config-driven gate every other `cp-*`
 //! handler relies on, so no explicit authz code lives in this module.
 
+use std::sync::Arc;
+use std::time::Duration;
+
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use forgeguard_authz_core::Revision;
+use forgeguard_authz_core::{EventEnvelope, Revision};
 use forgeguard_core::OrgStatus;
 use serde::Deserialize;
 
@@ -18,6 +21,7 @@ use crate::handlers::min_revision::{
     check_min_revision, parse_min_revision, MinRevisionCheck, MIN_REVISION_HEADER,
 };
 use crate::handlers::AppState;
+use crate::principal_store::PrincipalEventStore;
 use crate::vp_client::VpClient;
 
 const REVISION_HEADER: &str = "x-fg-revision";
@@ -79,12 +83,45 @@ fn clamp_limit(requested: u16) -> usize {
     }
 }
 
+/// Tick interval for watch mode: one strongly-consistent `SEQ` read per tick
+/// per held request (D3 — ~10 RCU/s/consumer, priced in the spike).
+const WATCH_TICK: Duration = Duration::from_millis(200);
+/// Maximum hold before returning an empty page (D3: "up to ~1s").
+const WATCH_DEADLINE: Duration = Duration::from_secs(1);
+
+/// N8: hold an empty page, polling the log's revision every [`WATCH_TICK`]
+/// until it advances past `after` or [`WATCH_DEADLINE`] elapses. On advance,
+/// re-run the cursor query once and return that page; on deadline, return an
+/// empty page. An `after` cursor ahead of the log's head simply holds the
+/// full deadline — min-revision (`412`) is the mechanism for "client knows
+/// more than the server", not this loop.
+async fn watch_for_events(
+    principals: &Arc<dyn PrincipalEventStore>,
+    org_id: &str,
+    after: Revision,
+    limit: usize,
+) -> crate::error::Result<Vec<EventEnvelope>> {
+    let deadline = tokio::time::Instant::now() + WATCH_DEADLINE;
+    loop {
+        tokio::time::sleep(WATCH_TICK).await;
+        let current = principals.latest_revision(org_id).await?;
+        if current > after {
+            return principals.events_after(org_id, after, limit).await;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Ok(Vec::new());
+        }
+    }
+}
+
 /// `GET /api/v1/organizations/{org_id}/events`
 ///
 /// Flow:
-/// 1. `wait` present -> `400` (checked before any store I/O).
+/// 1. Parse `wait` and `X-Fg-Min-Revision`; malformed values -> `400`.
 /// 2. Org existence/Active-state check, mirroring the Task 7 handler.
-/// 3. Clamp `limit`, read the page + latest revision, respond.
+/// 3. Min-revision guard: behind -> `412` (before any wait).
+/// 4. Clamp `limit`, read the page; empty page + `wait=1` -> watch loop.
+/// 5. Read latest revision, respond.
 #[tracing::instrument(name = "list_events", skip_all, fields(org_id = %raw_org_id))]
 pub(crate) async fn list_events_handler<V: VpClient + 'static>(
     Path(raw_org_id): Path<String>,
@@ -102,7 +139,6 @@ pub(crate) async fn list_events_handler<V: VpClient + 'static>(
                 .into_response();
         }
     };
-    let _ = wait;
 
     let raw_min = request_headers
         .get(MIN_REVISION_HEADER)
@@ -172,6 +208,17 @@ pub(crate) async fn list_events_handler<V: VpClient + 'static>(
             tracing::error!(org_id = %raw_org_id, error = %e, "list_events: events_after failed");
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
+    };
+    let events = if events.is_empty() && wait == WaitMode::Watch {
+        match watch_for_events(principals, &raw_org_id, after, limit).await {
+            Ok(events) => events,
+            Err(e) => {
+                tracing::error!(org_id = %raw_org_id, error = %e, "list_events: watch failed");
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+        }
+    } else {
+        events
     };
     let revision = match principals.latest_revision(&raw_org_id).await {
         Ok(r) => r,

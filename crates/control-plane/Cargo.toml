@@ -61,6 +61,7 @@ xxhash-rust = { workspace = true }
 # `testing` feature exposes `InMemoryUserPoolClient::arm_*_once` for handler tests.
 forgeguard_authn = { workspace = true, features = ["testing"] }
 http-body-util = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
 toml = { workspace = true }
 tower = { workspace = true }
 

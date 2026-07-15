@@ -208,6 +208,88 @@ async fn unparseable_min_revision_returns_400() {
     assert_eq!(json["error"], "invalid X-Fg-Min-Revision header");
 }
 
+#[tokio::test(start_paused = true)]
+async fn watch_on_empty_page_holds_until_deadline_then_returns_empty() {
+    let app = test_app(build_test_store());
+    seed_three_events(&app).await;
+
+    let started = tokio::time::Instant::now();
+    let resp = get_events(&app, "after=3&wait=1").await;
+    let held = started.elapsed();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(
+        held >= std::time::Duration::from_secs(1),
+        "watch returned after {held:?}, before the 1s deadline"
+    );
+    let json = body_json(resp).await;
+    assert_eq!(json["events"].as_array().unwrap().len(), 0);
+    assert_eq!(json["next_after"], 3);
+    assert_eq!(json["revision"], 3);
+}
+
+#[tokio::test(start_paused = true)]
+async fn watch_returns_early_when_an_event_lands_mid_hold() {
+    let app = test_app(build_test_store());
+    seed_three_events(&app).await;
+
+    let writer_app = app.clone();
+    let writer = tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        put_principal(
+            &writer_app,
+            "usr_4",
+            serde_json::json!({ "role": "member" }),
+        )
+        .await;
+    });
+
+    let started = tokio::time::Instant::now();
+    let resp = get_events(&app, "after=3&wait=1").await;
+    let held = started.elapsed();
+    writer.await.unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(
+        held < std::time::Duration::from_secs(1),
+        "watch did not return early: held {held:?}"
+    );
+    let json = body_json(resp).await;
+    let seqs: Vec<u64> = json["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["seq"].as_u64().unwrap())
+        .collect();
+    assert_eq!(seqs, vec![4]);
+    assert_eq!(json["next_after"], 4);
+}
+
+#[tokio::test]
+async fn watch_with_available_events_returns_immediately() {
+    let app = test_app(build_test_store());
+    seed_three_events(&app).await;
+
+    let resp = get_events(&app, "after=0&wait=1").await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp).await;
+    assert_eq!(json["events"].as_array().unwrap().len(), 3);
+}
+
+#[tokio::test(start_paused = true)]
+async fn min_revision_behind_beats_wait() {
+    let app = test_app(build_test_store());
+    seed_three_events(&app).await;
+
+    let started = tokio::time::Instant::now();
+    let resp = get_events_with_headers(&app, "wait=1", &[("x-fg-min-revision", "9")]).await;
+    assert_eq!(resp.status(), StatusCode::PRECONDITION_FAILED);
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(200),
+        "412 must not wait for the watch deadline"
+    );
+}
+
 #[tokio::test]
 async fn missing_org_returns_404() {
     let app = test_app(build_test_store());
