@@ -7,7 +7,7 @@ mod kind;
 mod log;
 mod upsert;
 
-pub use canonical::canonical_event_bytes;
+pub use canonical::{canonical_envelope_bytes, canonical_event_bytes};
 pub use envelope::{Actor, EventDraft, EventDraftParams, EventEnvelope, EventId, SCHEMA_VERSION};
 pub use kind::EventKind;
 pub use log::EventLog;
