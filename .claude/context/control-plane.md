@@ -319,6 +319,7 @@ crates/control-plane/src/
     keys.rs           -- generate_key, list_keys, revoke_key handlers + tests
     principals/       -- upsert_principal handler (PUT .../principals/{native_id})
     events/           -- list_events_handler (GET .../events cursor replay + V2 consistency tokens)
+    promotions/       -- tombstone_promotion_handler (DELETE) + list_promotions_handler (GET .../promoted-resources)
     min_revision.rs   -- pure X-Fg-Min-Revision parse + fresh/behind guard (V2, N11)
   signing_key.rs      -- SigningKeyEntry, KeyStatus, Ed25519 key generation
   signing_key_store.rs -- DynamoSigningKeyStore (implements SigningKeyStore from authn-core)
@@ -449,8 +450,36 @@ New sparse item types (never populate `GSI1PK`/`GSI1SK` — see [infra-control-p
 | `seq_counter` | `ORG#{org_id}` | `SEQ` |
 | `event` | `ORG#{org_id}` | `EVT#{seq:020}` (zero-padded so lexicographic order matches numeric order) |
 | `principal` | `ORG#{org_id}` | `PRINCIPAL#{native_id}` |
+| `promotion` | `ORG#{org_id}` | `PROMO#{resource_type}#{native_id}` |
 
 `event_sk(seq)` computes the sort key; `EVT_SK_MAX` is a sentinel (`EVT#99999999999999999999`) used as the upper bound of a `BETWEEN` query so the counter item's bare `SK="SEQ"` (which lexicographically sorts after all `EVT#...` keys) never leaks into a replay page. The `after` cursor is `saturating_add(1)`'d before use — `after = u64::MAX` must floor to an empty page, not wrap to zero and return the entire history.
+
+## Promotion Lifecycle (V3 of the event-log spine, A7/D7)
+
+Idempotent tombstone + reconciliation endpoints for promoted resources, riding the same `TransactWriteItems` event-append spine as the principal-upsert flow. There is **no promotion-create HTTP API in this slice** — the `PrincipalEventStore::put_promotion` trait method exists and is exercised by tests, but nothing routes to it; promotions are seeded store-level only (e.g. a raw `put-item` against the `PROMO#{resource_type}#{native_id}` item shape above).
+
+### `DELETE /api/v1/organizations/{org_id}/promoted-resources/{resource_type}/{native_id}`
+
+1. `resource_type` and `native_id` must each parse (`Segment`/`NativeId`) — 422 otherwise.
+2. Org must exist and be `Active` (404 / 409, same gate as every other org-scoped handler).
+3. Strongly-consistent read of the promotion:
+   - Absent (never existed, or a concurrent delete already won the race) — `204 No Content` with the current revision in `X-Fg-Revision`, body empty. Nothing is appended — this is D7's idempotent no-op rule.
+   - Present — atomically (`TransactWriteItems`) appends a `resource.tombstoned` event and hard-deletes the `PROMO#...` state item. Responds `200` with `{"fgrn": "...", "revision": <u64>}` and `X-Fg-Revision`.
+4. The read-then-tombstone window is race-safe: the transactional delete is conditioned on `attribute_exists(pk)`, so a lost race still surfaces as the `204` no-op path rather than a spurious error.
+
+### `GET /api/v1/organizations/{org_id}/promoted-resources?type={t}&after={id}&limit={n}`
+
+Cursor-based reconciliation page over one org's promotions of a given `resource_type`, ascending by `native_id`.
+
+- `type` is required — missing is `400 {"error": "type query parameter is required"}`; invalid is `400 {"error": "invalid type"}`.
+- `after` is an optional exclusive-start `native_id` cursor; `limit` defaults to 100, clamped to 1000 (shares `clamp_limit`/`DEFAULT_LIMIT`/`MAX_LIMIT` with the events endpoint, hoisted into `handlers/mod.rs`).
+- `X-Fg-Min-Revision` guard (same semantics as the events endpoint, reusing `handlers/min_revision.rs`): `412 Precondition Failed` with `{"error": "revision_behind", "current_revision": <u64>, "min_revision": <u64>}` if the org's log is behind the requested revision.
+- Response: `{"promotions": [{"fgrn": "...", "native_id": "..."}, ...], "next_after": <string|null>, "revision": <u64>}` plus `X-Fg-Revision`. `next_after` is the last page entry's `native_id`, or `null` on an empty page.
+- Order of checks: parse query params → parse `X-Fg-Min-Revision` → org existence/Active check → min-revision guard → page query → respond.
+
+### Authorization
+
+`cp:resource:tombstone` and `cp:promotion:list` map to Cedar actions `cp-resource-tombstone` / `cp-promotion-list` (both `Some("org_id")`, tenant-scoped). RBAC: `cp-promotion-list` is read-tier (`member` role, beside `cp-events-read`); `cp-resource-tombstone` is write-tier (`admin` role, beside `cp-principal-upsert`). Both operators in the shaping doc are machines (app backend tombstones, SDK reconciler lists), so `forgeguard.toml` also carries `machine-resource-tombstone` / `machine-promotion-list` Cedar permits mirroring `machine-events-read`.
 
 ## V3 of #102 — Active-org VP materialization
 
