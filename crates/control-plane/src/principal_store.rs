@@ -156,10 +156,6 @@ pub(crate) trait PrincipalEventStore: Send + Sync {
 
     /// Strongly-consistent read of a promotion's FGRN, or `None` if no
     /// promotion is recorded for `resource_type`/`native_id`.
-    ///
-    /// Wired up by `handlers/promotions/mod.rs` in Task 4; until then plain
-    /// `cargo xtask lint` sees these four methods as dead code.
-    #[allow(dead_code)]
     async fn get_promotion(
         &self,
         org_id: &str,
@@ -184,7 +180,6 @@ pub(crate) trait PrincipalEventStore: Send + Sync {
     /// appended and the item deleted; `None` means the item was already gone
     /// at delete time (a concurrent delete won the race, or none ever
     /// existed) — nothing was appended (D7's idempotent no-op rule).
-    #[allow(dead_code)]
     async fn tombstone_promotion(
         &self,
         org_id: &str,
@@ -196,7 +191,6 @@ pub(crate) trait PrincipalEventStore: Send + Sync {
     /// Reconciliation page: promotions of `resource_type`, ascending by
     /// `native_id`, starting strictly after `after` (exclusive cursor), at
     /// most `limit` rows.
-    #[allow(dead_code)]
     async fn list_promotions(
         &self,
         org_id: &str,
@@ -590,10 +584,6 @@ pub(crate) struct InMemoryPrincipalEventStore {
     logs: Mutex<HashMap<String, std::sync::Arc<InMemoryEventLog>>>,
     signing_key: SigningKey,
     /// `(org_id, resource_type, native_id) -> fgrn`.
-    ///
-    /// Read/written only by trait methods still marked `#[allow(dead_code)]`
-    /// until Task 4 wires up handlers — same transitive-dead-code situation.
-    #[allow(dead_code)]
     promotions: Mutex<HashMap<(String, String, String), String>>,
 }
 

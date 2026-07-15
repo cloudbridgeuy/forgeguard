@@ -10,13 +10,13 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use forgeguard_authz_core::{decide_upsert, Actor, UpsertDecision};
+use forgeguard_authz_core::{decide_upsert, UpsertDecision};
 use forgeguard_axum::ForgeGuardIdentity;
-use forgeguard_core::{Fgrn, NativeId, Segment};
+use forgeguard_core::NativeId;
 
 use forgeguard_core::OrgStatus;
 
-use crate::handlers::AppState;
+use crate::handlers::{actor_for, AppState};
 use crate::vp_client::VpClient;
 
 const REVISION_HEADER: &str = "x-fg-revision";
@@ -109,23 +109,6 @@ pub(crate) async fn upsert_principal<V: VpClient + 'static>(
             respond(status, &payload, revision.value())
         }
     }
-}
-
-/// Derive the `Actor` recorded on the appended event from the resolved
-/// identity, falling back to `Actor::System` when there is no identity (dev
-/// mode) or either segment fails to parse (identity fields are already
-/// validated upstream, so this is not expected to trigger in practice).
-fn actor_for(org_id: &str, identity: Option<&forgeguard_authn_core::Identity>) -> Actor {
-    let Some(identity) = identity else {
-        return Actor::System;
-    };
-    let (Ok(segment), Ok(native_id)) = (
-        Segment::try_new(org_id),
-        NativeId::try_new(identity.user_id().as_str()),
-    ) else {
-        return Actor::System;
-    };
-    Actor::Principal(Fgrn::principal(&segment, &native_id))
 }
 
 fn respond(status: StatusCode, principal: &serde_json::Value, revision: u64) -> Response {

@@ -222,6 +222,11 @@ const API_ROUTES: &[(&str, &str)] = &[
         "/api/v1/organizations/{org_id}/principals/{native_id}",
     ),
     ("GET", "/api/v1/organizations/{org_id}/events"),
+    (
+        "DELETE",
+        "/api/v1/organizations/{org_id}/promoted-resources/{resource_type}/{native_id}",
+    ),
+    ("GET", "/api/v1/organizations/{org_id}/promoted-resources"),
 ];
 
 /// Route-to-action mappings for all control-plane API routes.
@@ -345,6 +350,18 @@ fn cp_route_actions() -> forgeguard_http::Result<Vec<RouteMapping>> {
             "GET",
             "/api/v1/organizations/{org_id}/events",
             "cp:events:read",
+            Some("org_id"),
+        ),
+        (
+            "DELETE",
+            "/api/v1/organizations/{org_id}/promoted-resources/{resource_type}/{native_id}",
+            "cp:resource:tombstone",
+            Some("org_id"),
+        ),
+        (
+            "GET",
+            "/api/v1/organizations/{org_id}/promoted-resources",
+            "cp:promotion:list",
             Some("org_id"),
         ),
     ];
@@ -539,6 +556,14 @@ fn build_router<V: VpClient + 'static>(state: AppState<V>, fg: Arc<ForgeGuard>) 
             "/api/v1/organizations/{org_id}/events",
             axum::routing::get(handlers::events::list_events_handler::<V>),
         )
+        .route(
+            "/api/v1/organizations/{org_id}/promoted-resources/{resource_type}/{native_id}",
+            axum::routing::delete(handlers::promotions::tombstone_promotion_handler::<V>),
+        )
+        .route(
+            "/api/v1/organizations/{org_id}/promoted-resources",
+            axum::routing::get(handlers::promotions::list_promotions_handler::<V>),
+        )
         .with_state(state)
         .layer(axum::middleware::from_fn_with_state(fg, forgeguard_layer))
         .layer(TraceLayer::new_for_http())
@@ -558,8 +583,8 @@ mod tests {
         let mappings = cp_route_actions().expect("cp_route_actions must not fail");
         assert_eq!(
             mappings.len(),
-            20,
-            "expected 20 route mappings, got {}",
+            22,
+            "expected 22 route mappings, got {}",
             mappings.len()
         );
         // Confirm each action string round-trips correctly through QualifiedAction
@@ -584,6 +609,8 @@ mod tests {
             "cp:user:create",
             "cp:principal:upsert",
             "cp:events:read",
+            "cp:resource:tombstone",
+            "cp:promotion:list",
         ];
         for (mapping, expected) in mappings.iter().zip(expected_actions.iter()) {
             assert_eq!(
@@ -679,6 +706,16 @@ mod tests {
                 "POST",
                 "/api/v1/organizations/org-123/users",
                 "cp:user:create",
+            ),
+            (
+                "DELETE",
+                "/api/v1/organizations/org-123/promoted-resources/document/doc-1",
+                "cp:resource:tombstone",
+            ),
+            (
+                "GET",
+                "/api/v1/organizations/org-123/promoted-resources",
+                "cp:promotion:list",
             ),
         ];
 

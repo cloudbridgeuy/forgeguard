@@ -20,13 +20,11 @@ use serde::Deserialize;
 use crate::handlers::min_revision::{
     check_min_revision, parse_min_revision, MinRevisionCheck, MIN_REVISION_HEADER,
 };
-use crate::handlers::AppState;
+use crate::handlers::{clamp_limit, AppState, DEFAULT_LIMIT};
 use crate::principal_store::PrincipalEventStore;
 use crate::vp_client::VpClient;
 
 const REVISION_HEADER: &str = "x-fg-revision";
-const DEFAULT_LIMIT: u16 = 100;
-const MAX_LIMIT: u16 = 1000;
 
 /// Query parameters accepted by `GET /organizations/{org_id}/events`.
 #[derive(Debug, Deserialize)]
@@ -61,25 +59,6 @@ pub(super) fn parse_wait(raw: Option<&str>) -> Result<WaitMode, InvalidWait> {
         None => Ok(WaitMode::Immediate),
         Some("1") => Ok(WaitMode::Watch),
         Some(_) => Err(InvalidWait),
-    }
-}
-
-/// Clamp a requested page size to [`MAX_LIMIT`], logging when the request
-/// exceeded it — "no silent caps": a client asking for more than we serve
-/// must be able to see that in the logs, not just get a smaller page back.
-fn clamp_limit(requested: u16) -> usize {
-    if requested > MAX_LIMIT {
-        tracing::warn!(
-            requested_limit = requested,
-            clamped_limit = MAX_LIMIT,
-            "events query limit clamped to maximum"
-        );
-        usize::from(MAX_LIMIT)
-    } else if requested == 0 {
-        tracing::warn!("events query limit of 0 floored to 1");
-        1
-    } else {
-        usize::from(requested)
     }
 }
 

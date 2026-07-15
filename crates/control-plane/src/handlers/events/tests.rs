@@ -308,17 +308,3 @@ async fn missing_org_returns_404() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
-
-#[test]
-fn clamp_limit_caps_above_maximum_and_passes_through_below() {
-    use super::clamp_limit;
-
-    assert_eq!(clamp_limit(50), 50);
-    assert_eq!(clamp_limit(1000), 1000);
-    // Above the 1000 ceiling: clamped, not silently truncated to something
-    // else and not rejected — this is a unit test on the pure clamp function
-    // rather than an end-to-end 1001-event push, since pushing >1000 events
-    // through the in-memory log in a handler test would be slow and add no
-    // additional coverage over exercising the clamp logic directly.
-    assert_eq!(clamp_limit(u16::MAX), 1000);
-}

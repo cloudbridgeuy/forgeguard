@@ -3,6 +3,7 @@ pub(crate) mod groups;
 mod keys;
 pub(crate) mod min_revision;
 pub(crate) mod principals;
+pub(crate) mod promotions;
 pub(crate) mod user_schema;
 pub(crate) mod users;
 
@@ -12,8 +13,9 @@ use axum::extract::{FromRef, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use forgeguard_authz_core::Actor;
 use forgeguard_axum::ForgeGuardIdentity;
-use forgeguard_core::{OrgStatus, Organization, OrganizationId};
+use forgeguard_core::{Fgrn, NativeId, OrgStatus, Organization, OrganizationId, Segment};
 use serde::{Deserialize, Serialize};
 
 use crate::config::OrgConfig;
@@ -21,6 +23,45 @@ use crate::etag::{self, Etag, IfNoneMatchResult, ResolvedIfMatch};
 use crate::principal_store::PrincipalEventStore;
 use crate::store::{OrgRecord, OrgStore, SagaTicketStore};
 use crate::user_pool::UserPoolClient;
+
+pub(super) const DEFAULT_LIMIT: u16 = 100;
+pub(super) const MAX_LIMIT: u16 = 1000;
+
+/// Derive the `Actor` recorded on an appended event from the resolved
+/// identity, falling back to `Actor::System` when there is no identity (dev
+/// mode) or either segment fails to parse (identity fields are already
+/// validated upstream, so this is not expected to trigger in practice).
+pub(super) fn actor_for(org_id: &str, identity: Option<&forgeguard_authn_core::Identity>) -> Actor {
+    let Some(identity) = identity else {
+        return Actor::System;
+    };
+    let (Ok(segment), Ok(native_id)) = (
+        Segment::try_new(org_id),
+        NativeId::try_new(identity.user_id().as_str()),
+    ) else {
+        return Actor::System;
+    };
+    Actor::Principal(Fgrn::principal(&segment, &native_id))
+}
+
+/// Clamp a requested page size to [`MAX_LIMIT`], logging when the request
+/// exceeded it — "no silent caps": a client asking for more than we serve
+/// must be able to see that in the logs, not just get a smaller page back.
+pub(super) fn clamp_limit(requested: u16) -> usize {
+    if requested > MAX_LIMIT {
+        tracing::warn!(
+            requested_limit = requested,
+            clamped_limit = MAX_LIMIT,
+            "query limit clamped to maximum"
+        );
+        usize::from(MAX_LIMIT)
+    } else if requested == 0 {
+        tracing::warn!("query limit of 0 floored to 1");
+        1
+    } else {
+        usize::from(requested)
+    }
+}
 
 /// Shared router state for the control-plane Axum app.
 ///
@@ -597,6 +638,16 @@ pub(super) mod test_support {
     }
 
     pub fn test_app_with_stub(store: Arc<dyn OrgStore>, vp: Arc<StubVpClient>) -> Router {
+        test_app_with_principals(store, vp).0
+    }
+
+    /// Like [`test_app_with_stub`], but also exposes the in-memory
+    /// [`PrincipalEventStore`] handle so promotion tests can seed state
+    /// directly (there is no promotion-create HTTP API in this slice).
+    pub fn test_app_with_principals(
+        store: Arc<dyn OrgStore>,
+        vp: Arc<StubVpClient>,
+    ) -> (Router, Arc<dyn PrincipalEventStore>) {
         let route_matcher = RouteMatcher::new(&[]).unwrap();
         let public_routes = vec![
             PublicRoute::new(
@@ -641,6 +692,7 @@ pub(super) mod test_support {
         let saga_tickets: Arc<dyn SagaTicketStore> = Arc::new(InMemorySagaTicketStore::new());
         let principals: Arc<dyn PrincipalEventStore> =
             Arc::new(crate::principal_store::InMemoryPrincipalEventStore::new());
+        let principals_handle = Arc::clone(&principals);
         let state = super::AppState {
             store,
             vp,
@@ -648,7 +700,7 @@ pub(super) mod test_support {
             saga_tickets,
             principals,
         };
-        Router::new()
+        let router = Router::new()
             .route(
                 "/api/v1/organizations",
                 axum::routing::post(super::create_handler).get(super::list_handler),
@@ -704,6 +756,16 @@ pub(super) mod test_support {
                 "/api/v1/organizations/{org_id}/events",
                 axum::routing::get(super::events::list_events_handler::<StubVpClient>),
             )
+            .route(
+                "/api/v1/organizations/{org_id}/promoted-resources/{resource_type}/{native_id}",
+                axum::routing::delete(
+                    super::promotions::tombstone_promotion_handler::<StubVpClient>,
+                ),
+            )
+            .route(
+                "/api/v1/organizations/{org_id}/promoted-resources",
+                axum::routing::get(super::promotions::list_promotions_handler::<StubVpClient>),
+            )
             .route("/metrics", axum::routing::get(super::metrics_handler))
             // Test-only probe route — never compiled into production binaries.
             // Allows tests to check `is_declared_group` via HTTP without
@@ -713,7 +775,8 @@ pub(super) mod test_support {
                 axum::routing::get(declared_group_handler),
             )
             .with_state(state)
-            .layer(axum::middleware::from_fn_with_state(fg, forgeguard_layer))
+            .layer(axum::middleware::from_fn_with_state(fg, forgeguard_layer));
+        (router, principals_handle)
     }
 
     pub async fn create_draft_org(
