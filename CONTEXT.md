@@ -54,7 +54,7 @@ The measured cedar-policy spike (seven conformance assertions S1–S5, toolchain
 | [xtask CP Dev Stack](./.claude/context/xtask-control-plane-dev.md) | `dev` subcommand: dynamodb-local container, AWS env wiring, and SSO prerequisite. |
 | [Request Signing](./.claude/context/request-signing.md) | Ed25519 signing: canonical payload, config, key rotation, and crate layout. |
 | [Demo App](./.claude/context/demo-app.md) | E2E demo: Python TODO app, native proxy, demo config, and running instructions. |
-| [Control Plane](./.claude/context/control-plane.md) | CP scaffold, proxy-config endpoint, OrgStore trait, auth, VP authorization, ETag, draft/configured lifecycle, and testing. |
+| [Control Plane](./.claude/context/control-plane.md) | CP scaffold, proxy-config endpoint, OrgStore trait, auth, VP authorization, ETag, draft/configured lifecycle, event append spine, promotion lifecycle (tombstone + reconciliation), and testing. |
 | [Groups V3](./.claude/context/groups-v3.md) | Active-org VP materialization: `vp_client` module, `OrgWriteContext`/`VpStage` ADTs, F3/F3'/F4 failure-mode taxonomy, rollback metric, and test scaffolding. |
 | [Optimistic Locking](./.claude/context/optimistic-locking.md) | `If-Match` / `412` semantics for organization updates, ETags, conditional GETs, and metrics. |
 | [Infra: Control Plane](./.claude/context/infra-control-plane.md) | CDK project, 1Password integration, DynamoDB Global Table, and xtask infra commands. |
@@ -83,4 +83,5 @@ If a local-only plan or design becomes durable agentic context, move the context
 | **Proxy (local — connected)** | Single-organization proxy binary in connected mode. Fetches routes, flags, and upstream config from the control plane. Organization provides local AWS resource IDs (Cognito pool, VP store) at startup. The control plane syncs Cedar policies to the org's VP store. |
 | **Proxy (SaaS)** | Multi-organization proxy binary operated by ForgeGuard. Resolves organization from request, lazy-loads per-org config via L1 in-memory cache, L2 CloudFront/S3 (SaaS) or authenticated Lambda API (BYOC). |
 | **Worker** | Background Lambda binary (`forgeguard_worker`). Dispatches jobs by `FORGEGUARD_WORKER_JOB` env var. Currently: `reconciler` (sync pending DynamoDB records to S3). |
+| **Promotion** | A control-plane record that an external resource (identified by an FGRN) has been promoted into an org's authorization graph. Store-level only — no create HTTP API; lifecycle managed via `DELETE .../promoted-resources/{resource_type}/{native_id}` (idempotent tombstone) and `GET .../promoted-resources` (reconciliation list). See [Control Plane](./.claude/context/control-plane.md). |
 
