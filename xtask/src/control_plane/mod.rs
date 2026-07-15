@@ -14,6 +14,8 @@ mod seed;
 pub(crate) mod seed_core;
 mod test;
 mod token;
+mod verify_events;
+pub(crate) mod verify_events_core;
 
 use clap::{Args, Subcommand};
 use color_eyre::eyre::Result;
@@ -42,6 +44,8 @@ enum ControlPlaneCommands {
     Test(test::TestArgs),
     /// Retrieve a JWT for a seeded test user via Cognito AdminInitiateAuth
     Token(token::TokenArgs),
+    /// Externally verify an org's event log signatures via the public HTTP API
+    VerifyEvents(verify_events::VerifyEventsArgs),
 }
 
 pub async fn run(args: &ControlPlaneArgs) -> Result<()> {
@@ -54,5 +58,6 @@ pub async fn run(args: &ControlPlaneArgs) -> Result<()> {
         ControlPlaneCommands::Seed(a) => seed::run(a).await,
         ControlPlaneCommands::Test(a) => test::run(a).await,
         ControlPlaneCommands::Token(a) => token::run(a).await,
+        ControlPlaneCommands::VerifyEvents(a) => verify_events::run(a).await,
     }
 }
