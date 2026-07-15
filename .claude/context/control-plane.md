@@ -481,6 +481,22 @@ Cursor-based reconciliation page over one org's promotions of a given `resource_
 
 `cp:resource:tombstone` and `cp:promotion:list` map to Cedar actions `cp-resource-tombstone` / `cp-promotion-list` (both `Some("org_id")`, tenant-scoped). RBAC: `cp-promotion-list` is read-tier (`member` role, beside `cp-events-read`); `cp-resource-tombstone` is write-tier (`admin` role, beside `cp-principal-upsert`). Both operators in the shaping doc are machines (app backend tombstones, SDK reconciler lists), so `forgeguard.toml` also carries `machine-resource-tombstone` / `machine-promotion-list` Cedar permits mirroring `machine-events-read`.
 
+## Trust (V4 of the event-log spine, D8/N10)
+
+External verification of the event log: any consumer can recompute an envelope's canonical bytes and Ed25519-verify its signature using only the org's published public key — no store access, no private keys.
+
+### `GET /api/v1/organizations/{org_id}/signing-keys`
+
+Serves the org's event-signing public key(s), for external envelope verification. `200` with `{"keys": [{"key_id", "public_key"}]}` (empty list if no model event has ever been appended for that org); `404` unknown/deleted org; `409` non-`Active` org — same gate as every other org-scoped handler. No revision header — keys are not event-log state. This is distinct from `GET /organizations/{org_id}/keys` (`handlers/keys.rs`), which serves the org-plane's request-signing key list (verification-only, for incoming BYOC proxy requests); the signing-keys endpoint instead derives and serves the public half of the event-signing private key (`SK = EVENT_SIGNING_KEY`) described above. `PrincipalEventStore::list_signing_keys` (both the Dynamo and in-memory impls) derives the public PEM from the stored private key material — no separate public-key item is persisted.
+
+`canonical_envelope_bytes(envelope, org_id)` (`forgeguard_authz_core::event`) reconstructs the exact same canonical byte string that `canonical_event_bytes(draft, org_id)` produces at append time, but from an `EventEnvelope` read back from storage or over HTTP — this byte-identity is what makes external, store-independent verification possible.
+
+`cargo xtask control-plane verify-events --org-id <org> [--url <base>] [--after <n>] [--limit <n>]` externally verifies an org's event log purely over the public HTTP API: fetches `GET .../events` and `GET .../signing-keys`, recomputes canonical bytes, and Ed25519-verifies each envelope's signature, printing a per-event `seq=... kind=... key_id=... OK|FAIL (...)` line and exiting non-zero if any envelope fails.
+
+### Authorization
+
+`cp:signing-key:read` maps to the Cedar action `cp-signing-key-read` (`Some("org_id")`, tenant-scoped), read-tier (`member` role, beside `cp-promotion-list`). `forgeguard.toml` carries a `machine-signing-key-read` permit mirroring `machine-promotion-list`, since SDK consumers verifying envelopes are machines. **Not yet synced to the prod VP policy store** — `cargo xtask control-plane cedar sync` is a deployment step outside this slice.
+
 ## V3 of #102 — Active-org VP materialization
 
 V3 replaces the V2 `todo!("V3")` Active branch with a real DDB + Verified Permissions write pipeline (pure pre-flight → DDB write → parent VP push → alphabetical fanout) under `crates/control-plane/src/{vp_client,handlers/groups}/`. Failure-mode taxonomy (F3 / F3' / F4), rollback metric, test scaffolding, and Risk #5 boundary live in [groups-v3.md](./groups-v3.md). The Active path runs end-to-end against `StubVpClient` today; no production org is Active until the saga (V4) ships.
