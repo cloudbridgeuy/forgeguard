@@ -43,8 +43,9 @@ pub(crate) struct StatePut {
 /// hard-deletes the promotion item in the same transaction as the
 /// `resource.tombstoned` event).
 ///
-/// Wired up by `principal_store.rs` in Task 3; `#[allow(dead_code)]` until
-/// then since the `dynamodb-tests` feature is off in plain `cargo xtask lint`.
+/// Wired up by `handlers/promotions/mod.rs` in Task 4; until then transitively
+/// dead (its only caller, `PrincipalEventStore::tombstone_promotion`, is
+/// itself unreachable from any handler yet).
 #[allow(dead_code)]
 pub(crate) struct StateDelete {
     pub(crate) pk: String,
@@ -186,6 +187,42 @@ impl DynamoEventLog {
         }
     }
 
+    /// Build the counter's conditional `Update` item: CAS from `current` to
+    /// `current + 1` (or "must not exist yet" when `current == 0`). Shared by
+    /// [`Self::append`] and [`Self::append_with_delete`] — both transactions
+    /// open with the identical counter-increment item.
+    fn counter_update(&self, current: u64, candidate: u64) -> Result<Update> {
+        let mut counter_update = Update::builder()
+            .table_name(&self.table_name)
+            .key(pk(), AttributeValue::S(self.org_pk.clone()))
+            .key(sk(), AttributeValue::S(SK_SEQ.to_string()))
+            .update_expression("SET seq = :new")
+            .expression_attribute_values(":new", AttributeValue::N(candidate.to_string()));
+        counter_update = if current == 0 {
+            counter_update.condition_expression("attribute_not_exists(seq)")
+        } else {
+            counter_update
+                .condition_expression("seq = :expected")
+                .expression_attribute_values(":expected", AttributeValue::N(current.to_string()))
+        };
+        counter_update
+            .build()
+            .map_err(|e| Error::Store(format!("build counter update: {e}")))
+    }
+
+    /// Build the event's conditional `Put` item: fails if the sort key is
+    /// already occupied (a duplicate seq must never land silently). Shared by
+    /// [`Self::append`] and [`Self::append_with_delete`].
+    fn event_put(&self, envelope: &EventEnvelope, payload_bytes: &[u8]) -> Result<Put> {
+        let event_attrs = event_item(&self.org_pk, envelope, payload_bytes)?;
+        Put::builder()
+            .table_name(&self.table_name)
+            .set_item(Some(event_attrs))
+            .condition_expression(format!("attribute_not_exists({})", sk()))
+            .build()
+            .map_err(|e| Error::Store(format!("build event put: {e}")))
+    }
+
     /// The A1 transaction: conditional counter increment + event put + state put.
     ///
     /// Retries up to [`MAX_APPEND_ATTEMPTS`] times on `TransactionCanceledException`,
@@ -203,33 +240,8 @@ impl DynamoEventLog {
             let revision = Revision::new(candidate);
             let (envelope, payload_bytes) = build(revision);
 
-            let mut counter_update = Update::builder()
-                .table_name(&self.table_name)
-                .key(pk(), AttributeValue::S(self.org_pk.clone()))
-                .key(sk(), AttributeValue::S(SK_SEQ.to_string()))
-                .update_expression("SET seq = :new")
-                .expression_attribute_values(":new", AttributeValue::N(candidate.to_string()));
-            counter_update = if current == 0 {
-                counter_update.condition_expression("attribute_not_exists(seq)")
-            } else {
-                counter_update
-                    .condition_expression("seq = :expected")
-                    .expression_attribute_values(
-                        ":expected",
-                        AttributeValue::N(current.to_string()),
-                    )
-            };
-            let counter_update = counter_update
-                .build()
-                .map_err(|e| Error::Store(format!("build counter update: {e}")))?;
-
-            let event_attrs = event_item(&self.org_pk, &envelope, &payload_bytes)?;
-            let event_put = Put::builder()
-                .table_name(&self.table_name)
-                .set_item(Some(event_attrs))
-                .condition_expression(format!("attribute_not_exists({})", sk()))
-                .build()
-                .map_err(|e| Error::Store(format!("build event put: {e}")))?;
+            let counter_update = self.counter_update(current, candidate)?;
+            let event_put = self.event_put(&envelope, &payload_bytes)?;
 
             let mut state_attrs = state.attributes.clone();
             state_attrs.insert(pk().to_string(), AttributeValue::S(state.pk.clone()));
@@ -288,6 +300,9 @@ impl DynamoEventLog {
     /// (its `attribute_exists` condition failed) — a concurrent delete won
     /// the race, so nothing is appended and the caller must not retry into a
     /// duplicate event.
+    ///
+    /// Wired up by `handlers/promotions/mod.rs` in Task 4; until then
+    /// transitively dead via `PrincipalEventStore::tombstone_promotion`.
     #[allow(dead_code)]
     pub(crate) async fn append_with_delete(
         &self,
@@ -300,33 +315,8 @@ impl DynamoEventLog {
             let revision = Revision::new(candidate);
             let (envelope, payload_bytes) = build(revision);
 
-            let mut counter_update = Update::builder()
-                .table_name(&self.table_name)
-                .key(pk(), AttributeValue::S(self.org_pk.clone()))
-                .key(sk(), AttributeValue::S(SK_SEQ.to_string()))
-                .update_expression("SET seq = :new")
-                .expression_attribute_values(":new", AttributeValue::N(candidate.to_string()));
-            counter_update = if current == 0 {
-                counter_update.condition_expression("attribute_not_exists(seq)")
-            } else {
-                counter_update
-                    .condition_expression("seq = :expected")
-                    .expression_attribute_values(
-                        ":expected",
-                        AttributeValue::N(current.to_string()),
-                    )
-            };
-            let counter_update = counter_update
-                .build()
-                .map_err(|e| Error::Store(format!("build counter update: {e}")))?;
-
-            let event_attrs = event_item(&self.org_pk, &envelope, &payload_bytes)?;
-            let event_put = Put::builder()
-                .table_name(&self.table_name)
-                .set_item(Some(event_attrs))
-                .condition_expression(format!("attribute_not_exists({})", sk()))
-                .build()
-                .map_err(|e| Error::Store(format!("build event put: {e}")))?;
+            let counter_update = self.counter_update(current, candidate)?;
+            let event_put = self.event_put(&envelope, &payload_bytes)?;
 
             let state_delete = Delete::builder()
                 .table_name(&self.table_name)

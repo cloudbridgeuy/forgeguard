@@ -3,8 +3,9 @@
 //! (the transactional tombstone, the reconciliation Query) lives on the
 //! `PrincipalEventStore` implementations in `principal_store.rs`.
 //!
-//! Wired up by `principal_store.rs` in Task 3; until then clippy sees this
-//! module as dead code from the crate's perspective.
+//! Wired up by `handlers/promotions/mod.rs` in Task 4; until then plain
+//! `cargo xtask lint` sees this module as dead code from the crate's
+//! perspective.
 #![allow(dead_code)]
 
 use std::collections::HashMap;

@@ -18,9 +18,15 @@ use forgeguard_authz_core::{
 };
 use forgeguard_core::NativeId;
 
+use forgeguard_core::Segment;
+
 use crate::dynamo_store::{get_s, map_sdk_error, pk, sk, ORG_PREFIX};
 use crate::error::{Error, Result};
-use crate::event_log::{DynamoEventLog, StatePut};
+use crate::event_log::{DynamoEventLog, StateDelete, StatePut};
+use crate::promotion_store::{
+    promotion_event_payload, promotion_fgrn, promotion_sk, promotion_state_put, PromotionEntry,
+    PromotionStatePutParams, PROMO_PREFIX,
+};
 
 const PRINCIPAL_PREFIX: &str = "PRINCIPAL#";
 const SK_EVENT_SIGNING_KEY: &str = "EVENT_SIGNING_KEY";
@@ -105,6 +111,13 @@ pub(crate) async fn get_principal(
 /// generic over `Arc<dyn PrincipalEventStore>` — the same object-safe seam
 /// `OrgStore`/`SagaTicketStore` already establish — so `InMemoryPrincipalEventStore`
 /// can stand in for the DynamoDB implementation in handler tests.
+///
+/// V3 (#110) additionally hangs the promotion lifecycle (`get_promotion`,
+/// `put_promotion`, `tombstone_promotion`, `list_promotions`) off this same
+/// seam — it already owns the per-org signing key + event log this side of
+/// the boundary needs, and standing up a second trait just to avoid the name
+/// mismatch isn't worth the duplication. The rename to a model-wide name is
+/// deferred to #113, when the handler surface churns anyway.
 #[async_trait]
 pub(crate) trait PrincipalEventStore: Send + Sync {
     /// Strongly-consistent read of a principal's current payload.
@@ -140,16 +153,68 @@ pub(crate) trait PrincipalEventStore: Send + Sync {
         after: Revision,
         limit: usize,
     ) -> Result<Vec<EventEnvelope>>;
+
+    /// Strongly-consistent read of a promotion's FGRN, or `None` if no
+    /// promotion is recorded for `resource_type`/`native_id`.
+    ///
+    /// Wired up by `handlers/promotions/mod.rs` in Task 4; until then plain
+    /// `cargo xtask lint` sees these four methods as dead code.
+    #[allow(dead_code)]
+    async fn get_promotion(
+        &self,
+        org_id: &str,
+        resource_type: &Segment,
+        native_id: &NativeId,
+    ) -> Result<Option<String>>;
+
+    /// Store-level seed/apply: mint + sign a `resource.promoted` event and
+    /// write the promotion state item transactionally. No HTTP route calls
+    /// this in #110 — seeding is store-level only (tests + future flows).
+    #[allow(dead_code)]
+    async fn put_promotion(
+        &self,
+        org_id: &str,
+        resource_type: &Segment,
+        native_id: &NativeId,
+        actor: Actor,
+    ) -> Result<Revision>;
+
+    /// Tombstone a promotion: append `resource.tombstoned` + hard-delete the
+    /// state item in one transaction. `Some(rev)` means the event was
+    /// appended and the item deleted; `None` means the item was already gone
+    /// at delete time (a concurrent delete won the race, or none ever
+    /// existed) — nothing was appended (D7's idempotent no-op rule).
+    #[allow(dead_code)]
+    async fn tombstone_promotion(
+        &self,
+        org_id: &str,
+        resource_type: &Segment,
+        native_id: &NativeId,
+        actor: Actor,
+    ) -> Result<Option<Revision>>;
+
+    /// Reconciliation page: promotions of `resource_type`, ascending by
+    /// `native_id`, starting strictly after `after` (exclusive cursor), at
+    /// most `limit` rows.
+    #[allow(dead_code)]
+    async fn list_promotions(
+        &self,
+        org_id: &str,
+        resource_type: &Segment,
+        after: Option<&NativeId>,
+        limit: usize,
+    ) -> Result<Vec<PromotionEntry>>;
 }
 
-/// Parameters for [`build_principal_event`].
+/// Parameters for [`build_model_event`].
 ///
 /// `native_id` isn't threaded into the signed bytes — the event envelope
-/// carries no subject field of its own, since the principal's identity is
-/// already implicit in the `StatePut` key it lands alongside — so this struct
-/// carries no `native_id` field at all.
-struct BuildPrincipalEventParams<'a> {
+/// carries no subject field of its own, since the subject's identity is
+/// already implicit in the `StatePut`/`StateDelete` key it lands alongside —
+/// so this struct carries no `native_id` field at all.
+struct BuildModelEventParams<'a> {
     org_id: &'a str,
+    kind: EventKind,
     actor: Actor,
     payload: serde_json::Value,
     signing_key: &'a SigningKey,
@@ -158,13 +223,15 @@ struct BuildPrincipalEventParams<'a> {
     revision: Revision,
 }
 
-/// Build the signed `EventEnvelope` + canonical payload bytes for a principal
-/// upsert at `revision`, given an already-loaded signing key.
-fn build_principal_event(
-    params: BuildPrincipalEventParams<'_>,
+/// Build the signed `EventEnvelope` + canonical payload bytes for a model
+/// event (principal upsert, resource promotion, resource tombstone, ...) at
+/// `revision`, given an already-loaded signing key.
+fn build_model_event(
+    params: BuildModelEventParams<'_>,
 ) -> (forgeguard_authz_core::EventEnvelope, Vec<u8>) {
-    let BuildPrincipalEventParams {
+    let BuildModelEventParams {
         org_id,
+        kind,
         actor,
         payload,
         signing_key,
@@ -178,7 +245,7 @@ fn build_principal_event(
     let draft = EventDraft::new(EventDraftParams {
         event_id,
         seq: revision,
-        kind: EventKind::PrincipalUpserted,
+        kind,
         occurred_at: occurred_at.to_string(),
         actor,
         payload: payload.clone(),
@@ -324,8 +391,9 @@ impl PrincipalEventStore for DynamoPrincipalEventStore {
         let org_id_owned = org_id.to_string();
         let payload_for_state = payload.clone();
         let build = move |revision: Revision| {
-            build_principal_event(BuildPrincipalEventParams {
+            build_model_event(BuildModelEventParams {
                 org_id: &org_id_owned,
+                kind: EventKind::PrincipalUpserted,
                 actor: actor.clone(),
                 payload: payload_for_state.clone(),
                 signing_key: &signing_key,
@@ -357,6 +425,152 @@ impl PrincipalEventStore for DynamoPrincipalEventStore {
             .await
             .map_err(|e| Error::Store(e.to_string()))
     }
+
+    async fn get_promotion(
+        &self,
+        org_id: &str,
+        resource_type: &Segment,
+        native_id: &NativeId,
+    ) -> Result<Option<String>> {
+        let result = self
+            .client
+            .get_item()
+            .table_name(&self.table_name)
+            .key(pk(), AttributeValue::S(format!("{ORG_PREFIX}{org_id}")))
+            .key(
+                sk(),
+                AttributeValue::S(promotion_sk(resource_type, native_id)),
+            )
+            .consistent_read(true)
+            .send()
+            .await
+            .map_err(map_sdk_error)?;
+
+        let Some(item) = result.item else {
+            return Ok(None);
+        };
+        get_s(&item, "fgrn").map(Some)
+    }
+
+    async fn put_promotion(
+        &self,
+        org_id: &str,
+        resource_type: &Segment,
+        native_id: &NativeId,
+        actor: Actor,
+    ) -> Result<Revision> {
+        let (signing_key, key_id) = self.ensure_signing_key(org_id).await?;
+        let occurred_at = chrono::Utc::now().to_rfc3339();
+        let log = DynamoEventLog::new(self.client.clone(), self.table_name.clone(), org_id);
+
+        let fgrn = promotion_fgrn(org_id, resource_type, native_id)?;
+        let payload = promotion_event_payload(&fgrn, resource_type, native_id);
+        let state = promotion_state_put(PromotionStatePutParams {
+            org_id,
+            resource_type,
+            native_id,
+            fgrn: &fgrn,
+            promoted_at: &occurred_at,
+        });
+
+        let org_id_owned = org_id.to_string();
+        let payload_for_event = payload.clone();
+        let build = move |revision: Revision| {
+            build_model_event(BuildModelEventParams {
+                org_id: &org_id_owned,
+                kind: EventKind::ResourcePromoted,
+                actor: actor.clone(),
+                payload: payload_for_event.clone(),
+                signing_key: &signing_key,
+                key_id: &key_id,
+                occurred_at: &occurred_at,
+                revision,
+            })
+        };
+
+        log.append(build, state).await
+    }
+
+    async fn tombstone_promotion(
+        &self,
+        org_id: &str,
+        resource_type: &Segment,
+        native_id: &NativeId,
+        actor: Actor,
+    ) -> Result<Option<Revision>> {
+        let (signing_key, key_id) = self.ensure_signing_key(org_id).await?;
+        let occurred_at = chrono::Utc::now().to_rfc3339();
+        let log = DynamoEventLog::new(self.client.clone(), self.table_name.clone(), org_id);
+
+        let fgrn = promotion_fgrn(org_id, resource_type, native_id)?;
+        let payload = promotion_event_payload(&fgrn, resource_type, native_id);
+        let org_id_owned = org_id.to_string();
+        let payload_for_event = payload.clone();
+        let build = move |revision: Revision| {
+            build_model_event(BuildModelEventParams {
+                org_id: &org_id_owned,
+                kind: EventKind::ResourceTombstoned,
+                actor: actor.clone(),
+                payload: payload_for_event.clone(),
+                signing_key: &signing_key,
+                key_id: &key_id,
+                occurred_at: &occurred_at,
+                revision,
+            })
+        };
+
+        let state = StateDelete {
+            pk: format!("{ORG_PREFIX}{org_id}"),
+            sk: promotion_sk(resource_type, native_id),
+        };
+
+        log.append_with_delete(build, state).await
+    }
+
+    async fn list_promotions(
+        &self,
+        org_id: &str,
+        resource_type: &Segment,
+        after: Option<&NativeId>,
+        limit: usize,
+    ) -> Result<Vec<PromotionEntry>> {
+        let type_prefix = format!("{PROMO_PREFIX}{resource_type}#");
+        let mut query = self
+            .client
+            .query()
+            .table_name(&self.table_name)
+            .key_condition_expression("#pk = :pk AND begins_with(#sk, :prefix)")
+            .expression_attribute_names("#pk", pk())
+            .expression_attribute_names("#sk", sk())
+            .expression_attribute_values(":pk", AttributeValue::S(format!("{ORG_PREFIX}{org_id}")))
+            .expression_attribute_values(":prefix", AttributeValue::S(type_prefix.clone()))
+            .limit(i32::try_from(limit).unwrap_or(i32::MAX));
+        if let Some(after) = after {
+            let mut start = HashMap::new();
+            start.insert(
+                pk().to_string(),
+                AttributeValue::S(format!("{ORG_PREFIX}{org_id}")),
+            );
+            start.insert(
+                sk().to_string(),
+                AttributeValue::S(format!("{type_prefix}{after}")),
+            );
+            query = query.set_exclusive_start_key(Some(start));
+        }
+
+        let result = query.send().await.map_err(map_sdk_error)?;
+        result
+            .items
+            .unwrap_or_default()
+            .iter()
+            .map(|item| {
+                Ok(PromotionEntry {
+                    fgrn: get_s(item, "fgrn")?,
+                    native_id: get_s(item, "native_id")?,
+                })
+            })
+            .collect()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -375,6 +589,12 @@ pub(crate) struct InMemoryPrincipalEventStore {
     /// (`std::sync::MutexGuard` isn't `Send`, and this trait's futures must be).
     logs: Mutex<HashMap<String, std::sync::Arc<InMemoryEventLog>>>,
     signing_key: SigningKey,
+    /// `(org_id, resource_type, native_id) -> fgrn`.
+    ///
+    /// Read/written only by trait methods still marked `#[allow(dead_code)]`
+    /// until Task 4 wires up handlers — same transitive-dead-code situation.
+    #[allow(dead_code)]
+    promotions: Mutex<HashMap<(String, String, String), String>>,
 }
 
 impl InMemoryPrincipalEventStore {
@@ -383,6 +603,7 @@ impl InMemoryPrincipalEventStore {
             principals: Mutex::new(HashMap::new()),
             logs: Mutex::new(HashMap::new()),
             signing_key: SigningKey::from_bytes(&[7u8; 32]),
+            promotions: Mutex::new(HashMap::new()),
         }
     }
 
@@ -395,6 +616,38 @@ impl InMemoryPrincipalEventStore {
             logs.entry(org_id.to_string())
                 .or_insert_with(|| std::sync::Arc::new(InMemoryEventLog::new())),
         ))
+    }
+
+    /// Shared by `upsert_changed`/`put_promotion`/`tombstone_promotion`: mint
+    /// the next revision off `org_id`'s log, build+sign the envelope, and
+    /// push it. Callers still own their own state-map bookkeeping (principal
+    /// payload vs. promotion fgrn), so this only factors out the identical
+    /// "next revision + sign + push" sequence.
+    async fn mint_and_push(
+        &self,
+        org_id: &str,
+        kind: EventKind,
+        actor: Actor,
+        payload: serde_json::Value,
+    ) -> Result<Revision> {
+        let log = self.log_for(org_id)?;
+        let current = EventLog::latest_revision(log.as_ref())
+            .await
+            .map_err(|e| Error::Store(e.to_string()))?;
+        let revision = current.next();
+        let occurred_at = chrono::Utc::now().to_rfc3339();
+        let (envelope, _payload_bytes) = build_model_event(BuildModelEventParams {
+            org_id,
+            kind,
+            actor,
+            payload,
+            signing_key: &self.signing_key,
+            key_id: "in-memory-test-key",
+            occurred_at: &occurred_at,
+            revision,
+        });
+        log.push(envelope);
+        Ok(revision)
     }
 }
 
@@ -432,22 +685,9 @@ impl PrincipalEventStore for InMemoryPrincipalEventStore {
         actor: Actor,
         payload: serde_json::Value,
     ) -> Result<Revision> {
-        let log = self.log_for(org_id)?;
-        let current = EventLog::latest_revision(log.as_ref())
-            .await
-            .map_err(|e| Error::Store(e.to_string()))?;
-        let revision = current.next();
-        let occurred_at = chrono::Utc::now().to_rfc3339();
-        let (envelope, _payload_bytes) = build_principal_event(BuildPrincipalEventParams {
-            org_id,
-            actor,
-            payload: payload.clone(),
-            signing_key: &self.signing_key,
-            key_id: "in-memory-test-key",
-            occurred_at: &occurred_at,
-            revision,
-        });
-        log.push(envelope);
+        let revision = self
+            .mint_and_push(org_id, EventKind::PrincipalUpserted, actor, payload.clone())
+            .await?;
 
         let mut guard = self
             .principals
@@ -468,145 +708,129 @@ impl PrincipalEventStore for InMemoryPrincipalEventStore {
             .await
             .map_err(|e| Error::Store(e.to_string()))
     }
+
+    async fn get_promotion(
+        &self,
+        org_id: &str,
+        resource_type: &Segment,
+        native_id: &NativeId,
+    ) -> Result<Option<String>> {
+        let guard = self
+            .promotions
+            .lock()
+            .map_err(|e| Error::Store(format!("in-memory promotion store lock poisoned: {e}")))?;
+        Ok(guard
+            .get(&(
+                org_id.to_string(),
+                resource_type.to_string(),
+                native_id.to_string(),
+            ))
+            .cloned())
+    }
+
+    async fn put_promotion(
+        &self,
+        org_id: &str,
+        resource_type: &Segment,
+        native_id: &NativeId,
+        actor: Actor,
+    ) -> Result<Revision> {
+        let fgrn = promotion_fgrn(org_id, resource_type, native_id)?;
+        let payload = promotion_event_payload(&fgrn, resource_type, native_id);
+        let revision = self
+            .mint_and_push(org_id, EventKind::ResourcePromoted, actor, payload)
+            .await?;
+
+        let mut guard = self
+            .promotions
+            .lock()
+            .map_err(|e| Error::Store(format!("in-memory promotion store lock poisoned: {e}")))?;
+        guard.insert(
+            (
+                org_id.to_string(),
+                resource_type.to_string(),
+                native_id.to_string(),
+            ),
+            fgrn.to_string(),
+        );
+        Ok(revision)
+    }
+
+    async fn tombstone_promotion(
+        &self,
+        org_id: &str,
+        resource_type: &Segment,
+        native_id: &NativeId,
+        actor: Actor,
+    ) -> Result<Option<Revision>> {
+        let key = (
+            org_id.to_string(),
+            resource_type.to_string(),
+            native_id.to_string(),
+        );
+        // Peek-then-append-then-remove (not atomic — acceptable for a test
+        // double, but unlike the DynamoDB impl a concurrent tombstone could
+        // both observe "present" and both append; real races are exercised
+        // only against DynamoDB Local, Task 2/3 integration tests). The
+        // removal happens last so a `mint_and_push` failure (e.g. a poisoned
+        // log lock) never leaves the promotion deleted without its event.
+        let stored = {
+            let guard = self.promotions.lock().map_err(|e| {
+                Error::Store(format!("in-memory promotion store lock poisoned: {e}"))
+            })?;
+            guard.get(&key).cloned()
+        };
+        let Some(fgrn) = stored else {
+            return Ok(None);
+        };
+
+        let fgrn: forgeguard_core::Fgrn = fgrn
+            .parse()
+            .map_err(|e| Error::Store(format!("stored promotion fgrn invalid: {e}")))?;
+        let payload = promotion_event_payload(&fgrn, resource_type, native_id);
+        let revision = self
+            .mint_and_push(org_id, EventKind::ResourceTombstoned, actor, payload)
+            .await?;
+
+        let mut guard = self
+            .promotions
+            .lock()
+            .map_err(|e| Error::Store(format!("in-memory promotion store lock poisoned: {e}")))?;
+        guard.remove(&key);
+        Ok(Some(revision))
+    }
+
+    async fn list_promotions(
+        &self,
+        org_id: &str,
+        resource_type: &Segment,
+        after: Option<&NativeId>,
+        limit: usize,
+    ) -> Result<Vec<PromotionEntry>> {
+        let guard = self
+            .promotions
+            .lock()
+            .map_err(|e| Error::Store(format!("in-memory promotion store lock poisoned: {e}")))?;
+        let mut entries: Vec<PromotionEntry> = guard
+            .iter()
+            .filter(|((o, t, _), _)| o == org_id && t == resource_type.as_str())
+            .map(|((_, _, native_id), fgrn)| PromotionEntry {
+                fgrn: fgrn.clone(),
+                native_id: native_id.clone(),
+            })
+            .collect();
+        entries.sort_by(|a, b| a.native_id.cmp(&b.native_id));
+        if let Some(after) = after {
+            entries.retain(|e| e.native_id.as_str() > after.as_str());
+        }
+        entries.truncate(limit);
+        Ok(entries)
+    }
 }
 
 #[cfg(test)]
+mod in_memory_tests;
+
+#[cfg(test)]
 #[cfg(feature = "dynamodb-tests")]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
-mod tests {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    use aws_sdk_dynamodb::types::{
-        AttributeDefinition, KeySchemaElement, KeyType, ProvisionedThroughput, ScalarAttributeType,
-    };
-    use tokio::sync::OnceCell;
-
-    use super::*;
-
-    async fn warm_engine_once(client: &aws_sdk_dynamodb::Client) {
-        static WARMED: OnceCell<()> = OnceCell::const_new();
-        WARMED
-            .get_or_init(|| async {
-                const MAX_ATTEMPTS: u32 = 25;
-                for _ in 0..MAX_ATTEMPTS {
-                    if client.list_tables().send().await.is_ok() {
-                        return;
-                    }
-                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                }
-                panic!("DynamoDB Local did not become ready");
-            })
-            .await;
-    }
-
-    async fn test_client() -> aws_sdk_dynamodb::Client {
-        let endpoint = std::env::var("DYNAMODB_ENDPOINT")
-            .unwrap_or_else(|_| "http://localhost:8000".to_string());
-        let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
-            .endpoint_url(endpoint)
-            .region(aws_config::Region::new("us-east-1"))
-            .test_credentials()
-            .load()
-            .await;
-        let client = aws_sdk_dynamodb::Client::new(&config);
-        warm_engine_once(&client).await;
-        client
-    }
-
-    fn unique_table_name() -> String {
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let ts = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        format!("test-principal-{ts}-{n}")
-    }
-
-    async fn create_test_table(client: &aws_sdk_dynamodb::Client, table_name: &str) {
-        client
-            .create_table()
-            .table_name(table_name)
-            .attribute_definitions(
-                AttributeDefinition::builder()
-                    .attribute_name(pk())
-                    .attribute_type(ScalarAttributeType::S)
-                    .build()
-                    .unwrap(),
-            )
-            .attribute_definitions(
-                AttributeDefinition::builder()
-                    .attribute_name(sk())
-                    .attribute_type(ScalarAttributeType::S)
-                    .build()
-                    .unwrap(),
-            )
-            .key_schema(
-                KeySchemaElement::builder()
-                    .attribute_name(pk())
-                    .key_type(KeyType::Hash)
-                    .build()
-                    .unwrap(),
-            )
-            .key_schema(
-                KeySchemaElement::builder()
-                    .attribute_name(sk())
-                    .key_type(KeyType::Range)
-                    .build()
-                    .unwrap(),
-            )
-            .provisioned_throughput(
-                ProvisionedThroughput::builder()
-                    .read_capacity_units(5)
-                    .write_capacity_units(5)
-                    .build()
-                    .unwrap(),
-            )
-            .send()
-            .await
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn put_then_get_round_trips() {
-        let client = test_client().await;
-        let table_name = unique_table_name();
-        create_test_table(&client, &table_name).await;
-
-        let native_id = NativeId::try_new("usr_1").unwrap();
-        let payload = serde_json::json!({ "role": "admin" });
-        let payload_bytes = serde_json::to_vec(&payload).unwrap();
-        let state = principal_state_put("acme", &native_id, &payload_bytes, "2026-07-14T00:00:00Z")
-            .unwrap();
-
-        let mut item = state.attributes.clone();
-        item.insert(pk().to_string(), AttributeValue::S(state.pk.clone()));
-        item.insert(sk().to_string(), AttributeValue::S(state.sk.clone()));
-        client
-            .put_item()
-            .table_name(&table_name)
-            .set_item(Some(item))
-            .send()
-            .await
-            .unwrap();
-
-        let fetched = get_principal(&client, &table_name, "acme", &native_id)
-            .await
-            .unwrap();
-        assert_eq!(fetched, Some(payload));
-    }
-
-    #[tokio::test]
-    async fn missing_principal_returns_none() {
-        let client = test_client().await;
-        let table_name = unique_table_name();
-        create_test_table(&client, &table_name).await;
-
-        let native_id = NativeId::try_new("usr_missing").unwrap();
-        let fetched = get_principal(&client, &table_name, "acme", &native_id)
-            .await
-            .unwrap();
-        assert_eq!(fetched, None);
-    }
-}
+mod dynamo_tests;
