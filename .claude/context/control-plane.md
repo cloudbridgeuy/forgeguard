@@ -318,7 +318,8 @@ crates/control-plane/src/
     tests.rs          -- handler integration tests (split from mod.rs to satisfy 1000-line cap)
     keys.rs           -- generate_key, list_keys, revoke_key handlers + tests
     principals/       -- upsert_principal handler (PUT .../principals/{native_id})
-    events/           -- list_events_handler (GET .../events cursor replay)
+    events/           -- list_events_handler (GET .../events cursor replay + V2 consistency tokens)
+    min_revision.rs   -- pure X-Fg-Min-Revision parse + fresh/behind guard (V2, N11)
   signing_key.rs      -- SigningKeyEntry, KeyStatus, Ed25519 key generation
   signing_key_store.rs -- DynamoSigningKeyStore (implements SigningKeyStore from authn-core)
   event_log.rs        -- DynamoEventLog: transactional append (TransactWriteItems) + events_after/latest_revision (Query)
@@ -429,8 +430,10 @@ Every principal upsert appends a signed, gap-free, per-org event to DynamoDB ato
 Cursor-based replay of the per-org event log, ordered by monotonic `seq`.
 
 - Query params: `after` (u64 cursor, default 0 — returns events with `seq > after`), `limit` (default 100, clamped to 1000; a request for `0` is floored to `1` — both clamps are logged via `tracing::warn!`).
-- `wait` is rejected with `400 {"error": "wait is not supported yet"}` before any store I/O — long-poll replay is a later slice, not this one.
-- Response: `{"events": [...], "next_after": <u64>, "revision": <u64>}` plus an `X-Fg-Revision` header. `next_after` is the last returned event's `seq`, or the unchanged `after` on an empty page (never regresses).
+- `wait=1` selects long-poll mode (V2, N8): if the initial query returns a non-empty page, it's returned immediately; on an empty page, the handler ticks the org's `SEQ` counter every 200ms (strongly consistent) for up to ~1s, re-running the cursor query and returning early once the revision advances past `after`, or returning the empty page at the deadline. Any `wait` value other than `1` (including empty `wait=`) is `400 {"error": "wait must be '1'"}`.
+- `X-Fg-Min-Revision: <u64>` request header (V2, N11): strongly-consistent-reads the log's current revision and compares against the header value *before* any wait. `current >= required` proceeds normally; `current < required` responds `412 Precondition Failed` with `{"error": "revision_behind", "current_revision": <u64>, "min_revision": <u64>}` and an `X-Fg-Revision` header carrying the current revision — this means a caller that is ahead of the server gets an immediate `412` even with `wait=1`, never a 1s hold. An unparseable header value is `400 {"error": "invalid X-Fg-Min-Revision header"}`. The guard's pure core (`parse_min_revision`, `check_min_revision`) lives in `crates/control-plane/src/handlers/min_revision.rs`, one level above `events/`, so later model-plane reads (e.g. V3 promotion lists) can reuse it.
+- Response: `{"events": [...], "next_after": <u64>, "revision": <u64>}` plus an `X-Fg-Revision` header. `next_after` is the last returned event's `seq`, or the unchanged `after` on an empty page (never regresses). An `after` cursor ahead of the log's head simply holds the full watch deadline and returns empty — `X-Fg-Min-Revision` is the mechanism for "the caller knows more than the server", not this loop.
+- Order of checks: parse `wait` → parse `X-Fg-Min-Revision` → org existence/Active check → min-revision guard → query (+ optional watch) → respond.
 - Org must exist and be `Active` (404 / 409, same gate as the principal-upsert handler).
 
 ### Event signing key

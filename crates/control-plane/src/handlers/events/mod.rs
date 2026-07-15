@@ -129,29 +129,23 @@ pub(crate) async fn list_events_handler<V: VpClient + 'static>(
     request_headers: HeaderMap,
     State(state): State<AppState<V>>,
 ) -> Response {
-    let wait = match parse_wait(query.wait.as_deref()) {
-        Ok(w) => w,
-        Err(InvalidWait) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "wait must be '1'"})),
-            )
-                .into_response();
-        }
+    let Ok(wait) = parse_wait(query.wait.as_deref()) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "wait must be '1'"})),
+        )
+            .into_response();
     };
 
     let raw_min = request_headers
         .get(MIN_REVISION_HEADER)
         .map(|v| v.to_str().unwrap_or(""));
-    let min_revision = match parse_min_revision(raw_min) {
-        Ok(m) => m,
-        Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "invalid X-Fg-Min-Revision header"})),
-            )
-                .into_response();
-        }
+    let Ok(min_revision) = parse_min_revision(raw_min) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "invalid X-Fg-Min-Revision header"})),
+        )
+            .into_response();
     };
 
     let Ok(org_id) = forgeguard_core::OrganizationId::new(&raw_org_id) else {
