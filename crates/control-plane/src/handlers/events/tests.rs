@@ -144,13 +144,24 @@ async fn defaults_are_after_zero_limit_hundred() {
 }
 
 #[tokio::test]
-async fn wait_param_is_rejected_with_400() {
+async fn wait_with_non_one_value_returns_400() {
     let app = test_app(build_test_store());
 
-    let resp = get_events(&app, "wait=1").await;
+    let resp = get_events(&app, "wait=yes").await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     let json = body_json(resp).await;
-    assert_eq!(json["error"], "wait is not supported yet");
+    assert_eq!(json["error"], "wait must be '1'");
+}
+
+#[test]
+fn parse_wait_accepts_only_one() {
+    use super::{parse_wait, InvalidWait, WaitMode};
+
+    assert_eq!(parse_wait(None), Ok(WaitMode::Immediate));
+    assert_eq!(parse_wait(Some("1")), Ok(WaitMode::Watch));
+    assert_eq!(parse_wait(Some("")), Err(InvalidWait));
+    assert_eq!(parse_wait(Some("true")), Err(InvalidWait));
+    assert_eq!(parse_wait(Some("0")), Err(InvalidWait));
 }
 
 #[tokio::test]

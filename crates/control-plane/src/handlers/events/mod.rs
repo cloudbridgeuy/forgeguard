@@ -31,11 +31,33 @@ pub(crate) struct EventsQuery {
     after: Option<u64>,
     #[serde(default)]
     limit: Option<u16>,
-    /// Presence-only flag: any value (including empty) rejects the request
-    /// with `400` — long-poll replay lands in V2, so silently ignoring the
-    /// param here would be dishonest about what this endpoint does today.
+    /// `wait=1` selects watch mode (V2 long-poll, D3); any other value is a
+    /// `400`. Absent means immediate mode.
     #[serde(default)]
     wait: Option<String>,
+}
+
+/// Long-poll mode requested via the `wait` query param.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(super) enum WaitMode {
+    /// No `wait` param: answer immediately (V1 behavior).
+    Immediate,
+    /// `wait=1`: hold an empty page up to the watch deadline (D3).
+    Watch,
+}
+
+/// The `wait` param was present with a value other than `1`.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct InvalidWait;
+
+/// Parse the raw `wait` query value. Only `1` selects watch mode — anything
+/// else (including an empty `wait=`) is an error, not silently ignored.
+pub(super) fn parse_wait(raw: Option<&str>) -> Result<WaitMode, InvalidWait> {
+    match raw {
+        None => Ok(WaitMode::Immediate),
+        Some("1") => Ok(WaitMode::Watch),
+        Some(_) => Err(InvalidWait),
+    }
 }
 
 /// Clamp a requested page size to [`MAX_LIMIT`], logging when the request
@@ -70,13 +92,17 @@ pub(crate) async fn list_events_handler<V: VpClient + 'static>(
     request_headers: HeaderMap,
     State(state): State<AppState<V>>,
 ) -> Response {
-    if query.wait.is_some() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "wait is not supported yet"})),
-        )
-            .into_response();
-    }
+    let wait = match parse_wait(query.wait.as_deref()) {
+        Ok(w) => w,
+        Err(InvalidWait) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "wait must be '1'"})),
+            )
+                .into_response();
+        }
+    };
+    let _ = wait;
 
     let raw_min = request_headers
         .get(MIN_REVISION_HEADER)
