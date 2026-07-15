@@ -14,6 +14,9 @@ use forgeguard_authz_core::Revision;
 use forgeguard_core::OrgStatus;
 use serde::Deserialize;
 
+use crate::handlers::min_revision::{
+    check_min_revision, parse_min_revision, MinRevisionCheck, MIN_REVISION_HEADER,
+};
 use crate::handlers::AppState;
 use crate::vp_client::VpClient;
 
@@ -64,6 +67,7 @@ fn clamp_limit(requested: u16) -> usize {
 pub(crate) async fn list_events_handler<V: VpClient + 'static>(
     Path(raw_org_id): Path<String>,
     Query(query): Query<EventsQuery>,
+    request_headers: HeaderMap,
     State(state): State<AppState<V>>,
 ) -> Response {
     if query.wait.is_some() {
@@ -73,6 +77,20 @@ pub(crate) async fn list_events_handler<V: VpClient + 'static>(
         )
             .into_response();
     }
+
+    let raw_min = request_headers
+        .get(MIN_REVISION_HEADER)
+        .map(|v| v.to_str().unwrap_or(""));
+    let min_revision = match parse_min_revision(raw_min) {
+        Ok(m) => m,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "invalid X-Fg-Min-Revision header"})),
+            )
+                .into_response();
+        }
+    };
 
     let Ok(org_id) = forgeguard_core::OrganizationId::new(&raw_org_id) else {
         return crate::handlers::not_found();
@@ -87,6 +105,34 @@ pub(crate) async fn list_events_handler<V: VpClient + 'static>(
         Err(e) => {
             tracing::error!(org_id = %raw_org_id, error = %e, "list_events: org lookup failed");
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    }
+
+    if let Some(required) = min_revision {
+        let current = match state.principals.latest_revision(&raw_org_id).await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!(org_id = %raw_org_id, error = %e, "list_events: min-revision read failed");
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+        };
+        if let MinRevisionCheck::Behind { current, required } =
+            check_min_revision(current, required)
+        {
+            let mut headers = HeaderMap::new();
+            if let Ok(val) = HeaderValue::from_str(&current.value().to_string()) {
+                headers.insert(REVISION_HEADER, val);
+            }
+            return (
+                StatusCode::PRECONDITION_FAILED,
+                headers,
+                Json(serde_json::json!({
+                    "error": "revision_behind",
+                    "current_revision": current.value(),
+                    "min_revision": required.value(),
+                })),
+            )
+                .into_response();
         }
     }
 

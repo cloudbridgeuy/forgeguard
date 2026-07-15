@@ -34,23 +34,31 @@ async fn put_principal(
         .unwrap()
 }
 
-async fn get_events(app: &axum::Router, query: &str) -> axum::response::Response {
+async fn get_events_with_headers(
+    app: &axum::Router,
+    query: &str,
+    extra_headers: &[(&str, &str)],
+) -> axum::response::Response {
     let uri = if query.is_empty() {
         format!("/api/v1/organizations/{ORG}/events")
     } else {
         format!("/api/v1/organizations/{ORG}/events?{query}")
     };
+    let mut builder = Request::builder()
+        .method("GET")
+        .uri(uri)
+        .header("x-api-key", TEST_API_KEY);
+    for (name, value) in extra_headers {
+        builder = builder.header(*name, *value);
+    }
     app.clone()
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri(uri)
-                .header("x-api-key", TEST_API_KEY)
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(builder.body(Body::empty()).unwrap())
         .await
         .unwrap()
+}
+
+async fn get_events(app: &axum::Router, query: &str) -> axum::response::Response {
+    get_events_with_headers(app, query, &[]).await
 }
 
 async fn body_json(resp: axum::response::Response) -> serde_json::Value {
@@ -143,6 +151,50 @@ async fn wait_param_is_rejected_with_400() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     let json = body_json(resp).await;
     assert_eq!(json["error"], "wait is not supported yet");
+}
+
+#[tokio::test]
+async fn min_revision_ahead_of_log_returns_412_with_current_revision() {
+    let app = test_app(build_test_store());
+    seed_three_events(&app).await;
+
+    let resp = get_events_with_headers(&app, "", &[("x-fg-min-revision", "5")]).await;
+    assert_eq!(resp.status(), StatusCode::PRECONDITION_FAILED);
+    let revision_header: u64 = resp
+        .headers()
+        .get("x-fg-revision")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_eq!(revision_header, 3);
+    let json = body_json(resp).await;
+    assert_eq!(json["error"], "revision_behind");
+    assert_eq!(json["current_revision"], 3);
+    assert_eq!(json["min_revision"], 5);
+}
+
+#[tokio::test]
+async fn min_revision_at_current_serves_the_page() {
+    let app = test_app(build_test_store());
+    seed_three_events(&app).await;
+
+    let resp = get_events_with_headers(&app, "after=0", &[("x-fg-min-revision", "3")]).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp).await;
+    assert_eq!(json["events"].as_array().unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn unparseable_min_revision_returns_400() {
+    let app = test_app(build_test_store());
+    seed_three_events(&app).await;
+
+    let resp = get_events_with_headers(&app, "", &[("x-fg-min-revision", "banana")]).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let json = body_json(resp).await;
+    assert_eq!(json["error"], "invalid X-Fg-Min-Revision header");
 }
 
 #[tokio::test]
