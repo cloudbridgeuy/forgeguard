@@ -11,6 +11,8 @@ use std::sync::Mutex;
 
 use async_trait::async_trait;
 use aws_sdk_dynamodb::types::AttributeValue;
+use ed25519_dalek::pkcs8::spki::der::pem::LineEnding;
+use ed25519_dalek::pkcs8::{DecodePrivateKey as _, EncodePublicKey as _};
 use forgeguard_authn_core::signing::{sign_bytes, SigningKey};
 use forgeguard_authz_core::{
     canonical_event_bytes, Actor, EventDraft, EventDraftParams, EventEnvelope, EventId, EventKind,
@@ -31,6 +33,11 @@ use crate::promotion_store::{
 const PRINCIPAL_PREFIX: &str = "PRINCIPAL#";
 const SK_EVENT_SIGNING_KEY: &str = "EVENT_SIGNING_KEY";
 const EVENT_SIGNING_KEY_ID: &str = "event-signing-key-1";
+/// Fixed Ed25519 seed for `InMemoryPrincipalEventStore`'s signing key — kept
+/// as a single const so `Self::new` and `list_signing_keys` can't drift apart.
+const IN_MEMORY_SEED: [u8; 32] = [7u8; 32];
+/// `key_id` reported for the in-memory store's single fixed signing key.
+const IN_MEMORY_KEY_ID: &str = "in-memory-test-key";
 
 /// Build the `StatePut` for a principal's current payload.
 ///
@@ -198,6 +205,33 @@ pub(crate) trait PrincipalEventStore: Send + Sync {
         after: Option<&NativeId>,
         limit: usize,
     ) -> Result<Vec<PromotionEntry>>;
+
+    /// The org's published event-signing public keys (public halves only,
+    /// D8). Empty if no model event has ever been appended (no key minted).
+    async fn list_signing_keys(&self, org_id: &str) -> Result<Vec<EventSigningKey>>;
+}
+
+/// A published event-signing public key: `key_id` + SPKI public PEM.
+/// The private half never leaves the store.
+pub(crate) struct EventSigningKey {
+    pub(crate) key_id: String,
+    pub(crate) public_key_pem: String,
+}
+
+/// Derive the SPKI public PEM from a stored PKCS#8 private PEM. Pure.
+///
+/// The `EVENT_SIGNING_KEY` item persists only the private half; the public
+/// half is derived at read time so no schema change or backfill is needed.
+fn public_pem_from_private(private_pem: &str) -> Result<String> {
+    let key = ed25519_dalek::SigningKey::from_pkcs8_pem(private_pem)
+        .map_err(|e| Error::Store(format!("stored event signing key invalid: {e}")))?;
+    encode_verifying_key_pem(&key.verifying_key())
+}
+
+/// Encode an Ed25519 verifying key as an SPKI public PEM. Pure.
+fn encode_verifying_key_pem(key: &ed25519_dalek::VerifyingKey) -> Result<String> {
+    key.to_public_key_pem(LineEnding::LF)
+        .map_err(|e| Error::Store(format!("failed to encode public key: {e}")))
 }
 
 /// Parameters for [`build_model_event`].
@@ -565,6 +599,30 @@ impl PrincipalEventStore for DynamoPrincipalEventStore {
             })
             .collect()
     }
+
+    async fn list_signing_keys(&self, org_id: &str) -> Result<Vec<EventSigningKey>> {
+        let pk_value = format!("{ORG_PREFIX}{org_id}");
+        let result = self
+            .client
+            .get_item()
+            .table_name(&self.table_name)
+            .key(pk(), AttributeValue::S(pk_value))
+            .key(sk(), AttributeValue::S(SK_EVENT_SIGNING_KEY.to_string()))
+            .consistent_read(true)
+            .send()
+            .await
+            .map_err(map_sdk_error)?;
+
+        let Some(item) = result.item else {
+            return Ok(Vec::new());
+        };
+        let private_pem = get_s(&item, "private_key_pem")?;
+        let key_id = get_s(&item, "key_id")?;
+        Ok(vec![EventSigningKey {
+            key_id,
+            public_key_pem: public_pem_from_private(&private_pem)?,
+        }])
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -592,7 +650,7 @@ impl InMemoryPrincipalEventStore {
         Self {
             principals: Mutex::new(HashMap::new()),
             logs: Mutex::new(HashMap::new()),
-            signing_key: SigningKey::from_bytes(&[7u8; 32]),
+            signing_key: SigningKey::from_bytes(&IN_MEMORY_SEED),
             promotions: Mutex::new(HashMap::new()),
         }
     }
@@ -632,7 +690,7 @@ impl InMemoryPrincipalEventStore {
             actor,
             payload,
             signing_key: &self.signing_key,
-            key_id: "in-memory-test-key",
+            key_id: IN_MEMORY_KEY_ID,
             occurred_at: &occurred_at,
             revision,
         });
@@ -816,6 +874,15 @@ impl PrincipalEventStore for InMemoryPrincipalEventStore {
         entries.truncate(limit);
         Ok(entries)
     }
+
+    async fn list_signing_keys(&self, _org_id: &str) -> Result<Vec<EventSigningKey>> {
+        // Same fixed seed as `Self::new` — the two must stay in sync.
+        let key = ed25519_dalek::SigningKey::from_bytes(&IN_MEMORY_SEED);
+        Ok(vec![EventSigningKey {
+            key_id: IN_MEMORY_KEY_ID.to_string(),
+            public_key_pem: encode_verifying_key_pem(&key.verifying_key())?,
+        }])
+    }
 }
 
 #[cfg(test)]
@@ -824,3 +891,29 @@ mod in_memory_tests;
 #[cfg(test)]
 #[cfg(feature = "dynamodb-tests")]
 mod dynamo_tests;
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::{public_pem_from_private, LineEnding};
+    use ed25519_dalek::pkcs8::spki::DecodePublicKey as _;
+    use ed25519_dalek::pkcs8::EncodePrivateKey as _;
+
+    #[test]
+    fn public_pem_from_private_rejects_garbage() {
+        let result = public_pem_from_private("garbage");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn public_pem_from_private_round_trips_known_good_key() {
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
+        let private_pem = signing_key.to_pkcs8_pem(LineEnding::LF).unwrap();
+
+        let public_pem = public_pem_from_private(&private_pem).unwrap();
+
+        let derived = ed25519_dalek::VerifyingKey::from_public_key_pem(&public_pem).unwrap();
+        assert_eq!(derived, signing_key.verifying_key());
+    }
+}

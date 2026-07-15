@@ -123,3 +123,49 @@ async fn list_is_scoped_to_org_and_type() {
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].native_id, "doc_1");
 }
+
+#[tokio::test]
+async fn list_signing_keys_returns_in_memory_key() {
+    let store = InMemoryPrincipalEventStore::new();
+    let keys = store.list_signing_keys("org-a").await.unwrap();
+    assert_eq!(keys.len(), 1);
+    assert_eq!(keys[0].key_id, "in-memory-test-key");
+    assert!(keys[0].public_key_pem.contains("BEGIN PUBLIC KEY"));
+}
+
+#[tokio::test]
+async fn in_memory_key_verifies_an_appended_event() {
+    use base64::Engine as _;
+    use forgeguard_authn_core::signing::{verify_bytes, VerifyingKey};
+    use forgeguard_authz_core::canonical_envelope_bytes;
+
+    let store = InMemoryPrincipalEventStore::new();
+    let native_id = nid("usr_1");
+    store
+        .upsert_changed(
+            "org-a",
+            &native_id,
+            Actor::System,
+            serde_json::json!({"role": "admin"}),
+        )
+        .await
+        .unwrap();
+
+    let events = store
+        .events_after("org-a", Revision::new(0), 10)
+        .await
+        .unwrap();
+    let envelope = &events[0];
+    let keys = store.list_signing_keys("org-a").await.unwrap();
+    let key = keys.iter().find(|k| k.key_id == envelope.key_id()).unwrap();
+
+    let vk = VerifyingKey::from_public_key_pem(&key.public_key_pem).unwrap();
+    let sig_bytes: [u8; 64] = base64::engine::general_purpose::STANDARD
+        .decode(envelope.signature())
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let sig = ed25519_dalek::Signature::from_bytes(&sig_bytes);
+    let bytes = canonical_envelope_bytes(envelope, "org-a");
+    assert!(verify_bytes(&vk, &bytes, &sig).is_ok());
+}

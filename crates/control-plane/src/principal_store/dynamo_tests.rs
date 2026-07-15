@@ -193,3 +193,60 @@ async fn promotion_put_get_list_tombstone_roundtrip() {
     let counter = EventLog::latest_revision(&log).await.unwrap();
     assert_eq!(counter, Revision::new(2));
 }
+
+#[tokio::test]
+async fn list_signing_keys_empty_before_any_append() {
+    let client = test_client().await;
+    let table_name = unique_table_name();
+    create_test_table(&client, &table_name).await;
+    let store = DynamoPrincipalEventStore::new(client, table_name);
+
+    let keys = store.list_signing_keys("acme").await.unwrap();
+    assert!(keys.is_empty());
+}
+
+#[tokio::test]
+async fn list_signing_keys_verifies_appended_event() {
+    use base64::Engine as _;
+    use forgeguard_authn_core::signing::{verify_bytes, VerifyingKey};
+    use forgeguard_authz_core::canonical_envelope_bytes;
+
+    let client = test_client().await;
+    let table_name = unique_table_name();
+    create_test_table(&client, &table_name).await;
+    let store = DynamoPrincipalEventStore::new(client, table_name);
+
+    let native_id = NativeId::try_new("usr_1").unwrap();
+    store
+        .upsert_changed(
+            "acme",
+            &native_id,
+            Actor::System,
+            serde_json::json!({"role": "admin"}),
+        )
+        .await
+        .unwrap();
+
+    let keys = store.list_signing_keys("acme").await.unwrap();
+    assert_eq!(keys.len(), 1);
+    assert_eq!(keys[0].key_id, "event-signing-key-1");
+
+    let events = EventLog::events_after(
+        &DynamoEventLog::new(store.client.clone(), store.table_name.clone(), "acme"),
+        Revision::new(0),
+        10,
+    )
+    .await
+    .unwrap();
+    let envelope = &events[0];
+
+    let vk = VerifyingKey::from_public_key_pem(&keys[0].public_key_pem).unwrap();
+    let sig_bytes: [u8; 64] = base64::engine::general_purpose::STANDARD
+        .decode(envelope.signature())
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let sig = ed25519_dalek::Signature::from_bytes(&sig_bytes);
+    let bytes = canonical_envelope_bytes(envelope, "acme");
+    assert!(verify_bytes(&vk, &bytes, &sig).is_ok());
+}
