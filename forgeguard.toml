@@ -37,6 +37,7 @@ actions = [
   "cp-events-read",
   "cp-resource-tombstone",
   "cp-promotion-list",
+  "cp-signing-key-read",
 ]
 
 [schema.entities.User.attributes]
@@ -69,7 +70,7 @@ name = "member"
 description = "Read-only org access"
 allow = [
   "cp-organization-read", "cp-key-read", "cp-config-read", "cp-group-read",
-  "cp-events-read", "cp-promotion-list",
+  "cp-events-read", "cp-promotion-list", "cp-signing-key-read",
 ]
 
 [[policies]]
@@ -140,6 +141,18 @@ body = """
 permit(
   principal is forgeguard::Machine,
   action == forgeguard::Action::"cp-promotion-list",
+  resource
+) when { resource.org_id == principal.org_id };
+"""
+
+[[policies]]
+type = "cedar"
+name = "machine-signing-key-read"
+description = "Machine principals can read their own org's event-signing public keys — SDK consumers verify envelope signatures"
+body = """
+permit(
+  principal is forgeguard::Machine,
+  action == forgeguard::Action::"cp-signing-key-read",
   resource
 ) when { resource.org_id == principal.org_id };
 """
