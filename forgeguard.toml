@@ -35,6 +35,8 @@ actions = [
   "cp-member-promote-owner",
   "cp-principal-upsert",
   "cp-events-read",
+  "cp-resource-tombstone",
+  "cp-promotion-list",
 ]
 
 [schema.entities.User.attributes]
@@ -67,7 +69,7 @@ name = "member"
 description = "Read-only org access"
 allow = [
   "cp-organization-read", "cp-key-read", "cp-config-read", "cp-group-read",
-  "cp-events-read",
+  "cp-events-read", "cp-promotion-list",
 ]
 
 [[policies]]
@@ -81,6 +83,7 @@ allow = [
   "cp-key-generate", "cp-key-revoke", "cp-key-rotate",
   "cp-group-create", "cp-group-update", "cp-group-delete",
   "cp-principal-upsert",
+  "cp-resource-tombstone",
 ]
 
 [[policies]]
@@ -113,6 +116,30 @@ body = """
 permit(
   principal is forgeguard::Machine,
   action == forgeguard::Action::"cp-events-read",
+  resource
+) when { resource.org_id == principal.org_id };
+"""
+
+[[policies]]
+type = "cedar"
+name = "machine-resource-tombstone"
+description = "Machine principals can tombstone their own org's promoted resources — the app backend reports deletes"
+body = """
+permit(
+  principal is forgeguard::Machine,
+  action == forgeguard::Action::"cp-resource-tombstone",
+  resource
+) when { resource.org_id == principal.org_id };
+"""
+
+[[policies]]
+type = "cedar"
+name = "machine-promotion-list"
+description = "Machine principals can list their own org's promoted resources — the SDK reconciler diffs against this"
+body = """
+permit(
+  principal is forgeguard::Machine,
+  action == forgeguard::Action::"cp-promotion-list",
   resource
 ) when { resource.org_id == principal.org_id };
 """
