@@ -9,7 +9,8 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 
-use aws_sdk_dynamodb::types::{AttributeValue, Put, TransactWriteItem, Update};
+use aws_sdk_dynamodb::operation::transact_write_items::TransactWriteItemsError;
+use aws_sdk_dynamodb::types::{AttributeValue, Delete, Put, TransactWriteItem, Update};
 use forgeguard_authz_core::{
     EventDraft, EventDraftParams, EventEnvelope, EventId, EventKind, EventLog, Revision,
 };
@@ -36,6 +37,18 @@ pub(crate) struct StatePut {
     pub(crate) pk: String,
     pub(crate) sk: String,
     pub(crate) attributes: HashMap<String, AttributeValue>,
+}
+
+/// One state delete that must land atomically with its event (D7: tombstone
+/// hard-deletes the promotion item in the same transaction as the
+/// `resource.tombstoned` event).
+///
+/// Wired up by `principal_store.rs` in Task 3; `#[allow(dead_code)]` until
+/// then since the `dynamodb-tests` feature is off in plain `cargo xtask lint`.
+#[allow(dead_code)]
+pub(crate) struct StateDelete {
+    pub(crate) pk: String,
+    pub(crate) sk: String,
 }
 
 /// DynamoDB-backed event log for a single organization.
@@ -261,6 +274,115 @@ impl DynamoEventLog {
 
         Err(Error::Store(format!(
             "append: exhausted {MAX_APPEND_ATTEMPTS} attempts for '{}'",
+            self.org_pk
+        )))
+    }
+
+    /// Like [`Self::append`], but the third transaction item is a
+    /// conditional `Delete` instead of a `Put` (D7: the tombstone hard-deletes
+    /// the promotion state item in the same transaction as its
+    /// `resource.tombstoned` event).
+    ///
+    /// Returns `Ok(Some(revision))` when the event was appended and the state
+    /// item deleted. Returns `Ok(None)` when the state item was already gone
+    /// (its `attribute_exists` condition failed) — a concurrent delete won
+    /// the race, so nothing is appended and the caller must not retry into a
+    /// duplicate event.
+    #[allow(dead_code)]
+    pub(crate) async fn append_with_delete(
+        &self,
+        build: impl Fn(Revision) -> (EventEnvelope, Vec<u8>),
+        state: StateDelete,
+    ) -> Result<Option<Revision>> {
+        for attempt in 0..MAX_APPEND_ATTEMPTS {
+            let current = self.read_counter().await?;
+            let candidate = current + 1;
+            let revision = Revision::new(candidate);
+            let (envelope, payload_bytes) = build(revision);
+
+            let mut counter_update = Update::builder()
+                .table_name(&self.table_name)
+                .key(pk(), AttributeValue::S(self.org_pk.clone()))
+                .key(sk(), AttributeValue::S(SK_SEQ.to_string()))
+                .update_expression("SET seq = :new")
+                .expression_attribute_values(":new", AttributeValue::N(candidate.to_string()));
+            counter_update = if current == 0 {
+                counter_update.condition_expression("attribute_not_exists(seq)")
+            } else {
+                counter_update
+                    .condition_expression("seq = :expected")
+                    .expression_attribute_values(
+                        ":expected",
+                        AttributeValue::N(current.to_string()),
+                    )
+            };
+            let counter_update = counter_update
+                .build()
+                .map_err(|e| Error::Store(format!("build counter update: {e}")))?;
+
+            let event_attrs = event_item(&self.org_pk, &envelope, &payload_bytes)?;
+            let event_put = Put::builder()
+                .table_name(&self.table_name)
+                .set_item(Some(event_attrs))
+                .condition_expression(format!("attribute_not_exists({})", sk()))
+                .build()
+                .map_err(|e| Error::Store(format!("build event put: {e}")))?;
+
+            let state_delete = Delete::builder()
+                .table_name(&self.table_name)
+                .key(pk(), AttributeValue::S(state.pk.clone()))
+                .key(sk(), AttributeValue::S(state.sk.clone()))
+                .condition_expression(format!("attribute_exists({})", pk()))
+                .build()
+                .map_err(|e| Error::Store(format!("build state delete: {e}")))?;
+
+            let result = self
+                .client
+                .transact_write_items()
+                .transact_items(TransactWriteItem::builder().update(counter_update).build())
+                .transact_items(TransactWriteItem::builder().put(event_put).build())
+                .transact_items(TransactWriteItem::builder().delete(state_delete).build())
+                .send()
+                .await;
+
+            match result {
+                Ok(_) => return Ok(Some(revision)),
+                Err(sdk_err) => {
+                    if let aws_sdk_dynamodb::error::SdkError::ServiceError(e) = &sdk_err {
+                        if let TransactWriteItemsError::TransactionCanceledException(cancelled) =
+                            e.err()
+                        {
+                            // Transaction item order is [counter, event, state
+                            // delete] — index 2 is the delete. Its
+                            // ConditionalCheckFailed means the item is already
+                            // gone: a concurrent delete won, nothing was
+                            // appended, and retrying would append a duplicate
+                            // tombstone event.
+                            let delete_failed = cancelled
+                                .cancellation_reasons()
+                                .get(2)
+                                .and_then(|r| r.code())
+                                .is_some_and(|c| c == "ConditionalCheckFailed");
+                            if delete_failed {
+                                return Ok(None);
+                            }
+                            let is_last_attempt = attempt + 1 == MAX_APPEND_ATTEMPTS;
+                            if !is_last_attempt {
+                                tokio::time::sleep(std::time::Duration::from_millis(
+                                    u64::from(attempt) * 5,
+                                ))
+                                .await;
+                                continue;
+                            }
+                        }
+                    }
+                    return Err(map_sdk_error(sdk_err));
+                }
+            }
+        }
+
+        Err(Error::Store(format!(
+            "append_with_delete: exhausted {MAX_APPEND_ATTEMPTS} attempts for '{}'",
             self.org_pk
         )))
     }
@@ -532,5 +654,79 @@ mod tests {
 
         let latest = log.latest_revision().await.unwrap();
         assert_eq!(latest, r2);
+    }
+
+    fn tombstone_envelope(seq: Revision) -> (EventEnvelope, Vec<u8>) {
+        let payload = serde_json::json!({ "fgrn": "fgrn:acme:resource:document/doc_1" });
+        let payload_bytes = serde_json::to_vec(&payload).unwrap();
+        let draft = EventDraft::new(EventDraftParams {
+            event_id: EventId::try_new(format!("01K{:022}", seq.value())).unwrap(),
+            seq,
+            kind: EventKind::ResourceTombstoned,
+            occurred_at: "2026-07-15T00:00:00Z".to_string(),
+            actor: Actor::System,
+            payload,
+        });
+        (
+            EventEnvelope::from_signed(draft, "key-1".to_string(), "sig".to_string()),
+            payload_bytes,
+        )
+    }
+
+    #[tokio::test]
+    async fn append_with_delete_removes_item_and_appends_event() {
+        let log = new_log().await;
+        log.append(
+            sample_envelope,
+            StatePut {
+                pk: format!("{ORG_PREFIX}acme"),
+                sk: "PROMO#document#doc_1".to_string(),
+                attributes: HashMap::new(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let revision = log
+            .append_with_delete(
+                tombstone_envelope,
+                StateDelete {
+                    pk: format!("{ORG_PREFIX}acme"),
+                    sk: "PROMO#document#doc_1".to_string(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(revision, Some(Revision::new(2)));
+
+        let gone = log
+            .client
+            .get_item()
+            .table_name(&log.table_name)
+            .key(pk(), AttributeValue::S(format!("{ORG_PREFIX}acme")))
+            .key(sk(), AttributeValue::S("PROMO#document#doc_1".to_string()))
+            .send()
+            .await
+            .unwrap()
+            .item;
+        assert!(gone.is_none());
+        assert_eq!(log.read_counter().await.unwrap(), 2);
+    }
+
+    #[tokio::test]
+    async fn append_with_delete_on_absent_item_appends_nothing() {
+        let log = new_log().await;
+        let revision = log
+            .append_with_delete(
+                tombstone_envelope,
+                StateDelete {
+                    pk: format!("{ORG_PREFIX}acme"),
+                    sk: "PROMO#document#doc_missing".to_string(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(revision, None);
+        assert_eq!(log.read_counter().await.unwrap(), 0);
     }
 }
