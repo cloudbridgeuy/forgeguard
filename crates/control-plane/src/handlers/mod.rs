@@ -4,6 +4,7 @@ mod keys;
 pub(crate) mod min_revision;
 pub(crate) mod principals;
 pub(crate) mod promotions;
+pub(crate) mod signing_keys;
 pub(crate) mod user_schema;
 pub(crate) mod users;
 
@@ -765,6 +766,10 @@ pub(super) mod test_support {
             .route(
                 "/api/v1/organizations/{org_id}/promoted-resources",
                 axum::routing::get(super::promotions::list_promotions_handler::<StubVpClient>),
+            )
+            .route(
+                "/api/v1/organizations/{org_id}/signing-keys",
+                axum::routing::get(super::signing_keys::list_signing_keys_handler::<StubVpClient>),
             )
             .route("/metrics", axum::routing::get(super::metrics_handler))
             // Test-only probe route — never compiled into production binaries.
