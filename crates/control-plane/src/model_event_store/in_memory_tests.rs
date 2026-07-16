@@ -3,8 +3,10 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use forgeguard_authz_core::{Actor, EventKind};
-use forgeguard_core::Segment;
+use forgeguard_authz_core::{fold_events, Actor, EventKind};
+use forgeguard_core::{OrgStatus, Organization, OrganizationId, Segment};
+
+use crate::store::OrgRecord;
 
 use super::*;
 
@@ -13,6 +15,16 @@ fn seg(s: &str) -> Segment {
 }
 fn nid(s: &str) -> NativeId {
     NativeId::try_new(s).unwrap()
+}
+
+fn org_record(org_id: &str, name: &str) -> OrgRecord {
+    let org = Organization::new(
+        OrganizationId::new(org_id).unwrap(),
+        name.to_string(),
+        OrgStatus::Draft,
+        chrono::Utc::now(),
+    );
+    OrgRecord::new(org, None)
 }
 
 #[tokio::test]
@@ -257,4 +269,90 @@ async fn fold_at_on_empty_org_log() {
         .await
         .unwrap_err();
     assert!(err.to_string().contains("unknown revision 1"));
+}
+
+#[tokio::test]
+async fn create_org_appends_org_created_at_revision_1() {
+    let store = InMemoryModelEventStore::new();
+    let record = org_record("acme", "Acme Inc");
+
+    let revision = store.create_org(record, Actor::System).await.unwrap();
+    assert_eq!(revision, Revision::new(1));
+
+    let events = store
+        .events_after("acme", Revision::new(0), 10)
+        .await
+        .unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].kind().as_str(), "org.created");
+    assert_eq!(events[0].payload()["organization"]["name"], "Acme Inc");
+    assert_eq!(events[0].payload()["config"], serde_json::Value::Null);
+    assert!(!events[0].signature().is_empty());
+}
+
+#[tokio::test]
+async fn create_org_twice_conflicts() {
+    let store = InMemoryModelEventStore::new();
+    store
+        .create_org(org_record("acme", "Acme Inc"), Actor::System)
+        .await
+        .unwrap();
+
+    let err = store
+        .create_org(org_record("acme", "Acme Inc"), Actor::System)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::Conflict(_)));
+    assert_eq!(
+        store.latest_revision("acme").await.unwrap(),
+        Revision::new(1)
+    );
+}
+
+#[tokio::test]
+async fn update_org_with_stale_expected_revision_mismatches() {
+    let store = InMemoryModelEventStore::new();
+    store
+        .create_org(org_record("acme", "Acme Inc"), Actor::System)
+        .await
+        .unwrap();
+
+    let err = store
+        .update_org(
+            org_record("acme", "Acme Renamed"),
+            Actor::System,
+            Some(Revision::new(0)),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::RevisionMismatch { current: 1 }));
+    assert_eq!(
+        store.latest_revision("acme").await.unwrap(),
+        Revision::new(1)
+    );
+}
+
+#[tokio::test]
+async fn update_org_bumps_revision_and_folds_to_latest() {
+    let store = InMemoryModelEventStore::new();
+    store
+        .create_org(org_record("acme", "Acme Inc"), Actor::System)
+        .await
+        .unwrap();
+
+    let revision = store
+        .update_org(org_record("acme", "Acme Renamed"), Actor::System, None)
+        .await
+        .unwrap();
+    assert_eq!(revision, Revision::new(2));
+
+    let events = store
+        .events_after("acme", Revision::new(0), 10)
+        .await
+        .unwrap();
+    let folded = fold_events(&events, Revision::new(2)).unwrap();
+    assert_eq!(
+        folded.org().unwrap()["organization"]["name"],
+        "Acme Renamed"
+    );
 }

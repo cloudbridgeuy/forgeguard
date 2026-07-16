@@ -162,7 +162,7 @@ fn put_s(item: &mut HashMap<String, AttributeValue>, key: &str, value: impl Into
 ///
 /// When `configured` is `None` (Draft org), the `config` and `etag` attributes
 /// are omitted entirely — no sentinel values.
-fn to_item(
+pub(crate) fn to_item(
     org: &Organization,
     configured: Option<&ConfiguredConfig>,
     signing_keys: &[SigningKeyEntry],

@@ -15,21 +15,24 @@ use ed25519_dalek::pkcs8::spki::der::pem::LineEnding;
 use ed25519_dalek::pkcs8::{DecodePrivateKey as _, EncodePublicKey as _};
 use forgeguard_authn_core::signing::{sign_bytes, SigningKey};
 use forgeguard_authz_core::{
-    canonical_event_bytes, fold_events, principal_event_payload, Actor, EventDraft,
-    EventDraftParams, EventEnvelope, EventId, EventKind, EventLog, FoldedState, InMemoryEventLog,
-    Revision,
+    canonical_event_bytes, fold_events, org_event_payload, principal_event_payload, Actor,
+    EventDraft, EventDraftParams, EventEnvelope, EventId, EventKind, EventLog, FoldedState,
+    InMemoryEventLog, Revision,
 };
 use forgeguard_core::NativeId;
 
 use forgeguard_core::Segment;
 
-use crate::dynamo_store::{get_s, map_sdk_error, pk, sk, ORG_PREFIX};
+use crate::dynamo_store::{
+    get_s, map_sdk_error, pk, signing_keys_from_item, sk, to_item, ORG_PREFIX, SK_META,
+};
 use crate::error::{Error, Result};
 use crate::event_log::{DynamoEventLog, StateDelete, StateGuard, StatePut};
 use crate::promotion_store::{
     promotion_event_payload, promotion_fgrn, promotion_sk, promotion_state_put, PromotionEntry,
     PromotionStatePutParams, PROMO_PREFIX,
 };
+use crate::store::OrgRecord;
 
 const PRINCIPAL_PREFIX: &str = "PRINCIPAL#";
 const SK_EVENT_SIGNING_KEY: &str = "EVENT_SIGNING_KEY";
@@ -107,6 +110,49 @@ pub(crate) async fn get_principal(
     serde_json::from_str(&payload)
         .map_err(|e| Error::Store(format!("deserialize principal payload: {e}")))
         .map(Some)
+}
+
+/// Strongly-consistent read of an org's raw state item, or `None` if absent.
+///
+/// Mirrors `DynamoOrgStore::get_raw_item`, duplicated here (rather than
+/// shared) because that method lives on a different struct with no shared
+/// base — both are thin wrappers around the same `GetItem` call.
+///
+/// Only called from `DynamoModelEventStore::update_org`, itself unreachable
+/// until Task 8 wires it up — same `dead_code` precedent as `put_promotion`.
+#[allow(dead_code)]
+async fn get_raw_org_item(
+    client: &aws_sdk_dynamodb::Client,
+    table_name: &str,
+    org_id: &str,
+) -> Result<Option<HashMap<String, AttributeValue>>> {
+    let result = client
+        .get_item()
+        .table_name(table_name)
+        .key(pk(), AttributeValue::S(format!("{ORG_PREFIX}{org_id}")))
+        .key(sk(), AttributeValue::S(SK_META.to_string()))
+        .consistent_read(true)
+        .send()
+        .await
+        .map_err(map_sdk_error)?;
+    Ok(result.item)
+}
+
+/// Build the D3/D4 event payload for an org mutation: `{"organization",
+/// "config"}`, full post-mutation state.
+///
+/// Only called from `create_org`/`update_org`, unreachable outside tests
+/// until Task 7/8 wire them up — same `dead_code` precedent as `put_promotion`.
+#[allow(dead_code)]
+fn org_payload(record: &OrgRecord) -> Result<serde_json::Value> {
+    let organization = serde_json::to_value(record.org())
+        .map_err(|e| Error::Store(format!("serialize organization: {e}")))?;
+    let config = record
+        .config()
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(|e| Error::Store(format!("serialize org config: {e}")))?;
+    Ok(org_event_payload(&organization, config.as_ref()))
 }
 
 // ---------------------------------------------------------------------------
@@ -216,6 +262,28 @@ pub(crate) trait ModelEventStore: Send + Sync {
     /// The org's published event-signing public keys (public halves only,
     /// D8). Empty if no model event has ever been appended (no key minted).
     async fn list_signing_keys(&self, org_id: &str) -> Result<Vec<EventSigningKey>>;
+
+    /// Append an `org.created` event + the org's initial state item in one
+    /// transaction. `Err(Error::Conflict)` if the org already exists (#113 V1).
+    ///
+    /// No HTTP route calls this yet — Task 7 wires it onto `create_handler`,
+    /// same `dead_code` precedent as `put_promotion`.
+    #[allow(dead_code)]
+    async fn create_org(&self, record: OrgRecord, actor: Actor) -> Result<Revision>;
+
+    /// Append an `org.updated` event + the org's new state item in one
+    /// transaction. When `expected_revision` is `Some`, mismatches against the
+    /// log's current revision fail with `Error::RevisionMismatch` instead of
+    /// appending (#113 V1, D5).
+    ///
+    /// No HTTP route calls this yet — Task 8 wires it onto `update_handler`.
+    #[allow(dead_code)]
+    async fn update_org(
+        &self,
+        record: OrgRecord,
+        actor: Actor,
+        expected_revision: Option<Revision>,
+    ) -> Result<Revision>;
 
     /// Revision-pinned historical read (V5 / N16, closing D9): fold the
     /// org's event log up to `at` (or the latest revision when `None`) into
@@ -665,268 +733,91 @@ impl ModelEventStore for DynamoModelEventStore {
             public_key_pem: public_pem_from_private(&private_pem)?,
         }])
     }
-}
 
-// ---------------------------------------------------------------------------
-// In-memory implementation — dev-mode `--store=memory` backing and handler
-// tests
-// ---------------------------------------------------------------------------
-
-/// In-memory [`ModelEventStore`]. Backs `--store=memory` dev mode and lets
-/// handler tests exercise the full upsert flow (including a real Ed25519
-/// signature) without DynamoDB Local.
-pub(crate) struct InMemoryModelEventStore {
-    principals: Mutex<HashMap<(String, NativeId), serde_json::Value>>,
-    /// One log per org — a shared log would leak one org's events into
-    /// another org's `events_after`/`latest_revision` read. `Arc`-wrapped so
-    /// the map's lock can be dropped before `.await`-ing the log itself
-    /// (`std::sync::MutexGuard` isn't `Send`, and this trait's futures must be).
-    logs: Mutex<HashMap<String, std::sync::Arc<InMemoryEventLog>>>,
-    signing_key: SigningKey,
-    /// `(org_id, resource_type, native_id) -> fgrn`.
-    promotions: Mutex<HashMap<(String, String, String), String>>,
-}
-
-impl InMemoryModelEventStore {
-    pub(crate) fn new() -> Self {
-        Self {
-            principals: Mutex::new(HashMap::new()),
-            logs: Mutex::new(HashMap::new()),
-            signing_key: SigningKey::from_bytes(&IN_MEMORY_SEED),
-            promotions: Mutex::new(HashMap::new()),
-        }
-    }
-
-    fn log_for(&self, org_id: &str) -> Result<std::sync::Arc<InMemoryEventLog>> {
-        let mut logs = self
-            .logs
-            .lock()
-            .map_err(|e| Error::Store(format!("in-memory event log map lock poisoned: {e}")))?;
-        Ok(std::sync::Arc::clone(
-            logs.entry(org_id.to_string())
-                .or_insert_with(|| std::sync::Arc::new(InMemoryEventLog::new())),
-        ))
-    }
-
-    /// Shared by `upsert_changed`/`put_promotion`/`tombstone_promotion`: mint
-    /// the next revision off `org_id`'s log, build+sign the envelope, and
-    /// push it. Callers still own their own state-map bookkeeping (principal
-    /// payload vs. promotion fgrn), so this only factors out the identical
-    /// "next revision + sign + push" sequence.
-    async fn mint_and_push(
-        &self,
-        org_id: &str,
-        kind: EventKind,
-        actor: Actor,
-        payload: serde_json::Value,
-    ) -> Result<Revision> {
-        let log = self.log_for(org_id)?;
-        let current = EventLog::latest_revision(log.as_ref())
-            .await
-            .map_err(|e| Error::Store(e.to_string()))?;
-        let revision = current.next();
+    async fn create_org(&self, record: OrgRecord, actor: Actor) -> Result<Revision> {
+        let org_id = record.org().org_id().to_string();
+        let (signing_key, key_id) = self.ensure_signing_key(&org_id).await?;
         let occurred_at = chrono::Utc::now().to_rfc3339();
-        let (envelope, _payload_bytes) = build_model_event(BuildModelEventParams {
-            org_id,
-            kind,
-            actor,
-            payload,
-            signing_key: &self.signing_key,
-            key_id: IN_MEMORY_KEY_ID,
-            occurred_at: &occurred_at,
-            revision,
-        });
-        log.push(envelope);
-        Ok(revision)
-    }
-}
+        let log = DynamoEventLog::new(self.client.clone(), self.table_name.clone(), &org_id);
 
-impl Default for InMemoryModelEventStore {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[async_trait]
-impl ModelEventStore for InMemoryModelEventStore {
-    async fn get_principal(
-        &self,
-        org_id: &str,
-        native_id: &NativeId,
-    ) -> Result<Option<serde_json::Value>> {
-        let guard = self
-            .principals
-            .lock()
-            .map_err(|e| Error::Store(format!("in-memory principal store lock poisoned: {e}")))?;
-        Ok(guard.get(&(org_id.to_string(), native_id.clone())).cloned())
-    }
-
-    async fn latest_revision(&self, org_id: &str) -> Result<Revision> {
-        let log = self.log_for(org_id)?;
-        EventLog::latest_revision(log.as_ref())
-            .await
-            .map_err(|e| Error::Store(e.to_string()))
-    }
-
-    async fn upsert_changed(
-        &self,
-        org_id: &str,
-        native_id: &NativeId,
-        actor: Actor,
-        payload: serde_json::Value,
-    ) -> Result<Revision> {
-        let event_payload = principal_event_payload(native_id, &payload);
-        let revision = self
-            .mint_and_push(org_id, EventKind::PrincipalUpserted, actor, event_payload)
-            .await?;
-
-        let mut guard = self
-            .principals
-            .lock()
-            .map_err(|e| Error::Store(format!("in-memory principal store lock poisoned: {e}")))?;
-        guard.insert((org_id.to_string(), native_id.clone()), payload);
-        Ok(revision)
-    }
-
-    async fn events_after(
-        &self,
-        org_id: &str,
-        after: Revision,
-        limit: usize,
-    ) -> Result<Vec<EventEnvelope>> {
-        let log = self.log_for(org_id)?;
-        EventLog::events_after(log.as_ref(), after, limit)
-            .await
-            .map_err(|e| Error::Store(e.to_string()))
-    }
-
-    async fn get_promotion(
-        &self,
-        org_id: &str,
-        resource_type: &Segment,
-        native_id: &NativeId,
-    ) -> Result<Option<String>> {
-        let guard = self
-            .promotions
-            .lock()
-            .map_err(|e| Error::Store(format!("in-memory promotion store lock poisoned: {e}")))?;
-        Ok(guard
-            .get(&(
-                org_id.to_string(),
-                resource_type.to_string(),
-                native_id.to_string(),
-            ))
-            .cloned())
-    }
-
-    async fn put_promotion(
-        &self,
-        org_id: &str,
-        resource_type: &Segment,
-        native_id: &NativeId,
-        actor: Actor,
-    ) -> Result<Revision> {
-        let fgrn = promotion_fgrn(org_id, resource_type, native_id)?;
-        let payload = promotion_event_payload(&fgrn, resource_type, native_id);
-        let revision = self
-            .mint_and_push(org_id, EventKind::ResourcePromoted, actor, payload)
-            .await?;
-
-        let mut guard = self
-            .promotions
-            .lock()
-            .map_err(|e| Error::Store(format!("in-memory promotion store lock poisoned: {e}")))?;
-        guard.insert(
-            (
-                org_id.to_string(),
-                resource_type.to_string(),
-                native_id.to_string(),
-            ),
-            fgrn.to_string(),
-        );
-        Ok(revision)
-    }
-
-    async fn tombstone_promotion(
-        &self,
-        org_id: &str,
-        resource_type: &Segment,
-        native_id: &NativeId,
-        actor: Actor,
-    ) -> Result<Option<Revision>> {
-        let key = (
-            org_id.to_string(),
-            resource_type.to_string(),
-            native_id.to_string(),
-        );
-        // Peek-then-append-then-remove (not atomic — acceptable for a test
-        // double, but unlike the DynamoDB impl a concurrent tombstone could
-        // both observe "present" and both append; real races are exercised
-        // only against DynamoDB Local, Task 2/3 integration tests). The
-        // removal happens last so a `mint_and_push` failure (e.g. a poisoned
-        // log lock) never leaves the promotion deleted without its event.
-        let stored = {
-            let guard = self.promotions.lock().map_err(|e| {
-                Error::Store(format!("in-memory promotion store lock poisoned: {e}"))
-            })?;
-            guard.get(&key).cloned()
-        };
-        let Some(fgrn) = stored else {
-            return Ok(None);
+        let payload = org_payload(&record)?;
+        let mut attributes = to_item(record.org(), record.configured(), &[])?;
+        attributes.remove(pk());
+        attributes.remove(sk());
+        let state = StatePut {
+            pk: format!("{ORG_PREFIX}{org_id}"),
+            sk: SK_META.to_string(),
+            attributes,
+            guard: StateGuard::MustNotExist,
         };
 
-        let fgrn: forgeguard_core::Fgrn = fgrn
-            .parse()
-            .map_err(|e| Error::Store(format!("stored promotion fgrn invalid: {e}")))?;
-        let payload = promotion_event_payload(&fgrn, resource_type, native_id);
-        let revision = self
-            .mint_and_push(org_id, EventKind::ResourceTombstoned, actor, payload)
-            .await?;
-
-        let mut guard = self
-            .promotions
-            .lock()
-            .map_err(|e| Error::Store(format!("in-memory promotion store lock poisoned: {e}")))?;
-        guard.remove(&key);
-        Ok(Some(revision))
-    }
-
-    async fn list_promotions(
-        &self,
-        org_id: &str,
-        resource_type: &Segment,
-        after: Option<&NativeId>,
-        limit: usize,
-    ) -> Result<Vec<PromotionEntry>> {
-        let guard = self
-            .promotions
-            .lock()
-            .map_err(|e| Error::Store(format!("in-memory promotion store lock poisoned: {e}")))?;
-        let mut entries: Vec<PromotionEntry> = guard
-            .iter()
-            .filter(|((o, t, _), _)| o == org_id && t == resource_type.as_str())
-            .map(|((_, _, native_id), fgrn)| PromotionEntry {
-                fgrn: fgrn.clone(),
-                native_id: native_id.clone(),
+        let org_id_owned = org_id.clone();
+        let build = move |revision: Revision| {
+            build_model_event(BuildModelEventParams {
+                org_id: &org_id_owned,
+                kind: EventKind::OrgCreated,
+                actor: actor.clone(),
+                payload: payload.clone(),
+                signing_key: &signing_key,
+                key_id: &key_id,
+                occurred_at: &occurred_at,
+                revision,
             })
-            .collect();
-        entries.sort_by(|a, b| a.native_id.cmp(&b.native_id));
-        if let Some(after) = after {
-            entries.retain(|e| e.native_id.as_str() > after.as_str());
-        }
-        entries.truncate(limit);
-        Ok(entries)
+        };
+
+        log.append(None, build, state).await
     }
 
-    async fn list_signing_keys(&self, _org_id: &str) -> Result<Vec<EventSigningKey>> {
-        // Same fixed seed as `Self::new` — the two must stay in sync.
-        let key = ed25519_dalek::SigningKey::from_bytes(&IN_MEMORY_SEED);
-        Ok(vec![EventSigningKey {
-            key_id: IN_MEMORY_KEY_ID.to_string(),
-            public_key_pem: encode_verifying_key_pem(&key.verifying_key())?,
-        }])
+    async fn update_org(
+        &self,
+        record: OrgRecord,
+        actor: Actor,
+        expected_revision: Option<Revision>,
+    ) -> Result<Revision> {
+        let org_id = record.org().org_id().to_string();
+        let (signing_key, key_id) = self.ensure_signing_key(&org_id).await?;
+        let occurred_at = chrono::Utc::now().to_rfc3339();
+        let log = DynamoEventLog::new(self.client.clone(), self.table_name.clone(), &org_id);
+
+        // Preserve `signing_keys` across the state item's replacement — the
+        // META item is fully rewritten by `to_item`, and that attribute lives
+        // outside `OrgRecord` (see `dynamo_store::update`).
+        let existing_keys = match get_raw_org_item(&self.client, &self.table_name, &org_id).await? {
+            Some(item) => signing_keys_from_item(&item)?,
+            None => Vec::new(),
+        };
+
+        let payload = org_payload(&record)?;
+        let mut attributes = to_item(record.org(), record.configured(), &existing_keys)?;
+        attributes.remove(pk());
+        attributes.remove(sk());
+        let state = StatePut {
+            pk: format!("{ORG_PREFIX}{org_id}"),
+            sk: SK_META.to_string(),
+            attributes,
+            guard: StateGuard::None,
+        };
+
+        let org_id_owned = org_id.clone();
+        let build = move |revision: Revision| {
+            build_model_event(BuildModelEventParams {
+                org_id: &org_id_owned,
+                kind: EventKind::OrgUpdated,
+                actor: actor.clone(),
+                payload: payload.clone(),
+                signing_key: &signing_key,
+                key_id: &key_id,
+                occurred_at: &occurred_at,
+                revision,
+            })
+        };
+
+        log.append(expected_revision, build, state).await
     }
 }
+
+mod in_memory;
+pub(crate) use in_memory::InMemoryModelEventStore;
 
 #[cfg(test)]
 mod in_memory_tests;
