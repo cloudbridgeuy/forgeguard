@@ -51,7 +51,7 @@ async fn fresh_store_with_draft_org(org_id_str: &str) -> (DynamoOrgStore, Organi
     let client = test_client().await;
     let table = unique_table_name();
     create_test_table(&client, &table).await;
-    let store = DynamoOrgStore::new(client, table);
+    let store = DynamoOrgStore::new(client.clone(), table.clone());
     let now = chrono::Utc::now();
     let org_id = OrganizationId::new(org_id_str).unwrap();
     let org = forgeguard_core::Organization::new(
@@ -60,7 +60,7 @@ async fn fresh_store_with_draft_org(org_id_str: &str) -> (DynamoOrgStore, Organi
         forgeguard_core::OrgStatus::Draft,
         now,
     );
-    store.create(org, None).await.unwrap();
+    put_test_org(&client, &table, &org, None).await;
     (store, org_id)
 }
 
@@ -287,7 +287,7 @@ async fn dynamodb_count_memberships_for_group_returns_per_user_counts() {
         forgeguard_core::OrgStatus::Draft,
         now,
     );
-    store.create(org, None).await.unwrap();
+    put_test_org(&client, &table, &org, None).await;
 
     // Create the group "admin"
     let entry = make_entry("admin", &["cp:org:read"]);
