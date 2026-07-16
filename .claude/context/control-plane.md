@@ -423,7 +423,7 @@ Every principal upsert appends a signed, gap-free, per-org event to DynamoDB ato
 2. Org must exist and be `Active` (404 / 409 otherwise, mirroring every other org-scoped handler).
 3. Strongly-consistent read of the existing principal, then `decide_upsert(existing, incoming)`:
    - `NoOp` (canonical JSON equality, key-order insensitive) — responds `200` with the current revision; appends nothing.
-   - `Changed` — mints an `EventId` (ULID), signs the canonical event bytes with the org's Ed25519 event-signing key, and atomically (`TransactWriteItems`) increments the org's `seq` counter, puts the event item, and puts the principal state item. Responds `201` when nothing existed before the write, `200` otherwise.
+   - `Changed` — mints an `EventId` (ULID), signs the canonical event bytes with the org's Ed25519 event-signing key, and atomically (`TransactWriteItems`) increments the org's `seq` counter, puts the event item, and puts the principal state item. Responds `201` when nothing existed before the write, `200` otherwise. The appended `principal.upserted` event's payload (visible over `GET .../events`) is `{"native_id": "<id>", "principal": {<raw doc>}}` (V5 identity wrapper, `forgeguard_authz_core::principal_event_payload`) — the principal state item and the `decide_upsert` no-op compare both keep the raw doc unwrapped. Events appended before this wrapper existed carry the bare raw doc and cannot be folded (see Time Travel below).
 4. Every response carries the new revision in both the `X-Fg-Revision` header and the JSON body's `revision` field.
 
 ### `GET /api/v1/organizations/{org_id}/events`
@@ -496,6 +496,16 @@ Serves the org's event-signing public key(s), for external envelope verification
 ### Authorization
 
 `cp:signing-key:read` maps to the Cedar action `cp-signing-key-read` (`Some("org_id")`, tenant-scoped), read-tier (`member` role, beside `cp-promotion-list`). `forgeguard.toml` carries a `machine-signing-key-read` permit mirroring `machine-promotion-list`, since SDK consumers verifying envelopes are machines. **Not yet synced to the prod VP policy store** — `cargo xtask control-plane cedar sync` is a deployment step outside this slice.
+
+## Time Travel (V5 of the event-log spine, D9)
+
+Revision-pinned historical reads: reconstruct an org's entity state as of any past revision by folding its event log, rather than storing versioned state items. No HTTP endpoint or xtask subcommand consumes this yet — it is a library-level capability (conformance tests are the only consumer), closing the `AuthzStore`/D9 trait-contract question with a JSON-shaped fold rather than a typed `EntitySlice` (arbitrary JSON principal docs can't build the typed model).
+
+- `forgeguard_authz_core::fold_events(events: &[EventEnvelope], at: Revision) -> Result<FoldedState>` — pure. Folds a gap-free log prefix (seq 1, 2, 3, ...) up to `at`; events after `at` are ignored. Three event kinds are foldable: `principal.upserted` (insert/replace by `native_id`, requires the V5 payload wrapper above), `resource.promoted` (insert `(resource_type, native_id) → fgrn`), `resource.tombstoned` (remove that promotion). Any other kind, a missing wrapper (pre-V5 event), or a sequence gap is `Error::UnfoldableEvent { seq, reason }` — unfoldable events fail loudly rather than being silently skipped, since skipping would fabricate history. `at == 0` or `at` past the log's latest seq is `Error::UnknownRevision`.
+- `FoldedState` — private fields, JSON-shaped: `principal(native_id) -> Option<&Value>` / `principals() -> &BTreeMap<String, Value>`, `promotion(resource_type, native_id) -> Option<&str>` / `promotions() -> &BTreeMap<(String, String), String>`, `revision() -> Revision`. `FoldedState::empty()` is revision 0, no entities.
+- `PrincipalEventStore::fold_at(org_id, at: Option<Revision>) -> Result<FoldedState>` — default trait method (both the Dynamo and in-memory impls inherit it, `#[allow(dead_code)]` since no route calls it yet). `at = None` resolves to the org's latest revision, except an empty log returns `FoldedState::empty()` directly rather than erroring. Pages `events_after` in chunks of 100 and delegates to `fold_events`.
+
+Pre-V5 events (appended before the identity wrapper existed) are permanently unfoldable — no backfill/migration is planned; dev logs are ephemeral and the prod log holds only QA events at this point.
 
 ## V3 of #102 — Active-org VP materialization
 

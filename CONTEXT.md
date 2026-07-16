@@ -54,7 +54,7 @@ The measured cedar-policy spike (seven conformance assertions S1–S5, toolchain
 | [xtask CP Dev Stack](./.claude/context/xtask-control-plane-dev.md) | `dev` subcommand: dynamodb-local container, AWS env wiring, and SSO prerequisite. |
 | [Request Signing](./.claude/context/request-signing.md) | Ed25519 signing: canonical payload, config, key rotation, and crate layout. |
 | [Demo App](./.claude/context/demo-app.md) | E2E demo: Python TODO app, native proxy, demo config, and running instructions. |
-| [Control Plane](./.claude/context/control-plane.md) | CP scaffold, proxy-config endpoint, OrgStore trait, auth, VP authorization, ETag, draft/configured lifecycle, event append spine, promotion lifecycle (tombstone + reconciliation), and testing. |
+| [Control Plane](./.claude/context/control-plane.md) | CP scaffold, proxy-config endpoint, OrgStore trait, auth, VP authorization, ETag, draft/configured lifecycle, event append spine, promotion lifecycle (tombstone + reconciliation), time-travel fold (revision-pinned historical reads), and testing. |
 | [Groups V3](./.claude/context/groups-v3.md) | Active-org VP materialization: `vp_client` module, `OrgWriteContext`/`VpStage` ADTs, F3/F3'/F4 failure-mode taxonomy, rollback metric, and test scaffolding. |
 | [Optimistic Locking](./.claude/context/optimistic-locking.md) | `If-Match` / `412` semantics for organization updates, ETags, conditional GETs, and metrics. |
 | [Infra: Control Plane](./.claude/context/infra-control-plane.md) | CDK project, 1Password integration, DynamoDB Global Table, and xtask infra commands. |
