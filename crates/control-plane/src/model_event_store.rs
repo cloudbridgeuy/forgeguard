@@ -25,7 +25,7 @@ use forgeguard_core::Segment;
 
 use crate::dynamo_store::{get_s, map_sdk_error, pk, sk, ORG_PREFIX};
 use crate::error::{Error, Result};
-use crate::event_log::{DynamoEventLog, StateDelete, StatePut};
+use crate::event_log::{DynamoEventLog, StateDelete, StateGuard, StatePut};
 use crate::promotion_store::{
     promotion_event_payload, promotion_fgrn, promotion_sk, promotion_state_put, PromotionEntry,
     PromotionStatePutParams, PROMO_PREFIX,
@@ -72,6 +72,7 @@ pub(crate) fn principal_state_put(
         pk: format!("{ORG_PREFIX}{org_id}"),
         sk: format!("{PRINCIPAL_PREFIX}{native_id}"),
         attributes,
+        guard: StateGuard::None,
     })
 }
 
@@ -480,7 +481,7 @@ impl ModelEventStore for DynamoModelEventStore {
         let updated_at = chrono::Utc::now().to_rfc3339();
         let state = principal_state_put(org_id, native_id, &payload_bytes, &updated_at)?;
 
-        log.append(build, state).await
+        log.append(None, build, state).await
     }
 
     async fn events_after(
@@ -557,7 +558,7 @@ impl ModelEventStore for DynamoModelEventStore {
             })
         };
 
-        log.append(build, state).await
+        log.append(None, build, state).await
     }
 
     async fn tombstone_promotion(

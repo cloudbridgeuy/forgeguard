@@ -91,6 +91,7 @@ pub(crate) fn promotion_state_put(params: PromotionStatePutParams<'_>) -> StateP
         pk: format!("{ORG_PREFIX}{}", params.org_id),
         sk: promotion_sk(params.resource_type, params.native_id),
         attributes,
+        guard: crate::event_log::StateGuard::None,
     }
 }
 

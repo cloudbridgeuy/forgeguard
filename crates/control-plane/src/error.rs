@@ -20,6 +20,10 @@ pub(crate) enum Error {
     /// Draft with no config attached yet — any `If-Match` fails closed).
     #[error("precondition failed (current etag: {current_etag:?})")]
     PreconditionFailed { current_etag: Option<Etag> },
+    /// The caller's `X-Fg-If-Revision` value did not match the current
+    /// revision at append time.
+    #[error("revision mismatch (current revision: {current})")]
+    RevisionMismatch { current: u64 },
     /// An etag value was empty or otherwise malformed.
     #[error("invalid etag: {raw}")]
     InvalidEtag { raw: String },

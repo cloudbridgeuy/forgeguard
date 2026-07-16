@@ -32,11 +32,23 @@ const EVT_SK_MAX: &str = "EVT#99999999999999999999";
 /// concurrent-writer count rather than a fixed small constant.
 const MAX_APPEND_ATTEMPTS: u32 = 50;
 
+/// Whether a [`StatePut`]'s state item must not already exist.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum StateGuard {
+    /// No condition on the state item (the common case: create-or-overwrite).
+    #[default]
+    None,
+    /// The state item must not already exist — used by org creation so a
+    /// duplicate `create_org` cannot silently overwrite an existing org.
+    MustNotExist,
+}
+
 /// One state write that must land atomically with its event (D9/A1).
 pub(crate) struct StatePut {
     pub(crate) pk: String,
     pub(crate) sk: String,
     pub(crate) attributes: HashMap<String, AttributeValue>,
+    pub(crate) guard: StateGuard,
 }
 
 /// One state delete that must land atomically with its event (D7: tombstone
@@ -231,11 +243,17 @@ impl DynamoEventLog {
     /// new candidate revision).
     pub(crate) async fn append(
         &self,
+        expected_revision: Option<Revision>,
         build: impl Fn(Revision) -> (EventEnvelope, Vec<u8>),
         state: StatePut,
     ) -> Result<Revision> {
         for attempt in 0..MAX_APPEND_ATTEMPTS {
             let current = self.read_counter().await?;
+            if let Some(expected) = expected_revision {
+                if current != expected.value() {
+                    return Err(Error::RevisionMismatch { current });
+                }
+            }
             let candidate = current + 1;
             let revision = Revision::new(candidate);
             let (envelope, payload_bytes) = build(revision);
@@ -246,9 +264,15 @@ impl DynamoEventLog {
             let mut state_attrs = state.attributes.clone();
             state_attrs.insert(pk().to_string(), AttributeValue::S(state.pk.clone()));
             state_attrs.insert(sk().to_string(), AttributeValue::S(state.sk.clone()));
-            let state_put = Put::builder()
+            let mut state_put_builder = Put::builder()
                 .table_name(&self.table_name)
-                .set_item(Some(state_attrs))
+                .set_item(Some(state_attrs));
+            if state.guard == StateGuard::MustNotExist {
+                state_put_builder = state_put_builder
+                    .condition_expression("attribute_not_exists(#pk)")
+                    .expression_attribute_names("#pk", pk());
+            }
+            let state_put = state_put_builder
                 .build()
                 .map_err(|e| Error::Store(format!("build state put: {e}")))?;
 
@@ -264,12 +288,35 @@ impl DynamoEventLog {
             match result {
                 Ok(_) => return Ok(revision),
                 Err(sdk_err) => {
+                    let cancellation_reasons = match &sdk_err {
+                        aws_sdk_dynamodb::error::SdkError::ServiceError(e) => match e.err() {
+                            TransactWriteItemsError::TransactionCanceledException(cancelled) => {
+                                Some(cancelled.cancellation_reasons())
+                            }
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+
+                    if state.guard == StateGuard::MustNotExist {
+                        // Transaction item order is [counter, event, state
+                        // put] — index 2 is the state item. `MustNotExist`
+                        // failing here is a permanent condition (the org
+                        // already exists), not a counter race, so it must
+                        // not be retried.
+                        let state_failed = cancellation_reasons
+                            .and_then(|reasons| reasons.get(2))
+                            .and_then(|r| r.code())
+                            .is_some_and(|c| c == "ConditionalCheckFailed");
+                        if state_failed {
+                            return Err(Error::Conflict(format!(
+                                "state item already exists for '{}'",
+                                self.org_pk
+                            )));
+                        }
+                    }
                     let is_last_attempt = attempt + 1 == MAX_APPEND_ATTEMPTS;
-                    let is_cancelled = matches!(
-                        &sdk_err,
-                        aws_sdk_dynamodb::error::SdkError::ServiceError(e)
-                            if e.err().is_transaction_canceled_exception()
-                    );
+                    let is_cancelled = cancellation_reasons.is_some();
                     if is_cancelled && !is_last_attempt {
                         // Small linear backoff to de-correlate retries under
                         // heavy concurrent contention on the same counter.
@@ -558,6 +605,7 @@ mod tests {
             pk: format!("{ORG_PREFIX}acme"),
             sk: format!("PRINCIPAL#usr_{seq}"),
             attributes,
+            guard: StateGuard::None,
         }
     }
 
@@ -572,7 +620,10 @@ mod tests {
     async fn first_append_returns_revision_1_and_persists_items() {
         let log = new_log().await;
 
-        let revision = log.append(sample_envelope, state_put(1)).await.unwrap();
+        let revision = log
+            .append(None, sample_envelope, state_put(1))
+            .await
+            .unwrap();
         assert_eq!(revision, Revision::new(1));
 
         let counter = log.read_counter().await.unwrap();
@@ -596,8 +647,14 @@ mod tests {
     async fn two_sequential_appends_produce_no_gap() {
         let log = new_log().await;
 
-        let r1 = log.append(sample_envelope, state_put(1)).await.unwrap();
-        let r2 = log.append(sample_envelope, state_put(2)).await.unwrap();
+        let r1 = log
+            .append(None, sample_envelope, state_put(1))
+            .await
+            .unwrap();
+        let r2 = log
+            .append(None, sample_envelope, state_put(2))
+            .await
+            .unwrap();
 
         assert_eq!(r1, Revision::new(1));
         assert_eq!(r2, Revision::new(2));
@@ -611,7 +668,9 @@ mod tests {
         for i in 0..20u64 {
             let log = log.clone();
             handles.push(tokio::spawn(async move {
-                log.append(sample_envelope, state_put(i)).await.unwrap()
+                log.append(None, sample_envelope, state_put(i))
+                    .await
+                    .unwrap()
             }));
         }
 
@@ -627,9 +686,15 @@ mod tests {
     #[tokio::test]
     async fn events_after_returns_ascending_deserializable_envelopes() {
         let log = new_log().await;
-        log.append(sample_envelope, state_put(1)).await.unwrap();
-        log.append(sample_envelope, state_put(2)).await.unwrap();
-        log.append(sample_envelope, state_put(3)).await.unwrap();
+        log.append(None, sample_envelope, state_put(1))
+            .await
+            .unwrap();
+        log.append(None, sample_envelope, state_put(2))
+            .await
+            .unwrap();
+        log.append(None, sample_envelope, state_put(3))
+            .await
+            .unwrap();
 
         let page = log.events_after(Revision::new(0), 10).await.unwrap();
         let seqs: Vec<u64> = page.iter().map(|e| e.seq().value()).collect();
@@ -639,11 +704,45 @@ mod tests {
     #[tokio::test]
     async fn latest_revision_matches_last_append() {
         let log = new_log().await;
-        log.append(sample_envelope, state_put(1)).await.unwrap();
-        let r2 = log.append(sample_envelope, state_put(2)).await.unwrap();
+        log.append(None, sample_envelope, state_put(1))
+            .await
+            .unwrap();
+        let r2 = log
+            .append(None, sample_envelope, state_put(2))
+            .await
+            .unwrap();
 
         let latest = log.latest_revision().await.unwrap();
         assert_eq!(latest, r2);
+    }
+
+    #[tokio::test]
+    async fn append_with_must_not_exist_conflicts_on_second_put() {
+        let log = new_log().await;
+        let mut state = state_put(1);
+        state.guard = StateGuard::MustNotExist;
+        log.append(None, sample_envelope, state).await.unwrap();
+
+        let mut state = state_put(1);
+        state.guard = StateGuard::MustNotExist;
+        let err = log.append(None, sample_envelope, state).await.unwrap_err();
+        assert!(matches!(err, Error::Conflict(_)));
+        assert_eq!(log.read_counter().await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn append_with_expected_revision_mismatch_returns_error_without_appending() {
+        let log = new_log().await;
+        log.append(None, sample_envelope, state_put(1))
+            .await
+            .unwrap();
+
+        let err = log
+            .append(Some(Revision::new(0)), sample_envelope, state_put(2))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::RevisionMismatch { current: 1 }));
+        assert_eq!(log.read_counter().await.unwrap(), 1);
     }
 
     fn tombstone_envelope(seq: Revision) -> (EventEnvelope, Vec<u8>) {
@@ -667,11 +766,13 @@ mod tests {
     async fn append_with_delete_removes_item_and_appends_event() {
         let log = new_log().await;
         log.append(
+            None,
             sample_envelope,
             StatePut {
                 pk: format!("{ORG_PREFIX}acme"),
                 sk: "PROMO#document#doc_1".to_string(),
                 attributes: HashMap::new(),
+                guard: StateGuard::None,
             },
         )
         .await
