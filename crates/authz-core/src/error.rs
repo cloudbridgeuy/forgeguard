@@ -47,6 +47,17 @@ pub enum Error {
     /// An `EventId` failed to parse (e.g. empty string).
     #[error("invalid event id: {0}")]
     InvalidEventId(String),
+
+    /// An event could not be folded into entity state (V5 time travel):
+    /// unknown-to-the-fold kind, missing subject identity (pre-V5 payload),
+    /// or a sequence gap in the supplied log prefix.
+    #[error("unfoldable event at seq {seq}: {reason}")]
+    UnfoldableEvent {
+        /// The offending event's log sequence number.
+        seq: u64,
+        /// Why the event cannot be folded.
+        reason: String,
+    },
 }
 
 /// Convenience alias used throughout this crate.
@@ -79,6 +90,18 @@ mod tests {
     fn display_unknown_entity() {
         let err = Error::UnknownEntity("fgrn:acme:principal:maria".into());
         assert_eq!(err.to_string(), "unknown entity: fgrn:acme:principal:maria");
+    }
+
+    #[test]
+    fn display_unfoldable_event() {
+        let err = Error::UnfoldableEvent {
+            seq: 3,
+            reason: "no fold rule for kind grant.added".into(),
+        };
+        assert_eq!(
+            err.to_string(),
+            "unfoldable event at seq 3: no fold rule for kind grant.added"
+        );
     }
 
     #[test]

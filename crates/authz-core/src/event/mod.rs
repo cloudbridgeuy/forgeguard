@@ -3,12 +3,14 @@
 
 mod canonical;
 mod envelope;
+mod fold;
 mod kind;
 mod log;
 mod upsert;
 
 pub use canonical::{canonical_envelope_bytes, canonical_event_bytes};
 pub use envelope::{Actor, EventDraft, EventDraftParams, EventEnvelope, EventId, SCHEMA_VERSION};
+pub use fold::principal_event_payload;
 pub use kind::EventKind;
 pub use log::EventLog;
 pub use upsert::{decide_upsert, UpsertDecision};
