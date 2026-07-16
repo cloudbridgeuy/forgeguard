@@ -1,5 +1,6 @@
 pub(crate) mod events;
 pub(crate) mod groups;
+pub(crate) mod if_revision;
 mod keys;
 pub(crate) mod min_revision;
 pub(crate) mod principals;
