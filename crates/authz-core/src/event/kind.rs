@@ -7,6 +7,10 @@ use crate::error::{Error, Result};
 /// The kind of mutation an appended event records.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EventKind {
+    /// An organization was created.
+    OrgCreated,
+    /// An organization was updated.
+    OrgUpdated,
     /// An org unit was created or updated.
     OrgUnitPut,
     /// A principal was created or updated.
@@ -31,6 +35,8 @@ impl EventKind {
     /// The wire-format name persisted in the event log and served to clients.
     pub fn as_str(&self) -> &'static str {
         match self {
+            Self::OrgCreated => "org.created",
+            Self::OrgUpdated => "org.updated",
             Self::OrgUnitPut => "org_unit.put",
             Self::PrincipalUpserted => "principal.upserted",
             Self::PrincipalSetPut => "principal_set.put",
@@ -66,6 +72,8 @@ impl FromStr for EventKind {
 
     fn from_str(s: &str) -> Result<Self> {
         match s {
+            "org.created" => Ok(Self::OrgCreated),
+            "org.updated" => Ok(Self::OrgUpdated),
             "org_unit.put" => Ok(Self::OrgUnitPut),
             "principal.upserted" => Ok(Self::PrincipalUpserted),
             "principal_set.put" => Ok(Self::PrincipalSetPut),
@@ -87,7 +95,9 @@ impl FromStr for EventKind {
 mod tests {
     use super::*;
 
-    const ALL_KINDS: [EventKind; 9] = [
+    const ALL_KINDS: [EventKind; 11] = [
+        EventKind::OrgCreated,
+        EventKind::OrgUpdated,
         EventKind::OrgUnitPut,
         EventKind::PrincipalUpserted,
         EventKind::PrincipalSetPut,
@@ -110,6 +120,8 @@ mod tests {
 
     #[test]
     fn narrowing_truth_table() {
+        assert!(!EventKind::OrgCreated.narrowing());
+        assert!(!EventKind::OrgUpdated.narrowing());
         assert!(!EventKind::OrgUnitPut.narrowing());
         assert!(!EventKind::PrincipalUpserted.narrowing());
         assert!(!EventKind::PrincipalSetPut.narrowing());
