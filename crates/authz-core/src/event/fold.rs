@@ -38,6 +38,8 @@ pub struct FoldedState {
     principals: BTreeMap<String, serde_json::Value>,
     /// `(resource_type, native_id) -> fgrn` for live promotions.
     promotions: BTreeMap<(String, String), String>,
+    /// The latest `org.created`/`org.updated` payload, if any.
+    org: Option<serde_json::Value>,
 }
 
 impl FoldedState {
@@ -47,6 +49,7 @@ impl FoldedState {
             revision: Revision::new(0),
             principals: BTreeMap::new(),
             promotions: BTreeMap::new(),
+            org: None,
         }
     }
 
@@ -76,6 +79,36 @@ impl FoldedState {
     pub fn promotions(&self) -> &BTreeMap<(String, String), String> {
         &self.promotions
     }
+
+    /// The latest org payload folded so far, if any.
+    pub fn org(&self) -> Option<&serde_json::Value> {
+        self.org.as_ref()
+    }
+}
+
+/// Build the `org.created`/`org.updated` event payload: the full
+/// post-mutation `Organization` plus its `OrgConfig` (or `null` if
+/// unconfigured). Signing keys never enter payloads — they're not on
+/// `Organization`.
+pub fn org_event_payload(
+    organization: &serde_json::Value,
+    config: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "organization": organization,
+        "config": config,
+    })
+}
+
+/// The semantic view of an org payload used for no-op detection: identical
+/// to the payload except `organization.updated_at` is stripped, since a
+/// timestamp bump alone must not count as a change.
+pub fn org_semantic_view(payload: &serde_json::Value) -> serde_json::Value {
+    let mut view = payload.clone();
+    if let Some(org) = view.get_mut("organization").and_then(|v| v.as_object_mut()) {
+        org.remove("updated_at");
+    }
+    view
 }
 
 /// Fold `events` (the log prefix from seq 1, ascending, gap-free) into the
@@ -93,6 +126,7 @@ pub fn fold_events(events: &[EventEnvelope], at: Revision) -> Result<FoldedState
         revision: at,
         principals: BTreeMap::new(),
         promotions: BTreeMap::new(),
+        org: None,
     };
     for (index, event) in events.iter().enumerate() {
         let seq = event.seq().value();
@@ -154,6 +188,15 @@ fn apply_event(event: &EventEnvelope, state: &mut FoldedState) -> Result<()> {
             state
                 .promotions
                 .remove(&(payload_str("resource_type")?, payload_str("native_id")?));
+        }
+        EventKind::OrgCreated | EventKind::OrgUpdated => {
+            if !event.payload()["organization"].is_object() {
+                return Err(unfoldable(format!(
+                    "{} payload missing object field organization",
+                    event.kind()
+                )));
+            }
+            state.org = Some(event.payload().clone());
         }
         other => {
             return Err(unfoldable(format!("no fold rule for kind {other}")));
@@ -335,5 +378,63 @@ mod tests {
         assert_eq!(state.revision(), Revision::new(0));
         assert!(state.principals().is_empty());
         assert!(state.promotions().is_empty());
+        assert!(state.org().is_none());
+    }
+
+    #[test]
+    fn org_created_then_updated_folds_to_latest() {
+        let created = org_event_payload(&serde_json::json!({ "name": "Acme" }), None);
+        let updated = org_event_payload(&serde_json::json!({ "name": "Acme Inc" }), None);
+        let events = vec![
+            envelope(1, EventKind::OrgCreated, created.clone()),
+            envelope(2, EventKind::OrgUpdated, updated.clone()),
+        ];
+
+        let at_one = fold_events(&events, Revision::new(1)).unwrap();
+        assert_eq!(at_one.org(), Some(&created));
+
+        let at_two = fold_events(&events, Revision::new(2)).unwrap();
+        assert_eq!(at_two.org(), Some(&updated));
+    }
+
+    #[test]
+    fn org_payload_missing_organization_is_unfoldable() {
+        let events = vec![envelope(1, EventKind::OrgCreated, serde_json::json!({}))];
+        let err = fold_events(&events, Revision::new(1)).unwrap_err();
+        assert!(matches!(err, Error::UnfoldableEvent { seq: 1, .. }));
+        assert!(err
+            .to_string()
+            .contains("missing object field organization"));
+    }
+
+    #[test]
+    fn org_semantic_view_ignores_updated_at() {
+        let a = org_event_payload(
+            &serde_json::json!({ "name": "Acme", "updated_at": "2026-01-01T00:00:00Z" }),
+            None,
+        );
+        let b = org_event_payload(
+            &serde_json::json!({ "name": "Acme", "updated_at": "2026-07-15T00:00:00Z" }),
+            None,
+        );
+        assert_eq!(org_semantic_view(&a), org_semantic_view(&b));
+
+        let c = org_event_payload(
+            &serde_json::json!({ "name": "Acme Inc", "updated_at": "2026-01-01T00:00:00Z" }),
+            None,
+        );
+        assert_ne!(org_semantic_view(&a), org_semantic_view(&c));
+    }
+
+    #[test]
+    fn org_event_payload_shape() {
+        let payload = org_event_payload(&serde_json::json!({ "name": "Acme" }), None);
+        assert_eq!(
+            payload,
+            serde_json::json!({
+                "organization": { "name": "Acme" },
+                "config": null,
+            })
+        );
     }
 }
