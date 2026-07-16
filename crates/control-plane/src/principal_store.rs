@@ -15,8 +15,8 @@ use ed25519_dalek::pkcs8::spki::der::pem::LineEnding;
 use ed25519_dalek::pkcs8::{DecodePrivateKey as _, EncodePublicKey as _};
 use forgeguard_authn_core::signing::{sign_bytes, SigningKey};
 use forgeguard_authz_core::{
-    canonical_event_bytes, Actor, EventDraft, EventDraftParams, EventEnvelope, EventId, EventKind,
-    EventLog, InMemoryEventLog, Revision,
+    canonical_event_bytes, principal_event_payload, Actor, EventDraft, EventDraftParams,
+    EventEnvelope, EventId, EventKind, EventLog, InMemoryEventLog, Revision,
 };
 use forgeguard_core::NativeId;
 
@@ -139,6 +139,8 @@ pub(crate) trait PrincipalEventStore: Send + Sync {
 
     /// Mint an `EventId`/`occurred_at`, build+sign the envelope, and append it
     /// alongside the principal's new state item — all inside one transaction.
+    /// The appended envelope's payload is the V5 identity wrapper
+    /// (`principal_event_payload`); the state item keeps the raw doc.
     async fn upsert_changed(
         &self,
         org_id: &str,
@@ -417,13 +419,13 @@ impl PrincipalEventStore for DynamoPrincipalEventStore {
         let log = DynamoEventLog::new(self.client.clone(), self.table_name.clone(), org_id);
 
         let org_id_owned = org_id.to_string();
-        let payload_for_state = payload.clone();
+        let event_payload = principal_event_payload(native_id, &payload);
         let build = move |revision: Revision| {
             build_model_event(BuildModelEventParams {
                 org_id: &org_id_owned,
                 kind: EventKind::PrincipalUpserted,
                 actor: actor.clone(),
-                payload: payload_for_state.clone(),
+                payload: event_payload.clone(),
                 signing_key: &signing_key,
                 key_id: &key_id,
                 occurred_at: &occurred_at,
@@ -431,9 +433,10 @@ impl PrincipalEventStore for DynamoPrincipalEventStore {
             })
         };
 
-        // Peek the payload bytes once up front for the `StatePut` — the
-        // exact bytes stored are `serde_json::to_vec(&payload)`, matching
-        // what `build_principal_event` embeds in the envelope.
+        // The state item stores the raw doc (`serde_json::to_vec(&payload)`);
+        // the envelope's payload is the V5 identity wrapper built above —
+        // the two deliberately diverge so the fold can recover the subject
+        // while `decide_upsert` keeps comparing raw docs.
         let payload_bytes = serde_json::to_vec(&payload)
             .map_err(|e| Error::Store(format!("serialize principal payload: {e}")))?;
         let updated_at = chrono::Utc::now().to_rfc3339();
@@ -733,8 +736,9 @@ impl PrincipalEventStore for InMemoryPrincipalEventStore {
         actor: Actor,
         payload: serde_json::Value,
     ) -> Result<Revision> {
+        let event_payload = principal_event_payload(native_id, &payload);
         let revision = self
-            .mint_and_push(org_id, EventKind::PrincipalUpserted, actor, payload.clone())
+            .mint_and_push(org_id, EventKind::PrincipalUpserted, actor, event_payload)
             .await?;
 
         let mut guard = self

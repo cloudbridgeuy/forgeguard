@@ -308,3 +308,17 @@ async fn missing_org_returns_404() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn principal_event_payload_carries_subject_identity() {
+    let app = test_app(build_test_store());
+    put_principal(&app, "usr_1", serde_json::json!({ "role": "member" })).await;
+
+    let resp = get_events(&app, "after=0").await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp).await;
+    assert_eq!(
+        json["events"][0]["payload"],
+        serde_json::json!({ "native_id": "usr_1", "principal": { "role": "member" } })
+    );
+}
