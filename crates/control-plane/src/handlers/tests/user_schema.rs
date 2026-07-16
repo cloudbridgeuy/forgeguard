@@ -75,7 +75,7 @@ async fn seed_org_with_status(
 ) {
     let id = OrganizationId::new(org_id).unwrap();
     let org = Organization::new(id, format!("{org_id} org"), status, Utc::now());
-    store.create(org, None).await.unwrap();
+    store.write_through_org(org, None).await;
 }
 
 type Response = axum::response::Response;

@@ -185,15 +185,11 @@ fn compute_etag_quoted_hex_format() {
 }
 
 #[tokio::test]
-async fn create_org_success() {
+async fn write_through_org_creates_new_row() {
     let store = InMemoryOrgStore::new(BTreeMap::new());
     let now = Utc::now();
-    let org = Organization::new(
-        OrganizationId::new("org-new").unwrap(),
-        "New Org".to_string(),
-        OrgStatus::Draft,
-        now,
-    );
+    let org_id = OrganizationId::new("org-new").unwrap();
+    let org = Organization::new(org_id.clone(), "New Org".to_string(), OrgStatus::Draft, now);
     let config: OrgConfig = serde_json::from_value(serde_json::json!({
         "version": "2026-04-07",
         "project_id": "proj",
@@ -202,49 +198,39 @@ async fn create_org_success() {
     }))
     .unwrap();
 
-    let record = store.create(org, Some(config)).await.unwrap();
-    assert_eq!(record.org().name(), "New Org");
-    assert_eq!(record.org().status(), OrgStatus::Draft);
+    store.write_through_org(org, Some(config)).await;
 
-    // Verify it's retrievable
-    let fetched = store
-        .get(&OrganizationId::new("org-new").unwrap())
-        .await
-        .unwrap();
-    assert!(fetched.is_some());
+    let fetched = store.get(&org_id).await.unwrap().unwrap();
+    assert_eq!(fetched.org().name(), "New Org");
+    assert_eq!(fetched.org().status(), OrgStatus::Draft);
 }
 
 #[tokio::test]
-async fn create_org_without_config_round_trips_as_draft() {
+async fn write_through_org_without_config_round_trips_as_draft() {
     let store = InMemoryOrgStore::new(BTreeMap::new());
     let now = Utc::now();
+    let org_id = OrganizationId::new("org-draft").unwrap();
     let org = Organization::new(
-        OrganizationId::new("org-draft").unwrap(),
+        org_id.clone(),
         "Draft Org".to_string(),
         OrgStatus::Draft,
         now,
     );
 
-    let record = store.create(org, None).await.unwrap();
-    assert!(record.configured().is_none(), "configured should be None");
+    store.write_through_org(org, None).await;
 
-    // Re-fetch
-    let fetched = store
-        .get(&OrganizationId::new("org-draft").unwrap())
-        .await
-        .unwrap()
-        .unwrap();
+    let fetched = store.get(&org_id).await.unwrap().unwrap();
     assert!(fetched.configured().is_none());
     assert_eq!(fetched.org().status(), OrgStatus::Draft);
 }
 
 #[tokio::test]
-async fn update_promotes_draft_to_configured() {
+async fn write_through_org_upsert_promotes_draft_to_configured() {
     let store = InMemoryOrgStore::new(BTreeMap::new());
     let now = Utc::now();
     let org_id = OrganizationId::new("org-promote").unwrap();
     let org = Organization::new(org_id.clone(), "Promote".to_string(), OrgStatus::Draft, now);
-    store.create(org, None).await.unwrap();
+    store.write_through_org(org, None).await;
 
     let later = now + chrono::Duration::seconds(1);
     let updated_org = Organization::new(
@@ -261,11 +247,10 @@ async fn update_promotes_draft_to_configured() {
     }))
     .unwrap();
 
-    let record = store
-        .update(&org_id, updated_org, Some(config), None)
-        .await
-        .unwrap();
-    assert!(record.configured().is_some());
+    store.write_through_org(updated_org, Some(config)).await;
+
+    let fetched = store.get(&org_id).await.unwrap().unwrap();
+    assert!(fetched.configured().is_some());
 }
 
 #[tokio::test]
@@ -358,36 +343,6 @@ async fn build_org_store_status_draft_explicit_with_config() {
 }
 
 #[tokio::test]
-async fn create_org_duplicate_fails() {
-    let store = InMemoryOrgStore::new(BTreeMap::new());
-    let now = Utc::now();
-    let config: OrgConfig = serde_json::from_value(serde_json::json!({
-        "version": "2026-04-07",
-        "project_id": "proj",
-        "upstream_url": "https://example.com",
-        "default_policy": "deny"
-    }))
-    .unwrap();
-
-    let org1 = Organization::new(
-        OrganizationId::new("org-dup").unwrap(),
-        "First".to_string(),
-        OrgStatus::Draft,
-        now,
-    );
-    store.create(org1, Some(config.clone())).await.unwrap();
-
-    let org2 = Organization::new(
-        OrganizationId::new("org-dup").unwrap(),
-        "Second".to_string(),
-        OrgStatus::Draft,
-        now,
-    );
-    let result = store.create(org2, Some(config)).await;
-    assert!(result.is_err());
-}
-
-#[tokio::test]
 async fn list_orgs_empty() {
     let store = InMemoryOrgStore::new(BTreeMap::new());
     let result = store.list(0, 10).await.unwrap();
@@ -395,11 +350,12 @@ async fn list_orgs_empty() {
 }
 
 #[tokio::test]
-async fn update_org_success() {
+async fn write_through_org_upsert_replaces_existing_row() {
     let store = InMemoryOrgStore::new(BTreeMap::new());
     let now = Utc::now();
+    let org_id = OrganizationId::new("org-upd").unwrap();
     let org = Organization::new(
-        OrganizationId::new("org-upd").unwrap(),
+        org_id.clone(),
         "Original".to_string(),
         OrgStatus::Draft,
         now,
@@ -411,9 +367,8 @@ async fn update_org_success() {
         "default_policy": "deny"
     }))
     .unwrap();
-    store.create(org, Some(config)).await.unwrap();
+    store.write_through_org(org, Some(config)).await;
 
-    let org_id = OrganizationId::new("org-upd").unwrap();
     let later = now + chrono::Duration::seconds(1);
     let updated_org = Organization::new(
         org_id.clone(),
@@ -429,10 +384,9 @@ async fn update_org_success() {
     }))
     .unwrap();
 
-    let record = store
-        .update(&org_id, updated_org, Some(new_config), None)
-        .await
-        .unwrap();
+    store.write_through_org(updated_org, Some(new_config)).await;
+
+    let record = store.get(&org_id).await.unwrap().unwrap();
     assert_eq!(record.org().name(), "Updated");
     assert_eq!(
         record.config().unwrap().upstream_url(),
@@ -441,60 +395,10 @@ async fn update_org_success() {
 }
 
 #[tokio::test]
-async fn update_org_not_found() {
-    let store = InMemoryOrgStore::new(BTreeMap::new());
-    let org_id = OrganizationId::new("org-missing").unwrap();
-    let now = Utc::now();
-    let org = Organization::new(org_id.clone(), "Ghost".to_string(), OrgStatus::Draft, now);
-    let config: OrgConfig = serde_json::from_value(serde_json::json!({
-        "version": "2026-04-07",
-        "project_id": "proj",
-        "upstream_url": "https://example.com",
-        "default_policy": "deny"
-    }))
-    .unwrap();
-
-    let result = store.update(&org_id, org, Some(config), None).await;
-    assert!(result.is_err());
-}
-
-#[tokio::test]
-async fn delete_org_success() {
-    let store = InMemoryOrgStore::new(BTreeMap::new());
-    let now = Utc::now();
-    let org = Organization::new(
-        OrganizationId::new("org-del").unwrap(),
-        "To Delete".to_string(),
-        OrgStatus::Draft,
-        now,
-    );
-    let config: OrgConfig = serde_json::from_value(serde_json::json!({
-        "version": "2026-04-07",
-        "project_id": "proj",
-        "upstream_url": "https://example.com",
-        "default_policy": "deny"
-    }))
-    .unwrap();
-    store.create(org, Some(config)).await.unwrap();
-
-    let org_id = OrganizationId::new("org-del").unwrap();
-    store.delete(&org_id).await.unwrap();
-    assert!(store.get(&org_id).await.unwrap().is_none());
-}
-
-#[tokio::test]
-async fn delete_org_not_found() {
-    let store = InMemoryOrgStore::new(BTreeMap::new());
-    let org_id = OrganizationId::new("org-nope").unwrap();
-    let result = store.delete(&org_id).await;
-    assert!(result.is_ok());
-}
-
-#[tokio::test]
 async fn list_orgs_with_pagination() {
     let store = InMemoryOrgStore::new(BTreeMap::new());
     let now = Utc::now();
-    // Create 3 orgs
+    // Seed 3 orgs
     for i in 0..3 {
         let org = Organization::new(
             OrganizationId::new(format!("org-{i}")).unwrap(),
@@ -509,7 +413,7 @@ async fn list_orgs_with_pagination() {
             "default_policy": "deny"
         }))
         .unwrap();
-        store.create(org, Some(config)).await.unwrap();
+        store.write_through_org(org, Some(config)).await;
     }
 
     // List all
@@ -642,110 +546,6 @@ async fn revoke_key_nonexistent_key_returns_error() {
         matches!(err, Error::NotFound(_)),
         "expected NotFound, got: {err:?}"
     );
-}
-
-// ---------------------------------------------------------------------
-// Optimistic-locking tests (issue #56, V1)
-// ---------------------------------------------------------------------
-
-#[tokio::test]
-async fn update_with_matching_expected_etag_succeeds() {
-    use crate::etag::Etag;
-
-    let store = build_org_store(sample_json()).unwrap();
-    let org_id = OrganizationId::new("org-acme").unwrap();
-
-    let record = store.get(&org_id).await.unwrap().unwrap();
-    let current_etag: Etag = record
-        .configured()
-        .expect("sample has config")
-        .etag()
-        .clone();
-
-    let new_config = record.config().cloned();
-    let new_org = record.org().clone();
-    let updated = store
-        .update(&org_id, new_org, new_config, Some(&current_etag))
-        .await
-        .unwrap();
-
-    // Same content → same etag.
-    assert_eq!(updated.configured().unwrap().etag(), &current_etag);
-}
-
-#[tokio::test]
-async fn update_with_stale_expected_etag_returns_precondition_failed() {
-    use crate::etag::Etag;
-
-    let store = build_org_store(sample_json()).unwrap();
-    let org_id = OrganizationId::new("org-acme").unwrap();
-    let record = store.get(&org_id).await.unwrap().unwrap();
-
-    let stale = Etag::try_new("\"definitely-not-the-etag\"").unwrap();
-    let result = store
-        .update(
-            &org_id,
-            record.org().clone(),
-            record.config().cloned(),
-            Some(&stale),
-        )
-        .await;
-
-    match result {
-        Err(Error::PreconditionFailed { current_etag }) => {
-            assert_eq!(
-                current_etag.as_ref(),
-                Some(record.configured().unwrap().etag())
-            );
-        }
-        other => panic!("expected PreconditionFailed, got {other:?}"),
-    }
-}
-
-#[tokio::test]
-async fn update_without_expected_etag_writes_unconditionally() {
-    let store = build_org_store(sample_json()).unwrap();
-    let org_id = OrganizationId::new("org-acme").unwrap();
-    let record = store.get(&org_id).await.unwrap().unwrap();
-
-    let updated = store
-        .update(
-            &org_id,
-            record.org().clone(),
-            record.config().cloned(),
-            None,
-        )
-        .await
-        .unwrap();
-    assert!(updated.configured().is_some());
-}
-
-#[tokio::test]
-async fn update_draft_with_expected_etag_fails_with_none_current() {
-    use crate::etag::Etag;
-
-    let json = r#"{
-            "organizations": {
-                "org-draft": {
-                    "name": "Draft Org"
-                }
-            }
-        }"#;
-    let store = build_org_store(json).unwrap();
-    let org_id = OrganizationId::new("org-draft").unwrap();
-    let record = store.get(&org_id).await.unwrap().unwrap();
-
-    let expected = Etag::try_new("\"anything\"").unwrap();
-    let result = store
-        .update(&org_id, record.org().clone(), None, Some(&expected))
-        .await;
-
-    match result {
-        Err(Error::PreconditionFailed { current_etag }) => {
-            assert!(current_etag.is_none(), "Draft has no etag — expected None");
-        }
-        other => panic!("expected PreconditionFailed with None current, got {other:?}"),
-    }
 }
 
 #[tokio::test]

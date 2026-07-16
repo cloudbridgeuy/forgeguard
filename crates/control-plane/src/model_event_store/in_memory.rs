@@ -333,8 +333,8 @@ impl ModelEventStore for InMemoryModelEventStore {
         // exercised against DynamoDB Local.
         if let Some(org_store) = &self.org_store {
             org_store
-                .create(record.org().clone(), record.config().cloned())
-                .await?;
+                .write_through_org(record.org().clone(), record.config().cloned())
+                .await;
         }
 
         let mut guard = self.orgs.lock().map_err(|e| lock_poisoned("org", e))?;
@@ -374,13 +374,8 @@ impl ModelEventStore for InMemoryModelEventStore {
             // (checked above) is this store's optimistic-concurrency guard;
             // the write-through is just keeping the org read-model mirrored.
             org_store
-                .update(
-                    record.org().org_id(),
-                    record.org().clone(),
-                    record.config().cloned(),
-                    None,
-                )
-                .await?;
+                .write_through_org(record.org().clone(), record.config().cloned())
+                .await;
         }
 
         let mut guard = self.orgs.lock().map_err(|e| lock_poisoned("org", e))?;

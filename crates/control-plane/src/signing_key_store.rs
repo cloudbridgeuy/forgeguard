@@ -181,6 +181,26 @@ mod tests {
         .unwrap()
     }
 
+    /// Write an org item directly via `PutItem` (bypassing the retired
+    /// `OrgStore::create` — org writes now flow through `ModelEventStore`, but
+    /// these signing-key tests only need a row present in the shared table).
+    async fn put_test_org(
+        client: &aws_sdk_dynamodb::Client,
+        table: &str,
+        org: &forgeguard_core::Organization,
+        config: Option<crate::config::OrgConfig>,
+    ) {
+        let configured = config.map(crate::store::ConfiguredConfig::compute);
+        let item = crate::dynamo_store::to_item(org, configured.as_ref(), &[]).unwrap();
+        client
+            .put_item()
+            .table_name(table)
+            .set_item(Some(item))
+            .send()
+            .await
+            .unwrap();
+    }
+
     /// Helper: create an `OrgStore` + `DynamoSigningKeyStore` sharing the same
     /// table, with one org already inserted.
     async fn setup_with_org(
@@ -195,7 +215,7 @@ mod tests {
         create_test_table(&client, &table).await;
 
         let org_store = crate::dynamo_store::DynamoOrgStore::new(client.clone(), table.clone());
-        let key_store = DynamoSigningKeyStore::new(client, table);
+        let key_store = DynamoSigningKeyStore::new(client.clone(), table.clone());
 
         let org_id = forgeguard_core::OrganizationId::new(org_id_str).unwrap();
         let org = forgeguard_core::Organization::new(
@@ -204,7 +224,7 @@ mod tests {
             forgeguard_core::OrgStatus::Draft,
             chrono::Utc::now(),
         );
-        org_store.create(org, Some(sample_config())).await.unwrap();
+        put_test_org(&client, &table, &org, Some(sample_config())).await;
 
         (org_store, key_store, org_id)
     }

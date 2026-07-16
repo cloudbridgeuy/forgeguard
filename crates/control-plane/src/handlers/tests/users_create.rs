@@ -222,7 +222,7 @@ async fn draft_org_returns_409() {
     let store = Arc::new(InMemoryOrgStore::new(Default::default()));
     let org_id = OrganizationId::new(ORG).unwrap();
     let org = Organization::new(org_id, format!("{ORG} org"), OrgStatus::Draft, Utc::now());
-    store.create(org, None).await.unwrap();
+    store.write_through_org(org, None).await;
     let UsersTestApp { router, .. } = test_app_for_store(store);
 
     let resp = post(&router, payload("alice@example.com", Some("Alice"), &[])).await;
@@ -236,7 +236,7 @@ async fn deleted_org_returns_404() {
     let store = Arc::new(InMemoryOrgStore::new(Default::default()));
     let org_id = OrganizationId::new(ORG).unwrap();
     let org = Organization::new(org_id, format!("{ORG} org"), OrgStatus::Deleted, Utc::now());
-    store.create(org, None).await.unwrap();
+    store.write_through_org(org, None).await;
     let UsersTestApp { router, .. } = test_app_for_store(store);
 
     let resp = post(&router, payload("alice@example.com", Some("Alice"), &[])).await;

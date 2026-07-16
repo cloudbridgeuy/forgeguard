@@ -8,8 +8,7 @@ use tower::ServiceExt;
 use forgeguard_authz_core::Revision;
 
 use super::super::test_support::{
-    build_test_store, create_org_json, empty_store, test_app, test_app_with_principals,
-    TEST_API_KEY,
+    create_org_json, empty_store, test_app, test_app_with_principals, TEST_API_KEY,
 };
 use crate::vp_client::stub::happy_stub;
 
@@ -363,10 +362,15 @@ async fn update_unknown_org_returns_404() {
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
-// ── Delete tests ───────────────────────────────────────────────
+// ── Delete route retired (D9) ────────────────────────────────────
+//
+// Org deletion is not yet supported on the event-sourced log — the raw
+// `OrgStore::delete` write path and its `DELETE` route were retired. The
+// route now falls through to Axum's default `405 Method Not Allowed` for
+// an unregistered method on an existing path.
 
 #[tokio::test]
-async fn delete_draft_org() {
+async fn delete_route_returns_405() {
     let store = empty_store();
 
     // Create a draft org
@@ -382,8 +386,8 @@ async fn delete_draft_org() {
     let response = app.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::CREATED);
 
-    // Delete it
-    let app = test_app(Arc::clone(&store));
+    // DELETE is no longer a registered method on this path.
+    let app = test_app(store);
     let request = Request::builder()
         .method("DELETE")
         .uri("/api/v1/organizations/org-del")
@@ -391,96 +395,5 @@ async fn delete_draft_org() {
         .body(Body::empty())
         .unwrap();
     let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::NO_CONTENT);
-
-    // GET should return 404
-    let app = test_app(store);
-    let request = Request::builder()
-        .uri("/api/v1/organizations/org-del")
-        .header("x-api-key", TEST_API_KEY)
-        .body(Body::empty())
-        .unwrap();
-    let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
-}
-
-#[tokio::test]
-async fn delete_active_org() {
-    // File-loaded orgs are Active
-    let store = build_test_store();
-
-    let app = test_app(Arc::clone(&store));
-    let request = Request::builder()
-        .method("DELETE")
-        .uri("/api/v1/organizations/org-acme")
-        .header("x-api-key", TEST_API_KEY)
-        .body(Body::empty())
-        .unwrap();
-    let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::NO_CONTENT);
-
-    // GET should return 404
-    let app = test_app(store);
-    let request = Request::builder()
-        .uri("/api/v1/organizations/org-acme")
-        .header("x-api-key", TEST_API_KEY)
-        .body(Body::empty())
-        .unwrap();
-    let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
-}
-
-#[tokio::test]
-async fn delete_already_deleted_returns_204() {
-    let store = empty_store();
-
-    // Create then delete
-    let app = test_app(Arc::clone(&store));
-    let body = serde_json::to_string(&create_org_json("org-gone", "Gone")).unwrap();
-    let request = Request::builder()
-        .method("POST")
-        .uri("/api/v1/organizations")
-        .header("content-type", "application/json")
-        .header("x-api-key", TEST_API_KEY)
-        .body(Body::from(body))
-        .unwrap();
-    let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::CREATED);
-
-    let app = test_app(Arc::clone(&store));
-    let request = Request::builder()
-        .method("DELETE")
-        .uri("/api/v1/organizations/org-gone")
-        .header("x-api-key", TEST_API_KEY)
-        .body(Body::empty())
-        .unwrap();
-    let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::NO_CONTENT);
-
-    // Second delete is idempotent — still 204
-    let app = test_app(store);
-    let request = Request::builder()
-        .method("DELETE")
-        .uri("/api/v1/organizations/org-gone")
-        .header("x-api-key", TEST_API_KEY)
-        .body(Body::empty())
-        .unwrap();
-    let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::NO_CONTENT);
-}
-
-#[tokio::test]
-async fn delete_unknown_org_returns_204() {
-    let store = empty_store();
-    let app = test_app(store);
-
-    let request = Request::builder()
-        .method("DELETE")
-        .uri("/api/v1/organizations/org-nope")
-        .header("x-api-key", TEST_API_KEY)
-        .body(Body::empty())
-        .unwrap();
-
-    let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
 }

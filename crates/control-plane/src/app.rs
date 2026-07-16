@@ -199,7 +199,6 @@ const API_ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/v1/organizations"),
     ("GET", "/api/v1/organizations/{org_id}"),
     ("PUT", "/api/v1/organizations/{org_id}"),
-    ("DELETE", "/api/v1/organizations/{org_id}"),
     ("GET", "/api/v1/organizations/{org_id}/proxy-config"),
     ("POST", "/api/v1/organizations/{org_id}/keys"),
     ("GET", "/api/v1/organizations/{org_id}/keys"),
@@ -254,12 +253,6 @@ fn cp_route_actions() -> forgeguard_http::Result<Vec<RouteMapping>> {
             "PUT",
             "/api/v1/organizations/{org_id}",
             "cp:organization:update",
-            Some("org_id"),
-        ),
-        (
-            "DELETE",
-            "/api/v1/organizations/{org_id}",
-            "cp:organization:delete",
             Some("org_id"),
         ),
         (
@@ -515,9 +508,7 @@ fn build_router<V: VpClient + 'static>(state: AppState<V>, fg: Arc<ForgeGuard>) 
         )
         .route(
             "/api/v1/organizations/{org_id}",
-            get(handlers::get_handler)
-                .put(handlers::update_handler::<V>)
-                .delete(handlers::delete_handler),
+            get(handlers::get_handler).put(handlers::update_handler::<V>),
         )
         .route(
             "/api/v1/organizations/{org_id}/proxy-config",
@@ -593,8 +584,8 @@ mod tests {
         let mappings = cp_route_actions().expect("cp_route_actions must not fail");
         assert_eq!(
             mappings.len(),
-            23,
-            "expected 23 route mappings, got {}",
+            22,
+            "expected 22 route mappings, got {}",
             mappings.len()
         );
         // Confirm each action string round-trips correctly through QualifiedAction
@@ -603,7 +594,6 @@ mod tests {
             "cp:organization:read",
             "cp:organization:read",
             "cp:organization:update",
-            "cp:organization:delete",
             "cp:proxy-config:read",
             "cp:key:generate",
             "cp:key:read",
@@ -651,11 +641,6 @@ mod tests {
                 "PUT",
                 "/api/v1/organizations/org-123",
                 "cp:organization:update",
-            ),
-            (
-                "DELETE",
-                "/api/v1/organizations/org-123",
-                "cp:organization:delete",
             ),
             (
                 "GET",
@@ -746,6 +731,15 @@ mod tests {
                 matched.action()
             );
         }
+
+        // D9: the org-delete route was retired — DELETE on the plain org path
+        // must no longer resolve to a cp:* action.
+        assert!(
+            matcher
+                .match_request("DELETE", "/api/v1/organizations/org-123")
+                .is_none(),
+            "DELETE /api/v1/organizations/{{org_id}} must no longer match a route"
+        );
     }
 
     #[test]

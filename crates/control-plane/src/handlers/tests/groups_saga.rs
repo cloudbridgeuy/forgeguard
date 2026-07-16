@@ -39,7 +39,7 @@ async fn seed_org_with_groups(entries: Vec<RbacEntry>) -> (Arc<InMemoryOrgStore>
         OrgStatus::Draft,
         now,
     );
-    store.create(org, None).await.unwrap();
+    store.write_through_org(org, None).await;
 
     // Seed entries in order; each must validate against the running set
     // (any inherits referenced must already exist).

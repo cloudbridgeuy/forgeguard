@@ -235,23 +235,11 @@ impl OrgStore for FailingStore {
     async fn get(&self, org_id: &OrganizationId) -> Result<Option<OrgRecord>> {
         self.inner.get(org_id).await
     }
-    async fn create(&self, org: Organization, config: Option<OrgConfig>) -> Result<OrgRecord> {
-        self.inner.create(org, config).await
-    }
     async fn list(&self, offset: usize, limit: usize) -> Result<Vec<OrgRecord>> {
         self.inner.list(offset, limit).await
     }
-    async fn update(
-        &self,
-        org_id: &OrganizationId,
-        org: Organization,
-        config: Option<OrgConfig>,
-        expected_etag: Option<&Etag>,
-    ) -> Result<OrgRecord> {
-        self.inner.update(org_id, org, config, expected_etag).await
-    }
-    async fn delete(&self, org_id: &OrganizationId) -> Result<()> {
-        self.inner.delete(org_id).await
+    async fn write_through_org(&self, org: Organization, config: Option<OrgConfig>) {
+        self.inner.write_through_org(org, config).await;
     }
     async fn generate_key(&self, org_id: &OrganizationId) -> Result<GenerateKeyResult> {
         self.inner.generate_key(org_id).await

@@ -542,23 +542,6 @@ fn org_payload_json(
     ))
 }
 
-pub(crate) async fn delete_handler(
-    Path(raw_org_id): Path<String>,
-    State(store): State<Arc<dyn OrgStore>>,
-) -> Response {
-    let Ok(org_id) = OrganizationId::new(&raw_org_id) else {
-        return StatusCode::NO_CONTENT.into_response();
-    };
-
-    match store.delete(&org_id).await {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => {
-            tracing::error!(org_id = %raw_org_id, error = %e, "delete org failed");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
-}
-
 pub(crate) fn not_found() -> Response {
     (
         StatusCode::NOT_FOUND,
@@ -740,9 +723,7 @@ pub(super) mod test_support {
             )
             .route(
                 "/api/v1/organizations/{org_id}",
-                axum::routing::get(super::get_handler)
-                    .put(super::update_handler::<StubVpClient>)
-                    .delete(super::delete_handler),
+                axum::routing::get(super::get_handler).put(super::update_handler::<StubVpClient>),
             )
             .route(
                 "/api/v1/organizations/{org_id}/proxy-config",

@@ -34,26 +34,20 @@ use crate::signing_key::{GenerateKeyResult, SigningKeyEntry};
 pub(crate) trait OrgStore: Send + Sync {
     async fn get(&self, org_id: &OrganizationId) -> Result<Option<OrgRecord>>;
 
-    async fn create(&self, org: Organization, config: Option<OrgConfig>) -> Result<OrgRecord>;
-
     async fn list(&self, offset: usize, limit: usize) -> Result<Vec<OrgRecord>>;
 
-    /// Persist a mutation to an existing organization.
+    /// Write-through hook for `InMemoryModelEventStore::{create_org,update_org}`.
     ///
-    /// When `expected_etag` is `Some(e)`, the implementation MUST return
-    /// `Error::PreconditionFailed { current_etag }` if the currently stored
-    /// config etag does not equal `e`. When `expected_etag` is `None`, the
-    /// implementation writes unconditionally (last-write-wins — preserved
-    /// for callers that do not opt in).
-    async fn update(
-        &self,
-        org_id: &OrganizationId,
-        org: Organization,
-        config: Option<OrgConfig>,
-        expected_etag: Option<&Etag>,
-    ) -> Result<OrgRecord>;
-
-    async fn delete(&self, org_id: &OrganizationId) -> Result<()>;
+    /// In production, `DynamoOrgStore` and `DynamoModelEventStore` share one DynamoDB
+    /// table, so an org appended to the log is already visible via `get`/`list` — no
+    /// write-through needed, hence the default no-op body. `InMemoryOrgStore` overrides
+    /// this to keep its separate in-memory read-model mirrored with the event log
+    /// (dev-mode `--store=memory` and handler tests).
+    ///
+    /// Unconditionally upserts: unlike the retired `OrgStore::create`/`update`, there is
+    /// no conflict/precondition semantics here — the log's own revision check already
+    /// gates the mutation before this hook runs.
+    async fn write_through_org(&self, _org: Organization, _config: Option<OrgConfig>) {}
 
     async fn generate_key(&self, org_id: &OrganizationId) -> Result<GenerateKeyResult>;
 
@@ -302,64 +296,17 @@ impl OrgStore for InMemoryOrgStore {
         Ok(guard.get(org_id).cloned())
     }
 
-    async fn create(&self, org: Organization, config: Option<OrgConfig>) -> Result<OrgRecord> {
-        let mut guard = self.orgs.write().await;
-        let org_id = org.org_id().clone();
-        if guard.contains_key(&org_id) {
-            return Err(Error::Conflict(format!(
-                "organization '{org_id}' already exists"
-            )));
-        }
-        let configured = config.map(ConfiguredConfig::compute);
-        let record = OrgRecord::new(org, configured);
-        guard.insert(org_id, record.clone());
-        Ok(record)
-    }
-
     async fn list(&self, offset: usize, limit: usize) -> Result<Vec<OrgRecord>> {
         let guard = self.orgs.read().await;
         Ok(guard.values().skip(offset).take(limit).cloned().collect())
     }
 
-    async fn update(
-        &self,
-        org_id: &OrganizationId,
-        org: Organization,
-        config: Option<OrgConfig>,
-        expected_etag: Option<&Etag>,
-    ) -> Result<OrgRecord> {
-        if org_id != org.org_id() {
-            return Err(Error::Store(format!(
-                "org_id mismatch: path '{}' vs body '{}'",
-                org_id,
-                org.org_id()
-            )));
-        }
-        let mut guard = self.orgs.write().await;
-        let Some(current) = guard.get(org_id) else {
-            return Err(Error::NotFound(format!(
-                "organization '{org_id}' not found"
-            )));
-        };
-
-        let stored_etag = current.configured().map(ConfiguredConfig::etag);
-        if let crate::etag::EtagCheck::Mismatch {
-            current: current_etag,
-        } = crate::etag::check_etag(stored_etag, expected_etag)
-        {
-            return Err(Error::PreconditionFailed { current_etag });
-        }
-
+    async fn write_through_org(&self, org: Organization, config: Option<OrgConfig>) {
+        let org_id = org.org_id().clone();
         let configured = config.map(ConfiguredConfig::compute);
         let record = OrgRecord::new(org, configured);
-        guard.insert(org_id.clone(), record.clone());
-        Ok(record)
-    }
-
-    async fn delete(&self, org_id: &OrganizationId) -> Result<()> {
         let mut guard = self.orgs.write().await;
-        guard.remove(org_id);
-        Ok(())
+        guard.insert(org_id, record);
     }
 
     async fn generate_key(&self, org_id: &OrganizationId) -> Result<GenerateKeyResult> {

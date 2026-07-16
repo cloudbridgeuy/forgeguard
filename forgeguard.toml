@@ -31,7 +31,6 @@ policy_store_id = "op://forgeguard-prod/verified-permissions/policy-store-id"
 namespace = "forgeguard"
 actions = [
   "cp-proxy-config-read",
-  "cp-organization-delete",
   "cp-member-promote-owner",
   "cp-principal-upsert",
   "cp-events-read",
@@ -91,7 +90,7 @@ allow = [
 name = "owner"
 description = "Full org access including deletion and owner promotion"
 inherits = ["admin"]
-allow = ["cp-organization-delete", "cp-member-promote-owner"]
+allow = ["cp-member-promote-owner"]
 
 # ---------------------------------------------------------------------------
 # Cedar Policies (raw Cedar — for patterns RBAC can't express)
