@@ -516,7 +516,7 @@ fn build_router<V: VpClient + 'static>(state: AppState<V>, fg: Arc<ForgeGuard>) 
         .route(
             "/api/v1/organizations/{org_id}",
             get(handlers::get_handler)
-                .put(handlers::update_handler)
+                .put(handlers::update_handler::<V>)
                 .delete(handlers::delete_handler),
         )
         .route(

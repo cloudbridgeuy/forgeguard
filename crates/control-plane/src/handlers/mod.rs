@@ -21,7 +21,7 @@ use forgeguard_core::{Fgrn, NativeId, OrgStatus, Organization, OrganizationId, S
 use serde::{Deserialize, Serialize};
 
 use crate::config::OrgConfig;
-use crate::etag::{self, Etag, IfNoneMatchResult, ResolvedIfMatch};
+use crate::etag::{self, Etag, IfNoneMatchResult};
 use crate::model_event_store::ModelEventStore;
 use crate::store::{OrgRecord, OrgStore, SagaTicketStore};
 use crate::user_pool::UserPoolClient;
@@ -394,23 +394,23 @@ pub(crate) struct UpdateOrgRequest {
     config: Option<OrgConfig>,
 }
 
-/// `PUT /api/v1/organizations/{org_id}` — update an org's name and/or proxy config.
+/// `PUT /api/v1/organizations/{org_id}` — update an org's name and/or proxy
+/// config on the event log.
 ///
-/// Supports optimistic locking via `If-Match`: when the request body includes
-/// `config`, the `If-Match` header is checked against the stored etag. A
-/// missing header writes unconditionally. Name-only PUTs skip the check.
+/// Optimistic concurrency is revision-tokened (D5), not etag-conditioned:
+/// callers send `X-Fg-If-Revision: <n>` to assert the log is still at
+/// revision `n`; a mismatch responds `412` with both the caller's expected
+/// and the log's current revision. A missing header writes unconditionally.
+/// `If-Match`/`ETag` are no longer consulted by this handler.
 ///
-/// Returns `200 OK` with an `ETag` header on success, `412 Precondition Failed`
-/// (also with the current `ETag`) on a stale match, and `404 Not Found` when
-/// the org does not exist.
-#[tracing::instrument(
-    name = "update_org",
-    skip_all,
-    fields(org_id = %raw_org_id, precondition_reason = tracing::field::Empty)
-)]
-pub(crate) async fn update_handler(
+/// A request that would not change the org's semantic state (ignoring
+/// `updated_at`) is a no-op: it responds `200` with the current revision and
+/// appends no event.
+#[tracing::instrument(name = "update_org", skip_all, fields(org_id = %raw_org_id))]
+pub(crate) async fn update_handler<V: VpClient + 'static>(
+    ForgeGuardIdentity(identity): ForgeGuardIdentity,
     Path(raw_org_id): Path<String>,
-    State(store): State<Arc<dyn OrgStore>>,
+    State(state): State<AppState<V>>,
     headers: HeaderMap,
     Json(body): Json<UpdateOrgRequest>,
 ) -> Response {
@@ -418,7 +418,18 @@ pub(crate) async fn update_handler(
         return not_found();
     };
 
-    let record = match store.get(&org_id).await {
+    let raw_if_revision = headers
+        .get(crate::handlers::if_revision::IF_REVISION_HEADER)
+        .and_then(|v| v.to_str().ok());
+    let Ok(if_revision) = crate::handlers::if_revision::parse_if_revision(raw_if_revision) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "invalid X-Fg-If-Revision header"})),
+        )
+            .into_response();
+    };
+
+    let record = match state.store.get(&org_id).await {
         Ok(Some(r)) => r,
         Ok(None) => return not_found(),
         Err(e) => {
@@ -428,121 +439,107 @@ pub(crate) async fn update_handler(
     };
 
     let now = chrono::Utc::now();
-    let mut org = record.org().clone();
+    let mut candidate_org = record.org().clone();
     if let Some(name) = body.name {
-        org = org.update_name(name, now);
+        candidate_org = candidate_org.update_name(name, now);
     }
-    org = org.with_updated_at(now);
+    let candidate_config = body.config.or_else(|| record.config().cloned());
 
-    // If the body omits `config`, keep whatever was previously stored
-    // (None for Draft orgs, Some(...) for Configured ones).
-    let caller_supplied_config = body.config.is_some();
-    let config = body.config.or_else(|| record.config().cloned());
-
-    // Derive the optimistic-locking expectation. Name-only PUTs (no `config`
-    // in the body) are unconditional; all other cases go through resolve_if_match.
-    let if_match_parsed = headers
-        .get(axum::http::header::IF_MATCH)
-        .and_then(|v| v.to_str().ok())
-        .and_then(etag::parse_if_match);
-    let stored_etag = record
-        .configured()
-        .map(crate::store::ConfiguredConfig::etag);
-    let resolved = if caller_supplied_config {
-        etag::resolve_if_match(if_match_parsed, stored_etag)
-    } else {
-        ResolvedIfMatch::Absent
+    let stored_payload = match org_payload_json(record.org(), record.config()) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!(org_id = %raw_org_id, error = %e, "update org: serialize stored payload failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
     };
-    // `expected_etag` is `Option<Etag>` — `Some` means a strong check is required,
-    // `None` means unconditional write (Absent or WildcardMatched paths).
-    let expected_etag: Option<Etag> = match &resolved {
-        ResolvedIfMatch::Absent => None,
-        ResolvedIfMatch::Strong(e) => Some(e.clone()),
-        // Wildcard with existing config — unconditional write; check already passed.
-        ResolvedIfMatch::WildcardMatched => None,
-        // Wildcard on a Draft org — fail closed: no stored representation exists.
-        ResolvedIfMatch::WildcardOnDraft => {
-            crate::metrics::record_precondition_failed(
-                crate::metrics::PreconditionReason::WildcardOnDraft,
-            );
-            return (
-                StatusCode::PRECONDITION_FAILED,
-                Json(PreconditionFailedBody {
-                    error: "etag mismatch",
-                    reason: crate::metrics::PreconditionReason::WildcardOnDraft.as_label(),
-                    // Draft org has no stored etag — emit empty string on the wire.
-                    current_etag: String::new(),
-                }),
-            )
-                .into_response();
+    let candidate_payload = match org_payload_json(&candidate_org, candidate_config.as_ref()) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!(org_id = %raw_org_id, error = %e, "update org: serialize candidate payload failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
 
-    match store
-        .update(&org_id, org, config, expected_etag.as_ref())
+    let decision = forgeguard_authz_core::decide_upsert(
+        Some(&forgeguard_authz_core::org_semantic_view(&stored_payload)),
+        &forgeguard_authz_core::org_semantic_view(&candidate_payload),
+    );
+
+    if matches!(decision, forgeguard_authz_core::UpsertDecision::NoOp) {
+        let current_revision = match state.model_events.latest_revision(&raw_org_id).await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!(org_id = %raw_org_id, error = %e, "update org: latest_revision failed");
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+        };
+        return (
+            StatusCode::OK,
+            revision_header_map(current_revision.value()),
+            Json(serde_json::json!({
+                "organization": record.org(),
+                "revision": current_revision.value(),
+            })),
+        )
+            .into_response();
+    }
+
+    let org = candidate_org.with_updated_at(now);
+    let updated_record = OrgRecord::new(
+        org.clone(),
+        candidate_config.map(crate::store::ConfiguredConfig::compute),
+    );
+    let actor = actor_for(&raw_org_id, identity.as_ref());
+
+    match state
+        .model_events
+        .update_org(updated_record, actor, if_revision)
         .await
     {
-        Ok(updated) => {
-            let mut response_headers = HeaderMap::new();
-            if let Some(val) = updated
-                .configured()
-                .and_then(|c| c.etag().as_str().parse().ok())
-            {
-                response_headers.insert(axum::http::header::ETAG, val);
-            }
-            (
-                StatusCode::OK,
-                response_headers,
-                Json(updated.org().clone()),
-            )
-                .into_response()
-        }
+        Ok(revision) => (
+            StatusCode::OK,
+            revision_header_map(revision.value()),
+            Json(serde_json::json!({
+                "organization": org,
+                "revision": revision.value(),
+            })),
+        )
+            .into_response(),
         Err(crate::error::Error::NotFound(msg)) => (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": msg})),
         )
             .into_response(),
-        Err(crate::error::Error::PreconditionFailed { current_etag }) => {
-            // `record` is the pre-update snapshot; the store returned 412
-            // without mutating it, so its `configured()` etag still reflects
-            // the state the decision was made against. This is what
-            // `precondition_reason` needs to distinguish `DraftFailClosed`
-            // (stored == None) from `StaleEtag` (stored == Some).
-            let reason = crate::metrics::precondition_reason(
-                &resolved,
-                record
-                    .configured()
-                    .map(crate::store::ConfiguredConfig::etag),
-            );
-            crate::metrics::record_precondition_failed(reason);
-            let mut response_headers = HeaderMap::new();
-            // Only emit ETag when `current_etag` is `Some`. `None` signals a
-            // Draft org (no config yet) — there is no etag to include.
-            let current_etag_str = match current_etag {
-                Some(ref etag) => {
-                    if let Ok(val) = etag.as_str().parse() {
-                        response_headers.insert(axum::http::header::ETAG, val);
-                    }
-                    etag.as_str().to_string()
-                }
-                None => String::new(),
-            };
-            (
-                StatusCode::PRECONDITION_FAILED,
-                response_headers,
-                Json(PreconditionFailedBody {
-                    error: "etag mismatch",
-                    reason: reason.as_label(),
-                    current_etag: current_etag_str,
-                }),
-            )
-                .into_response()
-        }
+        Err(crate::error::Error::RevisionMismatch { current }) => (
+            StatusCode::PRECONDITION_FAILED,
+            revision_header_map(current),
+            Json(serde_json::json!({
+                "error": "revision_mismatch",
+                "current_revision": current,
+                "expected_revision": if_revision.map(forgeguard_authz_core::Revision::value),
+            })),
+        )
+            .into_response(),
         Err(e) => {
             tracing::error!(org_id = %raw_org_id, error = %e, "update org failed");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
+}
+
+/// Build the `{"organization", "config"}` payload JSON for no-op comparison —
+/// mirrors `model_event_store::org_payload`'s shape without depending on the
+/// crate-private `OrgRecord`-shaped helper.
+fn org_payload_json(
+    org: &Organization,
+    config: Option<&OrgConfig>,
+) -> Result<serde_json::Value, serde_json::Error> {
+    let organization = serde_json::to_value(org)?;
+    let config = config.map(serde_json::to_value).transpose()?;
+    Ok(forgeguard_authz_core::org_event_payload(
+        &organization,
+        config.as_ref(),
+    ))
 }
 
 pub(crate) async fn delete_handler(
@@ -568,6 +565,17 @@ pub(crate) fn not_found() -> Response {
         Json(serde_json::json!({"error": "not found"})),
     )
         .into_response()
+}
+
+/// Build a [`HeaderMap`] carrying the [`REVISION_HEADER`] for a model-plane
+/// write response. Silently omits the header if `revision` can't round-trip
+/// through [`HeaderValue`] (never happens for a `u64`, but avoids a panic).
+fn revision_header_map(revision: u64) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    if let Ok(val) = HeaderValue::from_str(&revision.to_string()) {
+        headers.insert(REVISION_HEADER, val);
+    }
+    headers
 }
 
 /// Build a [`HeaderMap`] containing an `ETag` header when `stored_etag` is
@@ -733,7 +741,7 @@ pub(super) mod test_support {
             .route(
                 "/api/v1/organizations/{org_id}",
                 axum::routing::get(super::get_handler)
-                    .put(super::update_handler)
+                    .put(super::update_handler::<StubVpClient>)
                     .delete(super::delete_handler),
             )
             .route(

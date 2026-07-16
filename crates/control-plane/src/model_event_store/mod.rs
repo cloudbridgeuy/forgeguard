@@ -117,10 +117,6 @@ pub(crate) async fn get_principal(
 /// Mirrors `DynamoOrgStore::get_raw_item`, duplicated here (rather than
 /// shared) because that method lives on a different struct with no shared
 /// base — both are thin wrappers around the same `GetItem` call.
-///
-/// Only called from `DynamoModelEventStore::update_org`, itself unreachable
-/// until Task 8 wires it up — same `dead_code` precedent as `put_promotion`.
-#[allow(dead_code)]
 async fn get_raw_org_item(
     client: &aws_sdk_dynamodb::Client,
     table_name: &str,
@@ -140,10 +136,6 @@ async fn get_raw_org_item(
 
 /// Build the D3/D4 event payload for an org mutation: `{"organization",
 /// "config"}`, full post-mutation state.
-///
-/// Only called from `create_org`/`update_org`, unreachable outside tests
-/// until Task 7/8 wire them up — same `dead_code` precedent as `put_promotion`.
-#[allow(dead_code)]
 fn org_payload(record: &OrgRecord) -> Result<serde_json::Value> {
     let organization = serde_json::to_value(record.org())
         .map_err(|e| Error::Store(format!("serialize organization: {e}")))?;
@@ -265,19 +257,12 @@ pub(crate) trait ModelEventStore: Send + Sync {
 
     /// Append an `org.created` event + the org's initial state item in one
     /// transaction. `Err(Error::Conflict)` if the org already exists (#113 V1).
-    ///
-    /// No HTTP route calls this yet — Task 7 wires it onto `create_handler`,
-    /// same `dead_code` precedent as `put_promotion`.
-    #[allow(dead_code)]
     async fn create_org(&self, record: OrgRecord, actor: Actor) -> Result<Revision>;
 
     /// Append an `org.updated` event + the org's new state item in one
     /// transaction. When `expected_revision` is `Some`, mismatches against the
     /// log's current revision fail with `Error::RevisionMismatch` instead of
     /// appending (#113 V1, D5).
-    ///
-    /// No HTTP route calls this yet — Task 8 wires it onto `update_handler`.
-    #[allow(dead_code)]
     async fn update_org(
         &self,
         record: OrgRecord,

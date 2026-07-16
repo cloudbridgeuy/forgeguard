@@ -276,7 +276,7 @@ async fn update_changes_name() {
     assert_eq!(response.status(), StatusCode::OK);
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(json["name"], "Renamed");
+    assert_eq!(json["organization"]["name"], "Renamed");
 
     // GET to verify persistence
     let app = test_app(store);

@@ -10,19 +10,13 @@
 use forgeguard_authz_core::Revision;
 
 /// Request header carrying the caller's expected current revision.
-#[allow(dead_code)]
 pub(crate) const IF_REVISION_HEADER: &str = "x-fg-if-revision";
 
 /// The header was present but not a `u64`.
 #[derive(Debug, PartialEq, Eq)]
-#[allow(dead_code)]
 pub(crate) struct InvalidIfRevision;
 
 /// Parse the raw header value. `None` (header absent) means "no precondition".
-///
-/// No HTTP handler calls this yet (Task 8 wires it into `update_handler`) —
-/// same `dead_code` precedent as `put_promotion`.
-#[allow(dead_code)]
 pub(crate) fn parse_if_revision(raw: Option<&str>) -> Result<Option<Revision>, InvalidIfRevision> {
     match raw {
         None => Ok(None),
