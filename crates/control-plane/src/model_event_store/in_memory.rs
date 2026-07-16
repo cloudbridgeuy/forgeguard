@@ -2,6 +2,8 @@
 //! backing and handler tests (split out of `model_event_store.rs` to keep
 //! that file under the 1000-line cap).
 
+use std::sync::Arc;
+
 use super::{
     async_trait, build_model_event, encode_verifying_key_pem, org_payload, principal_event_payload,
     promotion_event_payload, promotion_fgrn, Actor, BuildModelEventParams, Error, EventEnvelope,
@@ -9,6 +11,7 @@ use super::{
     NativeId, OrgRecord, PromotionEntry, Result, Revision, Segment, SigningKey, IN_MEMORY_KEY_ID,
     IN_MEMORY_SEED,
 };
+use crate::store::OrgStore;
 
 // ---------------------------------------------------------------------------
 // In-memory implementation — dev-mode `--store=memory` backing and handler
@@ -29,11 +32,15 @@ pub(crate) struct InMemoryModelEventStore {
     /// `(org_id, resource_type, native_id) -> fgrn`.
     promotions: Mutex<HashMap<(String, String, String), String>>,
     /// `org_id -> OrgRecord`, the org-domain analogue of `principals`.
-    ///
-    /// No HTTP route calls `create_org`/`update_org` yet (Task 7/8 wire them
-    /// up) — same `dead_code` precedent as `put_promotion`.
-    #[allow(dead_code)]
     orgs: Mutex<HashMap<String, OrgRecord>>,
+    /// Write-through target for `create_org`/`update_org`.
+    ///
+    /// In production, `DynamoOrgStore` and `DynamoModelEventStore` share one
+    /// DynamoDB table, so an org appended to the log is implicitly visible to
+    /// `OrgStore::get`. The in-memory doubles are separate structures with no
+    /// such coupling, so this handle re-materialises that parity: every org
+    /// mutation applied to the log is mirrored into the org read-model.
+    org_store: Option<Arc<dyn OrgStore>>,
 }
 
 /// Build the `Error::Store` for a poisoned in-memory lock, tagged with the
@@ -51,6 +58,16 @@ impl InMemoryModelEventStore {
             signing_key: SigningKey::from_bytes(&IN_MEMORY_SEED),
             promotions: Mutex::new(HashMap::new()),
             orgs: Mutex::new(HashMap::new()),
+            org_store: None,
+        }
+    }
+
+    /// Like [`Self::new`], but wires `create_org`/`update_org` to also
+    /// write through to `org_store` — see the `org_store` field doc.
+    pub(crate) fn new_with_org_store(org_store: Arc<dyn OrgStore>) -> Self {
+        Self {
+            org_store: Some(org_store),
+            ..Self::new()
         }
     }
 
@@ -306,6 +323,20 @@ impl ModelEventStore for InMemoryModelEventStore {
             .mint_and_push(&org_id, EventKind::OrgCreated, actor, payload)
             .await?;
 
+        // Not atomic with `mint_and_push` above — unlike the DynamoDB path's
+        // single `transact_write_items()`, if this write-through errors the
+        // event has already been appended and the revision already advanced,
+        // but `self.orgs` below never gets the insert. A retried `create_org`
+        // for the same org_id would then observe "absent" and mint a second
+        // `OrgCreated` event. Acceptable for a test/dev-mode double where the
+        // org-store write is expected to succeed; real atomicity is only
+        // exercised against DynamoDB Local.
+        if let Some(org_store) = &self.org_store {
+            org_store
+                .create(record.org().clone(), record.config().cloned())
+                .await?;
+        }
+
         let mut guard = self.orgs.lock().map_err(|e| lock_poisoned("org", e))?;
         guard.insert(org_id, record);
         Ok(revision)
@@ -337,6 +368,20 @@ impl ModelEventStore for InMemoryModelEventStore {
         let revision = self
             .mint_and_push(&org_id, EventKind::OrgUpdated, actor, payload)
             .await?;
+
+        if let Some(org_store) = &self.org_store {
+            // No etag precondition here — the log's revision precondition
+            // (checked above) is this store's optimistic-concurrency guard;
+            // the write-through is just keeping the org read-model mirrored.
+            org_store
+                .update(
+                    record.org().org_id(),
+                    record.org().clone(),
+                    record.config().cloned(),
+                    None,
+                )
+                .await?;
+        }
 
         let mut guard = self.orgs.lock().map_err(|e| lock_poisoned("org", e))?;
         guard.insert(org_id, record);

@@ -167,7 +167,8 @@ pub async fn memory_router(
     // keeps `POST /users` exercisable end-to-end against a dev JSON config.
     let user_pool: Arc<dyn UserPoolClient> = Arc::new(InMemoryUserPoolClient::new());
     let saga_tickets: Arc<dyn SagaTicketStore> = Arc::new(InMemorySagaTicketStore::new());
-    let model_events: Arc<dyn ModelEventStore> = Arc::new(InMemoryModelEventStore::new());
+    let model_events: Arc<dyn ModelEventStore> =
+        Arc::new(InMemoryModelEventStore::new_with_org_store(Arc::clone(&s)));
     // Ed25519 resolver requires DynamoDB for key lookup; memory mode has no DynamoDB client.
     // VP engine is also unavailable in memory mode — StaticPolicyEngine(Allow) is used instead.
     let fg = build_forgeguard(auth, None, None, None)?;
@@ -510,7 +511,7 @@ fn build_router<V: VpClient + 'static>(state: AppState<V>, fg: Arc<ForgeGuard>) 
         .route("/metrics", get(handlers::metrics_handler))
         .route(
             "/api/v1/organizations",
-            post(handlers::create_handler).get(handlers::list_handler),
+            post(handlers::create_handler::<V>).get(handlers::list_handler),
         )
         .route(
             "/api/v1/organizations/{org_id}",

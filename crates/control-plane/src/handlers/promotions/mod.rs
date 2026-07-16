@@ -15,10 +15,8 @@ use serde::Deserialize;
 use crate::handlers::min_revision::{
     check_min_revision, parse_min_revision, MinRevisionCheck, MIN_REVISION_HEADER,
 };
-use crate::handlers::{actor_for, clamp_limit, AppState, DEFAULT_LIMIT};
+use crate::handlers::{actor_for, clamp_limit, AppState, DEFAULT_LIMIT, REVISION_HEADER};
 use crate::vp_client::VpClient;
-
-const REVISION_HEADER: &str = "x-fg-revision";
 
 /// `DELETE /api/v1/organizations/{org_id}/promoted-resources/{resource_type}/{native_id}`
 ///

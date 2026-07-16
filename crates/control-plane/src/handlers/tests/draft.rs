@@ -34,9 +34,10 @@ async fn create_without_config_returns_201_draft() {
 
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(json["org_id"], "org-draft");
-    assert_eq!(json["name"], "Draft Org");
-    assert_eq!(json["status"], "draft");
+    assert_eq!(json["organization"]["org_id"], "org-draft");
+    assert_eq!(json["organization"]["name"], "Draft Org");
+    assert_eq!(json["organization"]["status"], "draft");
+    assert_eq!(json["revision"], 1);
 
     // GET round-trips
     let app = test_app(store);

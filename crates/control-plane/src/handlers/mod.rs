@@ -12,7 +12,7 @@ pub(crate) mod users;
 use std::sync::Arc;
 
 use axum::extract::{FromRef, Path, Query, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use forgeguard_authz_core::Actor;
@@ -25,9 +25,15 @@ use crate::etag::{self, Etag, IfNoneMatchResult, ResolvedIfMatch};
 use crate::model_event_store::ModelEventStore;
 use crate::store::{OrgRecord, OrgStore, SagaTicketStore};
 use crate::user_pool::UserPoolClient;
+use crate::vp_client::VpClient;
 
 pub(super) const DEFAULT_LIMIT: u16 = 100;
 pub(super) const MAX_LIMIT: u16 = 1000;
+
+/// Response header carrying the log revision an append advanced to (or the
+/// current revision, on a no-op). Shared across every model-plane write
+/// (principals, promotions, orgs) so clients see one consistent name.
+pub(crate) const REVISION_HEADER: &str = "x-fg-revision";
 
 /// Derive the `Actor` recorded on an appended event from the resolved
 /// identity, falling back to `Actor::System` when there is no identity (dev
@@ -187,8 +193,15 @@ pub(crate) async fn metrics_handler() -> Response {
         .into_response()
 }
 
-pub(crate) async fn create_handler(
-    State(store): State<Arc<dyn OrgStore>>,
+/// `POST /api/v1/organizations` — create a Draft org on the event log.
+///
+/// Appends `org.created` via [`ModelEventStore::create_org`] and responds
+/// `201` with the created organization and the revision the log advanced
+/// to. No `ETag` — org mutations are revision-tokened, not etag-conditioned
+/// (D5).
+pub(crate) async fn create_handler<V: VpClient + 'static>(
+    ForgeGuardIdentity(identity): ForgeGuardIdentity,
+    State(state): State<AppState<V>>,
     Json(body): Json<CreateOrgRequest>,
 ) -> Response {
     let Ok(org_id) = OrganizationId::new(&body.org_id) else {
@@ -198,23 +211,30 @@ pub(crate) async fn create_handler(
         )
             .into_response();
     };
+    let raw_org_id = org_id.to_string();
 
     let now = chrono::Utc::now();
     let org = Organization::new(org_id, body.name, OrgStatus::Draft, now);
+    let org_snapshot = org.clone();
+    let record = OrgRecord::new(
+        org,
+        body.config.map(crate::store::ConfiguredConfig::compute),
+    );
+    let actor = actor_for(&raw_org_id, identity.as_ref());
 
-    match store.create(org, body.config).await {
-        Ok(record) => {
+    match state.model_events.create_org(record, actor).await {
+        Ok(revision) => {
             let mut response_headers = HeaderMap::new();
-            if let Some(val) = record
-                .configured()
-                .and_then(|c| c.etag().as_str().parse().ok())
-            {
-                response_headers.insert(axum::http::header::ETAG, val);
+            if let Ok(val) = HeaderValue::from_str(&revision.value().to_string()) {
+                response_headers.insert(REVISION_HEADER, val);
             }
             (
                 StatusCode::CREATED,
                 response_headers,
-                Json(record.org().clone()),
+                Json(serde_json::json!({
+                    "organization": org_snapshot,
+                    "revision": revision.value(),
+                })),
             )
                 .into_response()
         }
@@ -224,7 +244,7 @@ pub(crate) async fn create_handler(
         )
             .into_response(),
         Err(e) => {
-            tracing::error!(error = %e, "create org failed");
+            tracing::error!(org_id = %raw_org_id, error = %e, "create org failed");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
@@ -692,8 +712,11 @@ pub(super) mod test_support {
 
         let user_pool: Arc<dyn UserPoolClient> = Arc::new(InMemoryUserPoolClient::new());
         let saga_tickets: Arc<dyn SagaTicketStore> = Arc::new(InMemorySagaTicketStore::new());
-        let model_events: Arc<dyn ModelEventStore> =
-            Arc::new(crate::model_event_store::InMemoryModelEventStore::new());
+        let model_events: Arc<dyn ModelEventStore> = Arc::new(
+            crate::model_event_store::InMemoryModelEventStore::new_with_org_store(Arc::clone(
+                &store,
+            )),
+        );
         let model_events_handle = Arc::clone(&model_events);
         let state = super::AppState {
             store,
@@ -705,7 +728,7 @@ pub(super) mod test_support {
         let router = Router::new()
             .route(
                 "/api/v1/organizations",
-                axum::routing::post(super::create_handler).get(super::list_handler),
+                axum::routing::post(super::create_handler::<StubVpClient>).get(super::list_handler),
             )
             .route(
                 "/api/v1/organizations/{org_id}",

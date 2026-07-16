@@ -20,11 +20,9 @@ use serde::Deserialize;
 use crate::handlers::min_revision::{
     check_min_revision, parse_min_revision, MinRevisionCheck, MIN_REVISION_HEADER,
 };
-use crate::handlers::{clamp_limit, AppState, DEFAULT_LIMIT};
+use crate::handlers::{clamp_limit, AppState, DEFAULT_LIMIT, REVISION_HEADER};
 use crate::model_event_store::ModelEventStore;
 use crate::vp_client::VpClient;
-
-const REVISION_HEADER: &str = "x-fg-revision";
 
 /// Query parameters accepted by `GET /organizations/{org_id}/events`.
 #[derive(Debug, Deserialize)]

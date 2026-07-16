@@ -16,10 +16,8 @@ use forgeguard_core::NativeId;
 
 use forgeguard_core::OrgStatus;
 
-use crate::handlers::{actor_for, AppState};
+use crate::handlers::{actor_for, AppState, REVISION_HEADER};
 use crate::vp_client::VpClient;
-
-const REVISION_HEADER: &str = "x-fg-revision";
 
 /// `PUT /api/v1/organizations/{org_id}/principals/{native_id}`
 ///
