@@ -55,8 +55,8 @@ pub(crate) async fn tombstone_promotion_handler<V: VpClient + 'static>(
         return resp;
     }
 
-    let principals = &state.principals;
-    let existing = match principals
+    let model_events = &state.model_events;
+    let existing = match model_events
         .get_promotion(&raw_org_id, &resource_type, &native_id)
         .await
     {
@@ -72,7 +72,7 @@ pub(crate) async fn tombstone_promotion_handler<V: VpClient + 'static>(
     };
 
     let actor = actor_for(&raw_org_id, identity.as_ref());
-    match principals
+    match model_events
         .tombstone_promotion(&raw_org_id, &resource_type, &native_id, actor)
         .await
     {
@@ -166,7 +166,7 @@ pub(crate) async fn list_promotions_handler<V: VpClient + 'static>(
     }
 
     if let Some(required) = min_revision {
-        let current = match state.principals.latest_revision(&raw_org_id).await {
+        let current = match state.model_events.latest_revision(&raw_org_id).await {
             Ok(r) => r,
             Err(e) => {
                 tracing::error!(org_id = %raw_org_id, error = %e, "list_promotions: min-revision read failed");
@@ -195,7 +195,7 @@ pub(crate) async fn list_promotions_handler<V: VpClient + 'static>(
 
     let limit = clamp_limit(query.limit.unwrap_or(DEFAULT_LIMIT));
     let entries = match state
-        .principals
+        .model_events
         .list_promotions(&raw_org_id, &resource_type, after.as_ref(), limit)
         .await
     {
@@ -205,7 +205,7 @@ pub(crate) async fn list_promotions_handler<V: VpClient + 'static>(
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
-    let revision = match state.principals.latest_revision(&raw_org_id).await {
+    let revision = match state.model_events.latest_revision(&raw_org_id).await {
         Ok(r) => r,
         Err(e) => {
             tracing::error!(org_id = %raw_org_id, error = %e, "list_promotions: latest_revision failed");
@@ -264,7 +264,7 @@ async fn current_revision_no_content<V: VpClient + 'static>(
     state: &AppState<V>,
     raw_org_id: &str,
 ) -> Response {
-    let revision = match state.principals.latest_revision(raw_org_id).await {
+    let revision = match state.model_events.latest_revision(raw_org_id).await {
         Ok(r) => r.value(),
         Err(e) => {
             tracing::error!(org_id = %raw_org_id, error = %e, "promotion no-op: latest_revision failed");

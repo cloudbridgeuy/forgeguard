@@ -161,14 +161,14 @@ pub(super) fn test_app_for_store(store: Arc<InMemoryOrgStore>) -> UsersTestApp {
     let user_pool = Arc::new(InMemoryUserPoolClient::new());
     let saga_tickets = Arc::new(InMemorySagaTicketStore::new());
     let vp = happy_stub();
-    let principals: Arc<dyn crate::principal_store::PrincipalEventStore> =
-        Arc::new(crate::principal_store::InMemoryPrincipalEventStore::new());
+    let model_events: Arc<dyn crate::model_event_store::ModelEventStore> =
+        Arc::new(crate::model_event_store::InMemoryModelEventStore::new());
     let state = AppState {
         store: Arc::clone(&store) as Arc<dyn OrgStore>,
         vp,
         user_pool: Arc::clone(&user_pool) as Arc<dyn UserPoolClient>,
         saga_tickets: Arc::clone(&saga_tickets) as Arc<dyn SagaTicketStore>,
-        principals,
+        model_events,
     };
     let router = Router::new()
         .route(
@@ -351,14 +351,14 @@ pub(super) fn failing_test_app_for_store(inner: Arc<InMemoryOrgStore>) -> Failin
     let user_pool = Arc::new(InMemoryUserPoolClient::new());
     let saga_tickets = Arc::new(InMemorySagaTicketStore::new());
     let vp = happy_stub();
-    let principals: Arc<dyn crate::principal_store::PrincipalEventStore> =
-        Arc::new(crate::principal_store::InMemoryPrincipalEventStore::new());
+    let model_events: Arc<dyn crate::model_event_store::ModelEventStore> =
+        Arc::new(crate::model_event_store::InMemoryModelEventStore::new());
     let state = AppState {
         store: Arc::clone(&failing) as Arc<dyn OrgStore>,
         vp,
         user_pool: Arc::clone(&user_pool) as Arc<dyn UserPoolClient>,
         saga_tickets: Arc::clone(&saga_tickets) as Arc<dyn SagaTicketStore>,
-        principals,
+        model_events,
     };
     let router = Router::new()
         .route(

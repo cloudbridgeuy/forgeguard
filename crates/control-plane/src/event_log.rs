@@ -44,7 +44,7 @@ pub(crate) struct StatePut {
 /// `resource.tombstoned` event).
 ///
 /// Wired up by `handlers/promotions/mod.rs` in Task 4; until then transitively
-/// dead (its only caller, `PrincipalEventStore::tombstone_promotion`, is
+/// dead (its only caller, `ModelEventStore::tombstone_promotion`, is
 /// itself unreachable from any handler yet).
 #[allow(dead_code)]
 pub(crate) struct StateDelete {
@@ -302,7 +302,7 @@ impl DynamoEventLog {
     /// duplicate event.
     ///
     /// Wired up by `handlers/promotions/mod.rs` in Task 4; until then
-    /// transitively dead via `PrincipalEventStore::tombstone_promotion`.
+    /// transitively dead via `ModelEventStore::tombstone_promotion`.
     #[allow(dead_code)]
     pub(crate) async fn append_with_delete(
         &self,

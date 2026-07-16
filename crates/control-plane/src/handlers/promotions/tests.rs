@@ -1,7 +1,7 @@
 //! Integration tests for the promotion tombstone + reconciliation endpoints.
 //!
 //! All in-memory — seeds promotions directly through the
-//! `InMemoryPrincipalEventStore` handle returned by `test_app_with_principals`,
+//! `InMemoryModelEventStore` handle returned by `test_app_with_principals`,
 //! since there is no promotion-create HTTP API in this slice.
 
 use axum::body::Body;

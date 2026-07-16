@@ -1,4 +1,4 @@
-//! Unit tests for [`InMemoryPrincipalEventStore`]'s promotion methods — plain
+//! Unit tests for [`InMemoryModelEventStore`]'s promotion methods — plain
 //! `cargo xtask lint`, no `dynamodb-tests` feature required.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -17,7 +17,7 @@ fn nid(s: &str) -> NativeId {
 
 #[tokio::test]
 async fn put_then_list_then_tombstone_roundtrip() {
-    let store = InMemoryPrincipalEventStore::new();
+    let store = InMemoryModelEventStore::new();
     let doc_type = seg("document");
 
     let r1 = store
@@ -71,7 +71,7 @@ async fn put_then_list_then_tombstone_roundtrip() {
 
 #[tokio::test]
 async fn tombstone_absent_promotion_returns_none_and_appends_nothing() {
-    let store = InMemoryPrincipalEventStore::new();
+    let store = InMemoryModelEventStore::new();
     let tombstoned = store
         .tombstone_promotion("acme", &seg("document"), &nid("doc_missing"), Actor::System)
         .await
@@ -83,7 +83,7 @@ async fn tombstone_absent_promotion_returns_none_and_appends_nothing() {
 
 #[tokio::test]
 async fn list_respects_after_cursor_and_limit() {
-    let store = InMemoryPrincipalEventStore::new();
+    let store = InMemoryModelEventStore::new();
     let doc_type = seg("document");
     for id in ["doc_1", "doc_2", "doc_3"] {
         store
@@ -102,7 +102,7 @@ async fn list_respects_after_cursor_and_limit() {
 
 #[tokio::test]
 async fn list_is_scoped_to_org_and_type() {
-    let store = InMemoryPrincipalEventStore::new();
+    let store = InMemoryModelEventStore::new();
     store
         .put_promotion("acme", &seg("document"), &nid("doc_1"), Actor::System)
         .await
@@ -126,7 +126,7 @@ async fn list_is_scoped_to_org_and_type() {
 
 #[tokio::test]
 async fn list_signing_keys_returns_in_memory_key() {
-    let store = InMemoryPrincipalEventStore::new();
+    let store = InMemoryModelEventStore::new();
     let keys = store.list_signing_keys("org-a").await.unwrap();
     assert_eq!(keys.len(), 1);
     assert_eq!(keys[0].key_id, "in-memory-test-key");
@@ -139,7 +139,7 @@ async fn in_memory_key_verifies_an_appended_event() {
     use forgeguard_authn_core::signing::{verify_bytes, VerifyingKey};
     use forgeguard_authz_core::canonical_envelope_bytes;
 
-    let store = InMemoryPrincipalEventStore::new();
+    let store = InMemoryModelEventStore::new();
     let native_id = nid("usr_1");
     store
         .upsert_changed(
@@ -174,7 +174,7 @@ async fn in_memory_key_verifies_an_appended_event() {
 /// state; `fold_at(None)` matches the state items; unknown revision errors.
 #[tokio::test]
 async fn fold_at_time_travels_over_the_org_log() {
-    let store = InMemoryPrincipalEventStore::new();
+    let store = InMemoryModelEventStore::new();
     let usr = nid("usr_1");
     let doc_type = seg("document");
     let doc = nid("doc_1");
@@ -246,7 +246,7 @@ async fn fold_at_time_travels_over_the_org_log() {
 
 #[tokio::test]
 async fn fold_at_on_empty_org_log() {
-    let store = InMemoryPrincipalEventStore::new();
+    let store = InMemoryModelEventStore::new();
 
     let latest = store.fold_at("acme", None).await.unwrap();
     assert_eq!(latest.revision(), Revision::new(0));

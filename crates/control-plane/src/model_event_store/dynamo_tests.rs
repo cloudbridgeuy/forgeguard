@@ -1,4 +1,4 @@
-//! DynamoDB-Local integration tests for `principal_store.rs`, feature-gated
+//! DynamoDB-Local integration tests for `model_event_store.rs`, feature-gated
 //! behind `dynamodb-tests` (see `.claude/context/seed-qa.md`).
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -146,7 +146,7 @@ async fn promotion_put_get_list_tombstone_roundtrip() {
     let client = test_client().await;
     let table_name = unique_table_name();
     create_test_table(&client, &table_name).await;
-    let store = DynamoPrincipalEventStore::new(client, table_name);
+    let store = DynamoModelEventStore::new(client, table_name);
 
     let resource_type = Segment::try_new("document").unwrap();
     let native_id = NativeId::try_new("doc_1").unwrap();
@@ -199,7 +199,7 @@ async fn list_signing_keys_empty_before_any_append() {
     let client = test_client().await;
     let table_name = unique_table_name();
     create_test_table(&client, &table_name).await;
-    let store = DynamoPrincipalEventStore::new(client, table_name);
+    let store = DynamoModelEventStore::new(client, table_name);
 
     let keys = store.list_signing_keys("acme").await.unwrap();
     assert!(keys.is_empty());
@@ -214,7 +214,7 @@ async fn list_signing_keys_verifies_appended_event() {
     let client = test_client().await;
     let table_name = unique_table_name();
     create_test_table(&client, &table_name).await;
-    let store = DynamoPrincipalEventStore::new(client, table_name);
+    let store = DynamoModelEventStore::new(client, table_name);
 
     let native_id = NativeId::try_new("usr_1").unwrap();
     store
@@ -258,7 +258,7 @@ async fn fold_at_time_travels_and_matches_state_items() {
     let client = test_client().await;
     let table_name = unique_table_name();
     create_test_table(&client, &table_name).await;
-    let store = DynamoPrincipalEventStore::new(client, table_name);
+    let store = DynamoModelEventStore::new(client, table_name);
 
     let usr = NativeId::try_new("usr_1").unwrap();
     let doc_type = Segment::try_new("document").unwrap();

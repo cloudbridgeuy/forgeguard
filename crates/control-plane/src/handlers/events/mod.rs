@@ -21,7 +21,7 @@ use crate::handlers::min_revision::{
     check_min_revision, parse_min_revision, MinRevisionCheck, MIN_REVISION_HEADER,
 };
 use crate::handlers::{clamp_limit, AppState, DEFAULT_LIMIT};
-use crate::principal_store::PrincipalEventStore;
+use crate::model_event_store::ModelEventStore;
 use crate::vp_client::VpClient;
 
 const REVISION_HEADER: &str = "x-fg-revision";
@@ -75,7 +75,7 @@ const WATCH_DEADLINE: Duration = Duration::from_secs(1);
 /// full deadline — min-revision (`412`) is the mechanism for "client knows
 /// more than the server", not this loop.
 async fn watch_for_events(
-    principals: &Arc<dyn PrincipalEventStore>,
+    model_events: &Arc<dyn ModelEventStore>,
     org_id: &str,
     after: Revision,
     limit: usize,
@@ -83,9 +83,9 @@ async fn watch_for_events(
     let deadline = tokio::time::Instant::now() + WATCH_DEADLINE;
     loop {
         tokio::time::sleep(WATCH_TICK).await;
-        let current = principals.latest_revision(org_id).await?;
+        let current = model_events.latest_revision(org_id).await?;
         if current > after {
-            return principals.events_after(org_id, after, limit).await;
+            return model_events.events_after(org_id, after, limit).await;
         }
         if tokio::time::Instant::now() >= deadline {
             return Ok(Vec::new());
@@ -144,7 +144,7 @@ pub(crate) async fn list_events_handler<V: VpClient + 'static>(
     }
 
     if let Some(required) = min_revision {
-        let current = match state.principals.latest_revision(&raw_org_id).await {
+        let current = match state.model_events.latest_revision(&raw_org_id).await {
             Ok(r) => r,
             Err(e) => {
                 tracing::error!(org_id = %raw_org_id, error = %e, "list_events: min-revision read failed");
@@ -174,8 +174,8 @@ pub(crate) async fn list_events_handler<V: VpClient + 'static>(
     let after = Revision::new(query.after.unwrap_or(0));
     let limit = clamp_limit(query.limit.unwrap_or(DEFAULT_LIMIT));
 
-    let principals = &state.principals;
-    let events = match principals.events_after(&raw_org_id, after, limit).await {
+    let model_events = &state.model_events;
+    let events = match model_events.events_after(&raw_org_id, after, limit).await {
         Ok(events) => events,
         Err(e) => {
             tracing::error!(org_id = %raw_org_id, error = %e, "list_events: events_after failed");
@@ -183,7 +183,7 @@ pub(crate) async fn list_events_handler<V: VpClient + 'static>(
         }
     };
     let events = if events.is_empty() && wait == WaitMode::Watch {
-        match watch_for_events(principals, &raw_org_id, after, limit).await {
+        match watch_for_events(model_events, &raw_org_id, after, limit).await {
             Ok(events) => events,
             Err(e) => {
                 tracing::error!(org_id = %raw_org_id, error = %e, "list_events: watch failed");
@@ -193,7 +193,7 @@ pub(crate) async fn list_events_handler<V: VpClient + 'static>(
     } else {
         events
     };
-    let revision = match principals.latest_revision(&raw_org_id).await {
+    let revision = match model_events.latest_revision(&raw_org_id).await {
         Ok(r) => r,
         Err(e) => {
             tracing::error!(org_id = %raw_org_id, error = %e, "list_events: latest_revision failed");

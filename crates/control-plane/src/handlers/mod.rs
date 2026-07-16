@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::OrgConfig;
 use crate::etag::{self, Etag, IfNoneMatchResult, ResolvedIfMatch};
-use crate::principal_store::PrincipalEventStore;
+use crate::model_event_store::ModelEventStore;
 use crate::store::{OrgRecord, OrgStore, SagaTicketStore};
 use crate::user_pool::UserPoolClient;
 
@@ -75,17 +75,17 @@ pub(super) fn clamp_limit(requested: u16) -> usize {
 /// driver. The trait objects let production wire `AwsCognitoUserPoolClient` +
 /// `DynamoSagaTicketStore` while tests wire the in-memory equivalents.
 ///
-/// V1-append-spine adds `principals` — the [`PrincipalEventStore`] seam the
+/// V1-append-spine adds `model_events` — the [`ModelEventStore`] seam the
 /// `PUT /principals/{native_id}` handler upserts through, wiring
-/// `DynamoPrincipalEventStore` in production and
-/// `InMemoryPrincipalEventStore` for `--store=memory` dev mode and handler
+/// `DynamoModelEventStore` in production and
+/// `InMemoryModelEventStore` for `--store=memory` dev mode and handler
 /// tests.
 pub(crate) struct AppState<V> {
     pub(crate) store: Arc<dyn OrgStore>,
     pub(crate) vp: Arc<V>,
     pub(crate) user_pool: Arc<dyn UserPoolClient>,
     pub(crate) saga_tickets: Arc<dyn SagaTicketStore>,
-    pub(crate) principals: Arc<dyn PrincipalEventStore>,
+    pub(crate) model_events: Arc<dyn ModelEventStore>,
 }
 
 impl<V> Clone for AppState<V> {
@@ -95,7 +95,7 @@ impl<V> Clone for AppState<V> {
             vp: Arc::clone(&self.vp),
             user_pool: Arc::clone(&self.user_pool),
             saga_tickets: Arc::clone(&self.saga_tickets),
-            principals: Arc::clone(&self.principals),
+            model_events: Arc::clone(&self.model_events),
         }
     }
 }
@@ -118,9 +118,9 @@ impl<V> FromRef<AppState<V>> for Arc<dyn SagaTicketStore> {
     }
 }
 
-impl<V> FromRef<AppState<V>> for Arc<dyn PrincipalEventStore> {
-    fn from_ref(input: &AppState<V>) -> Arc<dyn PrincipalEventStore> {
-        Arc::clone(&input.principals)
+impl<V> FromRef<AppState<V>> for Arc<dyn ModelEventStore> {
+    fn from_ref(input: &AppState<V>) -> Arc<dyn ModelEventStore> {
+        Arc::clone(&input.model_events)
     }
 }
 
@@ -585,7 +585,7 @@ pub(super) mod test_support {
     };
     use forgeguard_proxy_core::{PipelineConfig, PipelineConfigParams};
 
-    use crate::principal_store::PrincipalEventStore;
+    use crate::model_event_store::ModelEventStore;
     use crate::store::{
         build_org_store, InMemoryOrgStore, InMemorySagaTicketStore, OrgStore, SagaTicketStore,
     };
@@ -643,12 +643,12 @@ pub(super) mod test_support {
     }
 
     /// Like [`test_app_with_stub`], but also exposes the in-memory
-    /// [`PrincipalEventStore`] handle so promotion tests can seed state
+    /// [`ModelEventStore`] handle so promotion tests can seed state
     /// directly (there is no promotion-create HTTP API in this slice).
     pub fn test_app_with_principals(
         store: Arc<dyn OrgStore>,
         vp: Arc<StubVpClient>,
-    ) -> (Router, Arc<dyn PrincipalEventStore>) {
+    ) -> (Router, Arc<dyn ModelEventStore>) {
         let route_matcher = RouteMatcher::new(&[]).unwrap();
         let public_routes = vec![
             PublicRoute::new(
@@ -691,15 +691,15 @@ pub(super) mod test_support {
 
         let user_pool: Arc<dyn UserPoolClient> = Arc::new(InMemoryUserPoolClient::new());
         let saga_tickets: Arc<dyn SagaTicketStore> = Arc::new(InMemorySagaTicketStore::new());
-        let principals: Arc<dyn PrincipalEventStore> =
-            Arc::new(crate::principal_store::InMemoryPrincipalEventStore::new());
-        let principals_handle = Arc::clone(&principals);
+        let model_events: Arc<dyn ModelEventStore> =
+            Arc::new(crate::model_event_store::InMemoryModelEventStore::new());
+        let model_events_handle = Arc::clone(&model_events);
         let state = super::AppState {
             store,
             vp,
             user_pool,
             saga_tickets,
-            principals,
+            model_events,
         };
         let router = Router::new()
             .route(
@@ -781,7 +781,7 @@ pub(super) mod test_support {
             )
             .with_state(state)
             .layer(axum::middleware::from_fn_with_state(fg, forgeguard_layer));
-        (router, principals_handle)
+        (router, model_events_handle)
     }
 
     pub async fn create_draft_org(

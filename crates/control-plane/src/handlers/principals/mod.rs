@@ -65,9 +65,9 @@ pub(crate) async fn upsert_principal<V: VpClient + 'static>(
         }
     }
 
-    let principals = &state.principals;
+    let model_events = &state.model_events;
 
-    let existing = match principals.get_principal(&raw_org_id, &native_id).await {
+    let existing = match model_events.get_principal(&raw_org_id, &native_id).await {
         Ok(v) => v,
         Err(e) => {
             tracing::error!(org_id = %raw_org_id, error = %e, "upsert_principal: read failed");
@@ -78,7 +78,7 @@ pub(crate) async fn upsert_principal<V: VpClient + 'static>(
 
     match decide_upsert(existing.as_ref(), &body) {
         UpsertDecision::NoOp => {
-            let revision = match principals.latest_revision(&raw_org_id).await {
+            let revision = match model_events.latest_revision(&raw_org_id).await {
                 Ok(r) => r,
                 Err(e) => {
                     tracing::error!(org_id = %raw_org_id, error = %e, "upsert_principal: latest_revision failed");
@@ -91,7 +91,7 @@ pub(crate) async fn upsert_principal<V: VpClient + 'static>(
         }
         UpsertDecision::Changed { payload } => {
             let actor = actor_for(&raw_org_id, identity.as_ref());
-            let revision = match principals
+            let revision = match model_events
                 .upsert_changed(&raw_org_id, &native_id, actor, payload.clone())
                 .await
             {

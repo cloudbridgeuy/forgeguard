@@ -32,9 +32,7 @@ use crate::dynamo_store::saga::DynamoSagaTicketStore;
 use crate::dynamo_store::DynamoOrgStore;
 use crate::handlers::AppState;
 use crate::membership_store::DynamoMembershipResolver;
-use crate::principal_store::{
-    DynamoPrincipalEventStore, InMemoryPrincipalEventStore, PrincipalEventStore,
-};
+use crate::model_event_store::{DynamoModelEventStore, InMemoryModelEventStore, ModelEventStore};
 use crate::signing_key_store::DynamoSigningKeyStore;
 use crate::store::{self, InMemorySagaTicketStore, OrgStore, SagaTicketStore};
 use crate::user_pool::{AwsCognitoUserPoolClient, InMemoryUserPoolClient, UserPoolClient};
@@ -110,7 +108,7 @@ pub async fn dynamodb_router(
         dynamo_client.clone(),
         sagas_table_name.to_string(),
     ));
-    let principals: Arc<dyn PrincipalEventStore> = Arc::new(DynamoPrincipalEventStore::new(
+    let model_events: Arc<dyn ModelEventStore> = Arc::new(DynamoModelEventStore::new(
         dynamo_client.clone(),
         table_name.to_string(),
     ));
@@ -140,7 +138,7 @@ pub async fn dynamodb_router(
             vp,
             user_pool,
             saga_tickets,
-            principals,
+            model_events,
         },
         fg,
     ))
@@ -169,7 +167,7 @@ pub async fn memory_router(
     // keeps `POST /users` exercisable end-to-end against a dev JSON config.
     let user_pool: Arc<dyn UserPoolClient> = Arc::new(InMemoryUserPoolClient::new());
     let saga_tickets: Arc<dyn SagaTicketStore> = Arc::new(InMemorySagaTicketStore::new());
-    let principals: Arc<dyn PrincipalEventStore> = Arc::new(InMemoryPrincipalEventStore::new());
+    let model_events: Arc<dyn ModelEventStore> = Arc::new(InMemoryModelEventStore::new());
     // Ed25519 resolver requires DynamoDB for key lookup; memory mode has no DynamoDB client.
     // VP engine is also unavailable in memory mode — StaticPolicyEngine(Allow) is used instead.
     let fg = build_forgeguard(auth, None, None, None)?;
@@ -179,7 +177,7 @@ pub async fn memory_router(
             vp,
             user_pool,
             saga_tickets,
-            principals,
+            model_events,
         },
         fg,
     ))

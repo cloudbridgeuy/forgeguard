@@ -45,7 +45,7 @@ pub(crate) async fn list_signing_keys_handler<V: VpClient + 'static>(
         return resp;
     }
 
-    match state.principals.list_signing_keys(&raw_org_id).await {
+    match state.model_events.list_signing_keys(&raw_org_id).await {
         Ok(keys) => {
             let keys = keys
                 .into_iter()

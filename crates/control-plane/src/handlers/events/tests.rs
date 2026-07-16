@@ -1,6 +1,6 @@
 //! Integration tests for `GET /api/v1/organizations/{org_id}/events`.
 //!
-//! All in-memory — exercises `InMemoryPrincipalEventStore`'s `events_after`
+//! All in-memory — exercises `InMemoryModelEventStore`'s `events_after`
 //! seam directly (via `upsert_principal` writes through the same app), so no
 //! DynamoDB Local dependency is needed.
 

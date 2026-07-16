@@ -1,9 +1,9 @@
 //! Principal state item mapping (D6): the imperative shell around
 //! [`forgeguard_authz_core::decide_upsert`].
 //!
-//! Also carries the `PrincipalEventStore` seam (Task 7): the trait-object
-//! boundary the `upsert_principal` handler uses so `InMemoryPrincipalEventStore`
-//! can stand in for `DynamoPrincipalEventStore` in handler tests without a
+//! Also carries the `ModelEventStore` seam (Task 7): the trait-object
+//! boundary the `upsert_principal` handler uses so `InMemoryModelEventStore`
+//! can stand in for `DynamoModelEventStore` in handler tests without a
 //! DynamoDB Local dependency.
 
 use std::collections::HashMap;
@@ -34,7 +34,7 @@ use crate::promotion_store::{
 const PRINCIPAL_PREFIX: &str = "PRINCIPAL#";
 const SK_EVENT_SIGNING_KEY: &str = "EVENT_SIGNING_KEY";
 const EVENT_SIGNING_KEY_ID: &str = "event-signing-key-1";
-/// Fixed Ed25519 seed for `InMemoryPrincipalEventStore`'s signing key — kept
+/// Fixed Ed25519 seed for `InMemoryModelEventStore`'s signing key — kept
 /// as a single const so `Self::new` and `list_signing_keys` can't drift apart.
 const IN_MEMORY_SEED: [u8; 32] = [7u8; 32];
 /// `key_id` reported for the in-memory store's single fixed signing key.
@@ -109,7 +109,7 @@ pub(crate) async fn get_principal(
 }
 
 // ---------------------------------------------------------------------------
-// PrincipalEventStore — the seam `upsert_principal` (Task 7) is written against
+// ModelEventStore — the seam `upsert_principal` (Task 7) is written against
 // ---------------------------------------------------------------------------
 
 /// Everything the `PUT /organizations/{org_id}/principals/{native_id}` handler
@@ -118,18 +118,19 @@ pub(crate) async fn get_principal(
 ///
 /// Bundling all three into one trait (rather than composing `EventLog` +
 /// `get_principal` + a signing helper at the call site) keeps the handler
-/// generic over `Arc<dyn PrincipalEventStore>` — the same object-safe seam
-/// `OrgStore`/`SagaTicketStore` already establish — so `InMemoryPrincipalEventStore`
+/// generic over `Arc<dyn ModelEventStore>` — the same object-safe seam
+/// `OrgStore`/`SagaTicketStore` already establish — so `InMemoryModelEventStore`
 /// can stand in for the DynamoDB implementation in handler tests.
 ///
 /// V3 (#110) additionally hangs the promotion lifecycle (`get_promotion`,
 /// `put_promotion`, `tombstone_promotion`, `list_promotions`) off this same
 /// seam — it already owns the per-org signing key + event log this side of
 /// the boundary needs, and standing up a second trait just to avoid the name
-/// mismatch isn't worth the duplication. The rename to a model-wide name is
-/// deferred to #113, when the handler surface churns anyway.
+/// mismatch isn't worth the duplication. This is the model-wide event store
+/// seam (#113); principal, promotion, and org-domain writes all funnel
+/// through the append transaction.
 #[async_trait]
-pub(crate) trait PrincipalEventStore: Send + Sync {
+pub(crate) trait ModelEventStore: Send + Sync {
     /// Strongly-consistent read of a principal's current payload.
     async fn get_principal(
         &self,
@@ -155,7 +156,7 @@ pub(crate) trait PrincipalEventStore: Send + Sync {
     /// Events with seq > `after`, ascending, at most `limit` — the read side
     /// the `GET /organizations/{org_id}/events` cursor handler (Task 8)
     /// replays through. Bundled onto this seam rather than a second parallel
-    /// trait/`AppState` field: `PrincipalEventStore` already owns the per-org
+    /// trait/`AppState` field: `ModelEventStore` already owns the per-org
     /// `EventLog` handle (`DynamoEventLog`/`InMemoryEventLog`) for the upsert
     /// path, so exposing `events_after` here reuses the exact same log
     /// instance instead of standing up a second seam to the same data.
@@ -333,13 +334,13 @@ fn build_model_event(
 // DynamoDB implementation
 // ---------------------------------------------------------------------------
 
-/// DynamoDB-backed [`PrincipalEventStore`].
-pub(crate) struct DynamoPrincipalEventStore {
+/// DynamoDB-backed [`ModelEventStore`].
+pub(crate) struct DynamoModelEventStore {
     client: aws_sdk_dynamodb::Client,
     table_name: String,
 }
 
-impl DynamoPrincipalEventStore {
+impl DynamoModelEventStore {
     pub(crate) fn new(client: aws_sdk_dynamodb::Client, table_name: String) -> Self {
         Self { client, table_name }
     }
@@ -428,7 +429,7 @@ impl DynamoPrincipalEventStore {
 }
 
 #[async_trait]
-impl PrincipalEventStore for DynamoPrincipalEventStore {
+impl ModelEventStore for DynamoModelEventStore {
     async fn get_principal(
         &self,
         org_id: &str,
@@ -670,10 +671,10 @@ impl PrincipalEventStore for DynamoPrincipalEventStore {
 // tests
 // ---------------------------------------------------------------------------
 
-/// In-memory [`PrincipalEventStore`]. Backs `--store=memory` dev mode and lets
+/// In-memory [`ModelEventStore`]. Backs `--store=memory` dev mode and lets
 /// handler tests exercise the full upsert flow (including a real Ed25519
 /// signature) without DynamoDB Local.
-pub(crate) struct InMemoryPrincipalEventStore {
+pub(crate) struct InMemoryModelEventStore {
     principals: Mutex<HashMap<(String, NativeId), serde_json::Value>>,
     /// One log per org — a shared log would leak one org's events into
     /// another org's `events_after`/`latest_revision` read. `Arc`-wrapped so
@@ -685,7 +686,7 @@ pub(crate) struct InMemoryPrincipalEventStore {
     promotions: Mutex<HashMap<(String, String, String), String>>,
 }
 
-impl InMemoryPrincipalEventStore {
+impl InMemoryModelEventStore {
     pub(crate) fn new() -> Self {
         Self {
             principals: Mutex::new(HashMap::new()),
@@ -739,14 +740,14 @@ impl InMemoryPrincipalEventStore {
     }
 }
 
-impl Default for InMemoryPrincipalEventStore {
+impl Default for InMemoryModelEventStore {
     fn default() -> Self {
         Self::new()
     }
 }
 
 #[async_trait]
-impl PrincipalEventStore for InMemoryPrincipalEventStore {
+impl ModelEventStore for InMemoryModelEventStore {
     async fn get_principal(
         &self,
         org_id: &str,

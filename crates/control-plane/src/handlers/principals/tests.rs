@@ -1,6 +1,6 @@
 //! Integration tests for `PUT /api/v1/organizations/{org_id}/principals/{native_id}`.
 //!
-//! All in-memory — exercises `InMemoryPrincipalEventStore`, which wraps a
+//! All in-memory — exercises `InMemoryModelEventStore`, which wraps a
 //! real `InMemoryEventLog` + a real Ed25519 signature, so no DynamoDB Local
 //! dependency is needed to cover the decide-upsert + revision-bump flow.
 

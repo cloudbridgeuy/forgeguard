@@ -140,14 +140,14 @@ pub(super) fn schema_test_app(store: Arc<dyn OrgStore>) -> SchemaTestApp {
 
     let user_pool = Arc::new(InMemoryUserPoolClient::new());
     let saga_tickets: Arc<dyn SagaTicketStore> = Arc::new(InMemorySagaTicketStore::new());
-    let principals: Arc<dyn crate::principal_store::PrincipalEventStore> =
-        Arc::new(crate::principal_store::InMemoryPrincipalEventStore::new());
+    let model_events: Arc<dyn crate::model_event_store::ModelEventStore> =
+        Arc::new(crate::model_event_store::InMemoryModelEventStore::new());
     let state = AppState {
         store,
         vp: happy_stub(),
         user_pool: Arc::clone(&user_pool) as Arc<dyn UserPoolClient>,
         saga_tickets,
-        principals,
+        model_events,
     };
     let router = Router::new()
         .route(

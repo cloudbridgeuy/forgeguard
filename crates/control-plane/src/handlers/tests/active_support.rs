@@ -258,14 +258,14 @@ pub(super) fn test_app_for_store(store: Arc<dyn OrgStore>, vp: Arc<StubVpClient>
 
     let user_pool: Arc<dyn UserPoolClient> = Arc::new(InMemoryUserPoolClient::new());
     let saga_tickets: Arc<dyn SagaTicketStore> = Arc::new(InMemorySagaTicketStore::new());
-    let principals: Arc<dyn crate::principal_store::PrincipalEventStore> =
-        Arc::new(crate::principal_store::InMemoryPrincipalEventStore::new());
+    let model_events: Arc<dyn crate::model_event_store::ModelEventStore> =
+        Arc::new(crate::model_event_store::InMemoryModelEventStore::new());
     let state = AppState {
         store,
         vp,
         user_pool,
         saga_tickets,
-        principals,
+        model_events,
     };
     Router::new()
         .route(

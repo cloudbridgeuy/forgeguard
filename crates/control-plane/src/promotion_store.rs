@@ -1,7 +1,7 @@
 //! Promotion state item mapping (V3 / A7-D7): pure key, FGRN, and payload
 //! builders for `PK=ORG#{org}, SK=PROMO#{type}#{native_id}` items. All I/O
 //! (the transactional tombstone, the reconciliation Query) lives on the
-//! `PrincipalEventStore` implementations in `principal_store.rs`.
+//! `ModelEventStore` implementations in `model_event_store.rs`.
 //!
 //! Wired up by `handlers/promotions/mod.rs` in Task 4; until then plain
 //! `cargo xtask lint` sees this module as dead code from the crate's
