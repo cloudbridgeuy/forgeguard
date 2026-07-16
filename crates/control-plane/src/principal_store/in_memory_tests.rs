@@ -169,3 +169,92 @@ async fn in_memory_key_verifies_an_appended_event() {
     let bytes = canonical_envelope_bytes(envelope, "org-a");
     assert!(verify_bytes(&vk, &bytes, &sig).is_ok());
 }
+
+/// V5 demo: mutate at rev N+1, `fold_at(N)` reproduces the pre-mutation
+/// state; `fold_at(None)` matches the state items; unknown revision errors.
+#[tokio::test]
+async fn fold_at_time_travels_over_the_org_log() {
+    let store = InMemoryPrincipalEventStore::new();
+    let usr = nid("usr_1");
+    let doc_type = seg("document");
+    let doc = nid("doc_1");
+
+    // rev 1: usr_1 is admin
+    store
+        .upsert_changed(
+            "acme",
+            &usr,
+            Actor::System,
+            serde_json::json!({"role": "admin"}),
+        )
+        .await
+        .unwrap();
+    // rev 2: usr_1 becomes viewer
+    store
+        .upsert_changed(
+            "acme",
+            &usr,
+            Actor::System,
+            serde_json::json!({"role": "viewer"}),
+        )
+        .await
+        .unwrap();
+    // rev 3: doc_1 promoted; rev 4: tombstoned
+    store
+        .put_promotion("acme", &doc_type, &doc, Actor::System)
+        .await
+        .unwrap();
+    store
+        .tombstone_promotion("acme", &doc_type, &doc, Actor::System)
+        .await
+        .unwrap();
+
+    // slice(at 1): pre-mutation principal, no promotions yet.
+    let at_1 = store.fold_at("acme", Some(Revision::new(1))).await.unwrap();
+    assert_eq!(at_1.revision(), Revision::new(1));
+    assert_eq!(
+        at_1.principal("usr_1"),
+        Some(&serde_json::json!({"role": "admin"}))
+    );
+    assert!(at_1.promotions().is_empty());
+
+    // slice(at 3): post-mutation principal, promotion live.
+    let at_3 = store.fold_at("acme", Some(Revision::new(3))).await.unwrap();
+    assert_eq!(
+        at_3.principal("usr_1"),
+        Some(&serde_json::json!({"role": "viewer"}))
+    );
+    assert_eq!(
+        at_3.promotion("document", "doc_1"),
+        Some("fgrn:acme:resource:document/doc_1")
+    );
+
+    // slice(latest): promotion tombstoned; principal matches the state item.
+    let latest = store.fold_at("acme", None).await.unwrap();
+    assert_eq!(latest.revision(), Revision::new(4));
+    assert_eq!(latest.promotion("document", "doc_1"), None);
+    let state_item = store.get_principal("acme", &usr).await.unwrap();
+    assert_eq!(latest.principal("usr_1"), state_item.as_ref());
+
+    // unknown revision errors.
+    let err = store
+        .fold_at("acme", Some(Revision::new(9)))
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("unknown revision 9"));
+}
+
+#[tokio::test]
+async fn fold_at_on_empty_org_log() {
+    let store = InMemoryPrincipalEventStore::new();
+
+    let latest = store.fold_at("acme", None).await.unwrap();
+    assert_eq!(latest.revision(), Revision::new(0));
+    assert!(latest.principals().is_empty());
+
+    let err = store
+        .fold_at("acme", Some(Revision::new(1)))
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("unknown revision 1"));
+}

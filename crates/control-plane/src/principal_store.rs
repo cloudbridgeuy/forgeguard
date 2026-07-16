@@ -15,8 +15,9 @@ use ed25519_dalek::pkcs8::spki::der::pem::LineEnding;
 use ed25519_dalek::pkcs8::{DecodePrivateKey as _, EncodePublicKey as _};
 use forgeguard_authn_core::signing::{sign_bytes, SigningKey};
 use forgeguard_authz_core::{
-    canonical_event_bytes, principal_event_payload, Actor, EventDraft, EventDraftParams,
-    EventEnvelope, EventId, EventKind, EventLog, InMemoryEventLog, Revision,
+    canonical_event_bytes, fold_events, principal_event_payload, Actor, EventDraft,
+    EventDraftParams, EventEnvelope, EventId, EventKind, EventLog, FoldedState, InMemoryEventLog,
+    Revision,
 };
 use forgeguard_core::NativeId;
 
@@ -38,6 +39,8 @@ const EVENT_SIGNING_KEY_ID: &str = "event-signing-key-1";
 const IN_MEMORY_SEED: [u8; 32] = [7u8; 32];
 /// `key_id` reported for the in-memory store's single fixed signing key.
 const IN_MEMORY_KEY_ID: &str = "in-memory-test-key";
+/// Page size for `fold_at`'s log replay.
+const FOLD_PAGE_SIZE: usize = 100;
 
 /// Build the `StatePut` for a principal's current payload.
 ///
@@ -211,6 +214,40 @@ pub(crate) trait PrincipalEventStore: Send + Sync {
     /// The org's published event-signing public keys (public halves only,
     /// D8). Empty if no model event has ever been appended (no key minted).
     async fn list_signing_keys(&self, org_id: &str) -> Result<Vec<EventSigningKey>>;
+
+    /// Revision-pinned historical read (V5 / N16, closing D9): fold the
+    /// org's event log up to `at` (or the latest revision when `None`) into
+    /// entity state. `None` on an empty log yields [`FoldedState::empty`];
+    /// an explicit revision of 0 or past the latest errors.
+    ///
+    /// Default implementation pages `events_after` and delegates to the
+    /// pure `fold_events` — both impls inherit it. No HTTP route consumes
+    /// this in #110 (the V5 demo is conformance-test output), hence
+    /// `dead_code`, same precedent as `put_promotion`.
+    #[allow(dead_code)]
+    async fn fold_at(&self, org_id: &str, at: Option<Revision>) -> Result<FoldedState> {
+        let latest = self.latest_revision(org_id).await?;
+        let target = match at {
+            Some(revision) => revision,
+            None if latest.value() == 0 => return Ok(FoldedState::empty()),
+            None => latest,
+        };
+
+        let mut events = Vec::new();
+        let mut after = Revision::new(0);
+        loop {
+            let page = self.events_after(org_id, after, FOLD_PAGE_SIZE).await?;
+            let Some(last) = page.last() else { break };
+            after = last.seq();
+            let exhausted = page.len() < FOLD_PAGE_SIZE;
+            events.extend(page);
+            if exhausted || after.value() >= target.value() {
+                break;
+            }
+        }
+
+        fold_events(&events, target).map_err(|e| Error::Store(e.to_string()))
+    }
 }
 
 /// A published event-signing public key: `key_id` + SPKI public PEM.
