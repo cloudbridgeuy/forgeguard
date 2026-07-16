@@ -250,3 +250,72 @@ async fn list_signing_keys_verifies_appended_event() {
     let bytes = canonical_envelope_bytes(envelope, "acme");
     assert!(verify_bytes(&vk, &bytes, &sig).is_ok());
 }
+
+/// V5 demo, DynamoDB half: `fold_at(N)` time-travels; `fold_at(None)`
+/// matches the strongly-read state items; unknown revision errors.
+#[tokio::test]
+async fn fold_at_time_travels_and_matches_state_items() {
+    let client = test_client().await;
+    let table_name = unique_table_name();
+    create_test_table(&client, &table_name).await;
+    let store = DynamoPrincipalEventStore::new(client, table_name);
+
+    let usr = NativeId::try_new("usr_1").unwrap();
+    let doc_type = Segment::try_new("document").unwrap();
+    let doc = NativeId::try_new("doc_1").unwrap();
+
+    store
+        .upsert_changed(
+            "acme",
+            &usr,
+            Actor::System,
+            serde_json::json!({"role": "admin"}),
+        )
+        .await
+        .unwrap();
+    store
+        .upsert_changed(
+            "acme",
+            &usr,
+            Actor::System,
+            serde_json::json!({"role": "viewer"}),
+        )
+        .await
+        .unwrap();
+    store
+        .put_promotion("acme", &doc_type, &doc, Actor::System)
+        .await
+        .unwrap();
+    store
+        .tombstone_promotion("acme", &doc_type, &doc, Actor::System)
+        .await
+        .unwrap();
+
+    let at_1 = store.fold_at("acme", Some(Revision::new(1))).await.unwrap();
+    assert_eq!(
+        at_1.principal("usr_1"),
+        Some(&serde_json::json!({"role": "admin"}))
+    );
+    assert!(at_1.promotions().is_empty());
+
+    let at_3 = store.fold_at("acme", Some(Revision::new(3))).await.unwrap();
+    assert_eq!(
+        at_3.promotion("document", "doc_1"),
+        Some("fgrn:acme:resource:document/doc_1")
+    );
+
+    // Latest fold matches the state items the hot path reads.
+    let latest = store.fold_at("acme", None).await.unwrap();
+    assert_eq!(latest.revision(), Revision::new(4));
+    let principal_item = store.get_principal("acme", &usr).await.unwrap();
+    assert_eq!(latest.principal("usr_1"), principal_item.as_ref());
+    let promotion_item = store.get_promotion("acme", &doc_type, &doc).await.unwrap();
+    assert_eq!(promotion_item, None);
+    assert_eq!(latest.promotion("document", "doc_1"), None);
+
+    let err = store
+        .fold_at("acme", Some(Revision::new(9)))
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("unknown revision 9"));
+}
