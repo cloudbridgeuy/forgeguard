@@ -1,5 +1,12 @@
 # Optimistic Locking — Control Plane `PUT /api/v1/organizations/{org_id}`
 
+> **Superseded for org mutations by revision tokens (#113 V1).** Org
+> `PUT`/`POST` no longer honour `If-Match`/`ETag` — see
+> [control-plane.md § Org CRUD is event-sourced](./control-plane.md#org-crud-is-event-sourced-revision-tokens-113-v1).
+> Everything below this banner describes the groups (`.../groups[/{name}]`)
+> and user-schema `PUT`/`DELETE` paths, which still use `ETag`/`If-Match` and
+> retire in V4/V5.
+
 Implements RFC 7232 `If-Match` / `412 Precondition Failed` on proxy-config updates
 so that two concurrent writers cannot silently overwrite each other.
 

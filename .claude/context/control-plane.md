@@ -98,23 +98,33 @@ Request -> forgeguard_layer (auth) -> ForgeGuardIdentity extractor -> lookup_org
 
 The handler uses `ForgeGuardIdentity` to receive the resolved identity from the middleware. Org-scoping is a Cedar policy concern evaluated by the pipeline.
 
-### Optimistic locking on `PUT`
+### Org CRUD is event-sourced (revision tokens, #113 V1)
 
-`update_handler` honours `If-Match` using the pure core in
-`crates/control-plane/src/etag.rs`:
+`POST`/`PUT /api/v1/organizations/{org_id}` write through
+`ModelEventStore::{create_org, update_org}` onto the org's event log
+(`org.created`/`org.updated`), not through `OrgStore` (that trait now only
+serves reads — `get`/`list`). Optimistic concurrency is revision-tokened, not
+etag-conditioned:
 
-1. Extract `If-Match` from headers.
-2. `etag::derive_expected_etag(body.config.is_some(), if_match)` returns the
-   `expected_etag` to pass to the store. Name-only PUTs (no `config`) always
-   receive `None` — the check is skipped.
-3. The store (`InMemoryOrgStore::update`) compares the stored config etag to
-   `expected_etag` via `etag::check_etag`. Mismatch → `Error::PreconditionFailed`.
-4. The handler maps `Error::PreconditionFailed` → 412 with the current etag
-   in both the `ETag` response header and a `{error, current_etag}` JSON body.
-5. On 200, the handler sets `ETag: <new_etag>` so clients can chain edits.
+1. `PUT` accepts an optional `X-Fg-If-Revision: <u64>` header, parsed by the
+   pure `handlers/if_revision.rs`. An unparseable value is `400`.
+2. Before any write, the handler compares the incoming payload to the stored
+   one via `decide_upsert`/`org_semantic_view` (pure, key-order-insensitive,
+   ignores `updated_at`). A semantically-identical `PUT` is a no-op: `200`
+   with the current revision, no event appended, no revision check performed.
+3. Otherwise the log append is conditioned on `X-Fg-If-Revision` (when
+   present) matching the log's current revision. Mismatch → `412` with
+   `{"error": "revision_mismatch", "current_revision", "expected_revision"}`
+   and an `x-fg-revision` header carrying the current revision.
+4. On success, `200`/`201` responses carry the new revision in both the
+   `x-fg-revision` header and the JSON body's `revision` field.
 
-V1 scope: `InMemoryOrgStore` only. `DynamoOrgStore::update` accepts `expected_etag`
-but does not enforce it until a later slice.
+`If-Match`/`ETag` no longer apply to org `PUT` — they're ignored if sent.
+There is no `DELETE /api/v1/organizations/{org_id}`; org deletion isn't
+supported on the log yet, so the route falls through to Axum's default `405`.
+Groups and user-schema `PUT`/`DELETE` are unaffected — they still use
+`ETag`/`If-Match` (see [optimistic-locking.md](./optimistic-locking.md),
+superseded for org mutations only).
 
 ## Config File Format
 
@@ -224,7 +234,8 @@ The Cedar namespace is `forgeguard` (from `ProjectId::new("forgeguard")`). The t
 
 ### Route-to-Action Mapping
 
-All 10 API routes map to QualifiedActions in the `cp` namespace:
+All API routes map to QualifiedActions in the `cp` namespace (no `DELETE
+/api/v1/organizations/{org_id}` — removed in #113 V1, see above):
 
 | Method | Path | Cedar Action |
 |--------|------|-------------|
@@ -232,7 +243,6 @@ All 10 API routes map to QualifiedActions in the `cp` namespace:
 | `GET` | `/api/v1/organizations` | `cp:organization:read` |
 | `GET` | `/api/v1/organizations/{org_id}` | `cp:organization:read` |
 | `PUT` | `/api/v1/organizations/{org_id}` | `cp:organization:update` |
-| `DELETE` | `/api/v1/organizations/{org_id}` | `cp:organization:delete` |
 | `GET` | `/api/v1/organizations/{org_id}/proxy-config` | `cp:proxy-config:read` |
 | `POST` | `/api/v1/organizations/{org_id}/keys` | `cp:key:generate` |
 | `GET` | `/api/v1/organizations/{org_id}/keys` | `cp:key:read` |
