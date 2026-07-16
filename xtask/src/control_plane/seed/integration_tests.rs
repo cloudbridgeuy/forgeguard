@@ -37,6 +37,8 @@ use crate::control_plane::seed_core::SeedConfig;
 use super::groups::write_groups;
 use super::orgs::write_orgs;
 use super::pure::SeededOrgScope;
+use forgeguard_authn::user_pool::in_memory::InMemoryUserPoolClient;
+
 use super::SeedContext;
 
 const SEED_TOML: &str = r#"
@@ -196,10 +198,12 @@ async fn seed_happy_path_writes_one_config_and_three_group_rows() {
     let config: SeedConfig = toml::from_str(SEED_TOML).unwrap();
     let scope = SeededOrgScope::new(vec!["org-acme".to_owned()]).unwrap();
 
+    let user_pool_client = InMemoryUserPoolClient::new();
     let ctx = SeedContext {
         dynamo: &dynamo,
         cognito: &cognito,
         vp: &vp,
+        user_pool_client: &user_pool_client,
         table_name: table.clone(),
         pool_id: "stub".to_owned(),
         cp_dogfood_policy_store_id: "stub".to_owned(),
@@ -248,10 +252,12 @@ async fn seed_is_idempotent() {
     let config: SeedConfig = toml::from_str(SEED_TOML).unwrap();
     let scope = SeededOrgScope::new(vec!["org-acme".to_owned()]).unwrap();
 
+    let user_pool_client = InMemoryUserPoolClient::new();
     let ctx = SeedContext {
         dynamo: &dynamo,
         cognito: &cognito,
         vp: &vp,
+        user_pool_client: &user_pool_client,
         table_name: table.clone(),
         pool_id: "stub".to_owned(),
         cp_dogfood_policy_store_id: "stub".to_owned(),
@@ -296,10 +302,12 @@ allow = []
     let config: SeedConfig = toml::from_str(toml_str).unwrap();
     let scope = SeededOrgScope::new(vec!["org-acme".to_owned()]).unwrap();
 
+    let user_pool_client = InMemoryUserPoolClient::new();
     let ctx = SeedContext {
         dynamo: &dynamo,
         cognito: &cognito,
         vp: &vp,
+        user_pool_client: &user_pool_client,
         table_name: table.clone(),
         pool_id: "stub".to_owned(),
         cp_dogfood_policy_store_id: "stub".to_owned(),
@@ -349,10 +357,12 @@ allow = []
     let config: SeedConfig = toml::from_str(toml_str).unwrap();
     let scope = SeededOrgScope::new(vec!["org-acme".to_owned()]).unwrap();
 
+    let user_pool_client = InMemoryUserPoolClient::new();
     let ctx = SeedContext {
         dynamo: &dynamo,
         cognito: &cognito,
         vp: &vp,
+        user_pool_client: &user_pool_client,
         table_name: table.clone(),
         pool_id: "stub".to_owned(),
         cp_dogfood_policy_store_id: "stub".to_owned(),
