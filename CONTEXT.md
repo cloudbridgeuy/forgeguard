@@ -56,7 +56,7 @@ The measured cedar-policy spike (seven conformance assertions S1–S5, toolchain
 | [Demo App](./.claude/context/demo-app.md) | E2E demo: Python TODO app, native proxy, demo config, and running instructions. |
 | [Control Plane](./.claude/context/control-plane.md) | CP scaffold, proxy-config endpoint, OrgStore trait, auth, VP authorization, ETag, draft/configured lifecycle, event append spine, promotion lifecycle (tombstone + reconciliation), time-travel fold (revision-pinned historical reads), and testing. |
 | [Groups V3](./.claude/context/groups-v3.md) | Active-org VP materialization: `vp_client` module, `OrgWriteContext`/`VpStage` ADTs, F3/F3'/F4 failure-mode taxonomy, rollback metric, and test scaffolding. |
-| [Optimistic Locking](./.claude/context/optimistic-locking.md) | `If-Match` / `412` semantics for organization updates, ETags, conditional GETs, and metrics. |
+| [Optimistic Locking](./.claude/context/optimistic-locking.md) | `If-Match` / `412` semantics for group and user-schema mutations, ETags, conditional GETs, and metrics. Superseded for organization mutations by revision tokens (#113 V1) — see Control Plane. |
 | [Infra: Control Plane](./.claude/context/infra-control-plane.md) | CDK project, 1Password integration, DynamoDB Global Table, and xtask infra commands. |
 | [AWS ARN Formats](./.claude/context/aws-arn-formats.md) | Per-service ARN gotchas and the rule to prefer CDK CFN attribute getters. |
 | [Cluster Mode](./.claude/context/cluster.md) | TieredCache, Redis wiring, config, health stats, and future slices. |

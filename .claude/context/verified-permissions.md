@@ -108,7 +108,7 @@ The CP ships three RBAC roles plus a single machine permit. Each human role maps
 |---|---|---|
 | `member` | — | `cp-organization-read`, `cp-key-read`, `cp-config-read`, `cp-group-read` |
 | `admin` | `member` | org create/update, member invite/remove/change-role, `cp-config-write`, key generate/revoke/rotate, `cp-group-create`, `cp-group-update`, `cp-group-delete` |
-| `owner` | `admin` | `cp-organization-delete`, `cp-member-promote-owner` |
+| `owner` | `admin` | `cp-member-promote-owner` |
 
 Canonical source: the `[[policies]]` `allow` arrays in `forgeguard.toml` at the workspace root. Sync them to the CP-dogfood VP store with `cargo xtask control-plane cedar sync --config forgeguard.toml`.
 
