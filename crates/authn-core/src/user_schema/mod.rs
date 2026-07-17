@@ -298,9 +298,9 @@ pub struct CreateUserCommand {
 /// orgs enforce append-only: only adding new custom attrs is allowed; every
 /// other shape change accumulates a `FieldViolation`.
 ///
-/// Other lifecycle statuses (`PendingProvisioning`, `Provisioning`, `Suspended`,
-/// `Deleting`, `Deleted`, `Failed`) inherit the Active rules — there is no
-/// legitimate reason to relax append-only after a schema has left Draft.
+/// Other lifecycle statuses (`Suspended`, `Deleting`, `Deleted`) inherit the
+/// Active rules — there is no legitimate reason to relax append-only after a
+/// schema has left Draft.
 pub fn diff_schema(
     old: &UserSchema,
     new: &UserSchema,
@@ -625,12 +625,9 @@ mod tests {
         let old = schema_with_custom(&[("foo", bounded_string(None, None, false))]);
         let new = schema_with_custom(&[]);
         for status in [
-            OrgStatus::Provisioning,
-            OrgStatus::PendingProvisioning,
             OrgStatus::Suspended,
             OrgStatus::Deleting,
             OrgStatus::Deleted,
-            OrgStatus::Failed,
         ] {
             let err = diff_schema(&old, &new, &status).unwrap_err();
             assert!(
