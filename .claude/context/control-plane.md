@@ -42,8 +42,8 @@ pub(crate) trait OrgStore: Send + Sync {
 
 Handlers come in two shapes:
 
-- **No VP needed** (org/key endpoints): take `State<Arc<dyn OrgStore>>` directly. `AppState<V>` exposes the store via a `FromRef<AppState<V>> for Arc<dyn OrgStore>` impl, so Axum derives the sub-state automatically.
-- **VP needed** (group write handlers under `/groups`): take `State<AppState<V>>` and reach `state.store` / `state.vp`. Only this group of handlers carries the `<V: VpClient>` parameter.
+- **No VP needed** (org read, `list_keys`): take `State<Arc<dyn OrgStore>>` directly. `AppState<V>` exposes the store via a `FromRef<AppState<V>> for Arc<dyn OrgStore>` impl, so Axum derives the sub-state automatically.
+- **VP needed** (group write handlers under `/groups`; key mutation handlers under `/keys`, which reach `state.model_events`): take `State<AppState<V>>` and reach `state.store` / `state.vp` / `state.model_events`. Only this group of handlers carries the `<V: VpClient>` parameter.
 
 The rule when adding a new handler: never introduce `<S: OrgStore>` on a handler signature. If you find yourself wanting it, take `Arc<dyn OrgStore>` instead — it is the same dispatch under the hood with one fewer monomorphization. Per-handler generics over `S: OrgStore` are a removed pattern; do not reintroduce them.
 
@@ -300,7 +300,7 @@ Machine principals carry an `org_id` attribute and have no group parents.
 
 - Store tests (`store.rs`) -- parsing, validation, ETag determinism, multiple orgs, unknown fields, key lifecycle, Draft round-trip, Draft → configured promotion
 - Handler integration tests (`handlers/tests.rs`) -- full HTTP pipeline via `tower::ServiceExt::oneshot` with `forgeguard-axum` middleware layer, auth via `StaticApiKeyResolver` (`x-api-key: test-key`). Includes Draft creation, 409 on Draft proxy-config, PUT-promotes-Draft. Lives in a sibling file because `handlers/mod.rs` would exceed the 1000-line cap with its tests inline.
-- Key handler integration tests (`handlers/keys.rs`) -- generate, revoke (incl. idempotent), list keys
+- Key handler integration tests (`handlers/keys.rs`) -- generate, revoke (incl. idempotent D6 no-op), rotate (incl. 404/409), list keys, `x-fg-revision` header/body assertions, event-log cursor assertions (`org.key_generated`/`org.key_revoked` narrowing)
 - DynamoDB integration tests (`dynamo_store/tests.rs`) -- feature-gated behind `dynamodb-tests`, run via `cargo xtask control-plane test`. Includes Draft round-trip and Draft → configured promotion against a real DynamoDB backend.
 
 Store tests use `build_org_store()` with inline JSON to build `InMemoryOrgStore` instances. Tests that call `store.get()` use `#[tokio::test]` since the store is async.
@@ -362,7 +362,7 @@ crates/control-plane/src/
   handlers/
     mod.rs            -- health, CRUD, proxy_config handlers
     tests.rs          -- handler integration tests (split from mod.rs to satisfy 1000-line cap)
-    keys.rs           -- generate_key, list_keys, revoke_key handlers + tests
+    keys.rs           -- generate_key, revoke_key, rotate_key (event-sourced via ModelEventStore) + list_keys (OrgStore read) handlers + tests
     principals/       -- upsert_principal handler (PUT .../principals/{native_id})
     events/           -- list_events_handler (GET .../events cursor replay + V2 consistency tokens)
     promotions/       -- tombstone_promotion_handler (DELETE) + list_promotions_handler (GET .../promoted-resources)
@@ -383,7 +383,23 @@ The crate is both lib+bin. `app.rs` exposes `dynamodb_router()` and `memory_rout
 
 ## Key Management
 
-Three endpoints manage Ed25519 signing keys per organization. The private key is used by the BYOC proxy for outbound request signing (see [request-signing.md](./request-signing.md)); the public key is stored in the control plane and used by `DynamoSigningKeyStore` to verify inbound signed requests from the proxy.
+Four endpoints manage Ed25519 request-signing keys per organization. The private key is used by the BYOC proxy for outbound request signing (see [request-signing.md](./request-signing.md)); the public key is stored in the control plane and used by `DynamoSigningKeyStore` to verify inbound signed requests from the proxy.
+
+### Key mutations are event-sourced (#113 V3)
+
+`POST .../keys`, `DELETE .../keys/{key_id}`, and `POST .../keys/{key_id}/rotate` write through `ModelEventStore::{generate_org_key, revoke_org_key, rotate_org_key}` onto the org's event log, mirroring the org-CRUD pattern (#113 V1). `OrgStore` no longer has key-write methods — it keeps only reads (`list_keys`, `get`) plus `write_through_signing_keys`, the write-through target `InMemoryModelEventStore` uses to mirror key mutations into the read model consumed by `list_keys`/`DynamoSigningKeyStore`.
+
+Each mutation appends one event alongside the org's new `signing_keys` list, in the same transaction:
+
+| Event kind | Appended by | Narrowing |
+|------------|-------------|-----------|
+| `org.key_generated` | `POST .../keys` | no |
+| `org.key_revoked` | `DELETE .../keys/{key_id}` | yes |
+| `org.key_rotated` | `POST .../keys/{key_id}/rotate` | no |
+
+Event payloads carry the public half only (`key_id`, `public_key`, `status`, `created_at`, optionally `expires_at`) — the private key never appears on the log, only in the one-time mutation response.
+
+`generate_org_key`/`rotate_org_key` return the new key material together with the `Revision` the append landed at, atomically from the same transaction — handlers surface it as both the `x-fg-revision` response header and a `revision` field in the JSON body, so callers never need a separate `GET .../events` read to learn the log position their mutation produced.
 
 ### Endpoints
 
@@ -392,8 +408,9 @@ Three endpoints manage Ed25519 signing keys per organization. The private key is
 | `POST` | `/api/v1/organizations/{org_id}/keys` | Generate a new Ed25519 signing key | 201 |
 | `GET` | `/api/v1/organizations/{org_id}/keys` | List signing keys for an org | 200 |
 | `DELETE` | `/api/v1/organizations/{org_id}/keys/{key_id}` | Revoke a signing key | 204 |
+| `POST` | `/api/v1/organizations/{org_id}/keys/{key_id}/rotate` | Rotate a signing key | 201 |
 
-All endpoints return 404 if the organization does not exist, except DELETE which returns 204 regardless (idempotent).
+All endpoints return 404 if the organization does not exist, except DELETE which returns 204 regardless (idempotent). Rotate returns 404 for an unknown `key_id` and 409 (`{"error": "..."}`) if the target key is already `Revoked` or already `Rotating`.
 
 ### Generate Key (POST)
 
@@ -405,20 +422,21 @@ curl -s -X POST \
   http://localhost:3001/api/v1/organizations/org-acme/keys | jq .
 ```
 
-Response (201):
+Response (201, `x-fg-revision` header also set):
 
 ```json
 {
   "key_id": "key-...",
   "private_key": "-----BEGIN PRIVATE KEY-----\n...",
   "public_key": "-----BEGIN PUBLIC KEY-----\n...",
-  "created_at": "2026-04-15T12:00:00+00:00"
+  "created_at": "2026-04-15T12:00:00+00:00",
+  "revision": 3
 }
 ```
 
 ### List Keys (GET)
 
-Returns public metadata for all active keys. Never includes private keys.
+Returns public metadata for all active keys. Never includes private keys. Reads through `OrgStore::list_keys` (the read model kept in sync by key-mutation write-through), not the event log directly.
 
 ```sh
 curl -s \
@@ -441,7 +459,7 @@ Response (200):
 
 ### Revoke Key (DELETE)
 
-Idempotent -- returns 204 whether the key existed or not.
+Idempotent -- returns 204 whether the key existed or not. This is the D6 no-op rule: revoking an absent/already-revoked key appends no event and `x-fg-revision` carries the log's *current* revision unchanged; an actual revocation appends `org.key_revoked` (narrowing) and `x-fg-revision` carries the *new* revision.
 
 ```sh
 curl -s -X DELETE \
@@ -449,6 +467,18 @@ curl -s -X DELETE \
   http://localhost:3001/api/v1/organizations/org-acme/keys/key-abc123
 # 204 No Content
 ```
+
+### Rotate Key (POST .../rotate)
+
+Moves the target key to `Rotating` (with a grace window) and appends a new `Active` key in the same transaction. Returns the new keypair, shaped identically to Generate Key.
+
+```sh
+curl -s -X POST \
+  -H 'x-api-key: test-key' \
+  http://localhost:3001/api/v1/organizations/org-acme/keys/key-abc123/rotate | jq .
+```
+
+Response (201, `x-fg-revision` header also set): same shape as Generate Key.
 
 ## What's NOT Here Yet
 

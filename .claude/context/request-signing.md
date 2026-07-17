@@ -92,6 +92,8 @@ The control plane verifies signed requests from BYOC proxies using the same Ed25
 
 `Credential::SignedRequest` (in `authn-core`) is the inbound credential type. `Ed25519SignatureResolver` (in `authn`) performs the verification using `DynamoSigningKeyStore` (in `control-plane`).
 
+Key generation/revocation/rotation (`POST`/`DELETE .../keys`, `POST .../keys/{key_id}/rotate`) is event-sourced (#113 V3, see [control-plane.md § Key Management](./control-plane.md#key-management)): `org.key_generated`/`org.key_revoked`/`org.key_rotated` are appended to the org's event log alongside the key mutation, public half only. Revocation is a *narrowing* event on the log — this is the consumer-visible signal (e.g. for `cargo xtask control-plane verify-events` or external SDK consumers watching `GET .../events`). It does not change how enforcement works: `Ed25519SignatureResolver` still does its own per-request `DynamoSigningKeyStore` read against the write-through read model to check key status, independent of the event log.
+
 ## Future Scope (deferred)
 
 | Item | Issue | Notes |
