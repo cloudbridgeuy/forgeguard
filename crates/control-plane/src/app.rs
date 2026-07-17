@@ -366,6 +366,24 @@ fn cp_route_actions() -> forgeguard_http::Result<Vec<RouteMapping>> {
             "cp:signing-key:read",
             Some("org_id"),
         ),
+        (
+            "POST",
+            "/api/v1/organizations/{org_id}/activate",
+            "cp:organization:activate",
+            Some("org_id"),
+        ),
+        (
+            "POST",
+            "/api/v1/organizations/{org_id}/suspend",
+            "cp:organization:suspend",
+            Some("org_id"),
+        ),
+        (
+            "POST",
+            "/api/v1/organizations/{org_id}/restore",
+            "cp:organization:restore",
+            Some("org_id"),
+        ),
     ];
 
     entries
@@ -599,8 +617,8 @@ mod tests {
         let mappings = cp_route_actions().expect("cp_route_actions must not fail");
         assert_eq!(
             mappings.len(),
-            22,
-            "expected 22 route mappings, got {}",
+            25,
+            "expected 25 route mappings, got {}",
             mappings.len()
         );
         // Confirm each action string round-trips correctly through QualifiedAction
@@ -627,6 +645,9 @@ mod tests {
             "cp:resource:tombstone",
             "cp:promotion:list",
             "cp:signing-key:read",
+            "cp:organization:activate",
+            "cp:organization:suspend",
+            "cp:organization:restore",
         ];
         for (mapping, expected) in mappings.iter().zip(expected_actions.iter()) {
             assert_eq!(

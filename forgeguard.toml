@@ -84,6 +84,7 @@ allow = [
   "cp-group-create", "cp-group-update", "cp-group-delete",
   "cp-principal-upsert",
   "cp-resource-tombstone",
+  "cp-organization-activate", "cp-organization-suspend", "cp-organization-restore",
 ]
 
 [[policies]]
