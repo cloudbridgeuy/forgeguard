@@ -785,6 +785,18 @@ pub(super) mod test_support {
                 "/api/v1/organizations/{org_id}/signing-keys",
                 axum::routing::get(super::signing_keys::list_signing_keys_handler::<StubVpClient>),
             )
+            .route(
+                "/api/v1/organizations/{org_id}/activate",
+                axum::routing::post(super::lifecycle::activate_handler::<StubVpClient>),
+            )
+            .route(
+                "/api/v1/organizations/{org_id}/suspend",
+                axum::routing::post(super::lifecycle::suspend_handler::<StubVpClient>),
+            )
+            .route(
+                "/api/v1/organizations/{org_id}/restore",
+                axum::routing::post(super::lifecycle::restore_handler::<StubVpClient>),
+            )
             .route("/metrics", axum::routing::get(super::metrics_handler))
             // Test-only probe route — never compiled into production binaries.
             // Allows tests to check `is_declared_group` via HTTP without

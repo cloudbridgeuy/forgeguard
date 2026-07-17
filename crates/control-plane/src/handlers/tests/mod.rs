@@ -14,6 +14,7 @@ mod groups_predicate;
 mod groups_round_trip;
 mod groups_saga;
 mod groups_validation;
+mod lifecycle;
 mod metrics_endpoint;
 mod proxy_config;
 mod revision_precondition;
