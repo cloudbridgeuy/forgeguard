@@ -13,8 +13,9 @@ use async_trait::async_trait;
 use aws_sdk_dynamodb::types::AttributeValue;
 use forgeguard_authn_core::signing::SigningKey;
 use forgeguard_authz_core::{
-    fold_events, key_event_payload, principal_event_payload, Actor, EventEnvelope, EventKind,
-    EventLog, FoldedState, InMemoryEventLog, Revision,
+    decide_upsert, fold_events, group_deleted_payload, group_put_payload, key_event_payload,
+    principal_event_payload, Actor, EventEnvelope, EventKind, EventLog, FoldedState,
+    InMemoryEventLog, RbacEntry, Revision, UpsertDecision,
 };
 use forgeguard_core::NativeId;
 
@@ -54,6 +55,24 @@ const FOLD_PAGE_SIZE: usize = 100;
 /// `dead_code`, same precedent as `put_promotion`.
 #[allow(dead_code)]
 const MAX_KEY_APPEND_ATTEMPTS: u8 = 3;
+
+/// Outcome of an event-sourced group write (ADT, not sentinels; #113 V4).
+///
+/// `NoOp` covers both D6 no-op cases: an identical `put_group` entry
+/// (JSON-equality via `decide_upsert`) and a `delete_group` on an absent
+/// group — neither appends an event, so both report the log's current
+/// revision unchanged.
+///
+/// No HTTP route consumes this yet — wired in Task 4, hence `dead_code`,
+/// same precedent as `put_promotion`.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GroupWriteOutcome {
+    /// No event was appended; `current` is the log's unchanged revision.
+    NoOp { current: Revision },
+    /// An event was appended and landed at `revision`.
+    Applied { revision: Revision },
+}
 
 // ---------------------------------------------------------------------------
 // ModelEventStore — the seam `upsert_principal` (Task 7) is written against
@@ -228,6 +247,40 @@ pub(crate) trait ModelEventStore: Send + Sync {
         actor: Actor,
         expected_revision: Revision,
     ) -> Result<Revision>;
+
+    /// Append `group.put` + the group's `GROUP#{name}` item in one
+    /// transaction (#113 V4). An identical entry (JSON-equality via
+    /// `decide_upsert`) is the D6 no-op: nothing is appended, and `NoOp`
+    /// carries the log's current revision. `expected_revision` is the D5
+    /// precondition (`X-Fg-If-Revision`); a mismatch fails with
+    /// `Error::RevisionMismatch` before anything is written.
+    ///
+    /// No HTTP route calls this yet — wired in Task 4, hence `dead_code`,
+    /// same precedent as `put_promotion`.
+    #[allow(dead_code)]
+    async fn put_group(
+        &self,
+        org_id: &str,
+        entry: RbacEntry,
+        actor: Actor,
+        expected_revision: Option<Revision>,
+    ) -> Result<GroupWriteOutcome>;
+
+    /// Append `group.deleted` + hard-delete the `GROUP#{name}` item in one
+    /// transaction (#113 V4), via the `append_with_delete` path. An absent
+    /// group is the D6 no-op: nothing is appended, and `NoOp` carries the
+    /// log's current revision. `expected_revision` is the D5 precondition.
+    ///
+    /// No HTTP route calls this yet — wired in Task 4, hence `dead_code`,
+    /// same precedent as `put_promotion`.
+    #[allow(dead_code)]
+    async fn delete_group(
+        &self,
+        org_id: &str,
+        name: &str,
+        actor: Actor,
+        expected_revision: Option<Revision>,
+    ) -> Result<GroupWriteOutcome>;
 
     /// Revision-pinned historical read (V5 / N16, closing D9): fold the
     /// org's event log up to `at` (or the latest revision when `None`) into
@@ -671,7 +724,7 @@ impl ModelEventStore for DynamoModelEventStore {
             sk: promotion_sk(resource_type, native_id),
         };
 
-        log.append_with_delete(build, state).await
+        log.append_with_delete(None, build, state).await
     }
 
     async fn list_promotions(
@@ -844,7 +897,31 @@ impl ModelEventStore for DynamoModelEventStore {
 
         Ok((result, revision))
     }
+
+    async fn put_group(
+        &self,
+        org_id: &str,
+        entry: RbacEntry,
+        actor: Actor,
+        expected_revision: Option<Revision>,
+    ) -> Result<GroupWriteOutcome> {
+        self.put_group_impl(org_id, entry, actor, expected_revision)
+            .await
+    }
+
+    async fn delete_group(
+        &self,
+        org_id: &str,
+        name: &str,
+        actor: Actor,
+        expected_revision: Option<Revision>,
+    ) -> Result<GroupWriteOutcome> {
+        self.delete_group_impl(org_id, name, actor, expected_revision)
+            .await
+    }
 }
+
+mod groups;
 
 mod in_memory;
 pub(crate) use in_memory::InMemoryModelEventStore;

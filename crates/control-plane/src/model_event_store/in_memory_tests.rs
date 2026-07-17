@@ -576,3 +576,198 @@ async fn rotate_revoked_key_conflicts_no_event() {
         Revision::new(3)
     );
 }
+
+// ---------------------------------------------------------------------------
+// Group writes (#113 V4, Task 3)
+// ---------------------------------------------------------------------------
+
+fn rbac_entry(name: &str, allow: &[&str]) -> RbacEntry {
+    RbacEntry {
+        name: name.to_string(),
+        description: None,
+        inherits: Vec::new(),
+        allow: allow.iter().map(std::string::ToString::to_string).collect(),
+        tenant_scoped: true,
+    }
+}
+
+#[tokio::test]
+async fn put_group_appends_group_put_at_next_revision() {
+    let store = InMemoryModelEventStore::new();
+    let entry = rbac_entry("editors", &["cp:doc:read", "cp:doc:write"]);
+
+    let outcome = store
+        .put_group("acme", entry.clone(), Actor::System, None)
+        .await
+        .unwrap();
+
+    let GroupWriteOutcome::Applied { revision } = outcome else {
+        panic!("expected Applied, got {outcome:?}");
+    };
+    assert_eq!(revision, Revision::new(1));
+
+    let events = store
+        .events_after("acme", Revision::new(0), 10)
+        .await
+        .unwrap();
+    assert_eq!(events.len(), 1);
+    let event = &events[0];
+    assert_eq!(event.kind(), EventKind::GroupPut);
+    assert!(event.narrowing());
+    assert_eq!(event.payload()["name"], "editors");
+    assert_eq!(
+        event.payload()["group"],
+        serde_json::to_value(&entry).unwrap()
+    );
+}
+
+#[tokio::test]
+async fn identical_put_is_noop_no_event() {
+    let store = InMemoryModelEventStore::new();
+    let entry = rbac_entry("editors", &["cp:doc:read"]);
+
+    let first = store
+        .put_group("acme", entry.clone(), Actor::System, None)
+        .await
+        .unwrap();
+    assert!(matches!(first, GroupWriteOutcome::Applied { .. }));
+
+    let second = store
+        .put_group("acme", entry, Actor::System, None)
+        .await
+        .unwrap();
+    let GroupWriteOutcome::NoOp { current } = second else {
+        panic!("expected NoOp, got {second:?}");
+    };
+    assert_eq!(current, Revision::new(1));
+
+    let events = store
+        .events_after("acme", Revision::new(0), 10)
+        .await
+        .unwrap();
+    assert_eq!(
+        events.len(),
+        1,
+        "identical put must not append a second event"
+    );
+}
+
+#[tokio::test]
+async fn put_group_with_stale_expected_revision_mismatches() {
+    let store = InMemoryModelEventStore::new();
+    let entry = rbac_entry("editors", &["cp:doc:read"]);
+    store
+        .put_group("acme", entry.clone(), Actor::System, None)
+        .await
+        .unwrap();
+
+    let changed = rbac_entry("editors", &["cp:doc:read", "cp:doc:write"]);
+    let err = store
+        .put_group("acme", changed, Actor::System, Some(Revision::new(0)))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::RevisionMismatch { current: 1 }));
+
+    let events = store
+        .events_after("acme", Revision::new(0), 10)
+        .await
+        .unwrap();
+    assert_eq!(events.len(), 1, "a revision mismatch must not append");
+}
+
+#[tokio::test]
+async fn delete_group_appends_and_removes_item() {
+    let store = InMemoryModelEventStore::new();
+    let entry = rbac_entry("editors", &["cp:doc:read"]);
+    store
+        .put_group("acme", entry, Actor::System, None)
+        .await
+        .unwrap();
+
+    let outcome = store
+        .delete_group("acme", "editors", Actor::System, None)
+        .await
+        .unwrap();
+    let GroupWriteOutcome::Applied { revision } = outcome else {
+        panic!("expected Applied, got {outcome:?}");
+    };
+    assert_eq!(revision, Revision::new(2));
+
+    let events = store
+        .events_after("acme", Revision::new(0), 10)
+        .await
+        .unwrap();
+    assert_eq!(events.len(), 2);
+    let deleted_event = &events[1];
+    assert_eq!(deleted_event.kind(), EventKind::GroupDeleted);
+    assert!(deleted_event.narrowing());
+    assert_eq!(deleted_event.payload()["name"], "editors");
+
+    // A subsequent delete finds nothing left — the in-memory analogue of
+    // `get_group` returning `None`: re-putting the same name mints a fresh
+    // event rather than observing a leftover entry.
+    let re_put = store
+        .put_group(
+            "acme",
+            rbac_entry("editors", &["cp:doc:read"]),
+            Actor::System,
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(re_put, GroupWriteOutcome::Applied { .. }));
+}
+
+#[tokio::test]
+async fn delete_absent_group_is_noop_no_event() {
+    let store = InMemoryModelEventStore::new();
+
+    let outcome = store
+        .delete_group("acme", "ghost", Actor::System, None)
+        .await
+        .unwrap();
+    let GroupWriteOutcome::NoOp { current } = outcome else {
+        panic!("expected NoOp, got {outcome:?}");
+    };
+    assert_eq!(current, Revision::new(0));
+
+    let events = store
+        .events_after("acme", Revision::new(0), 10)
+        .await
+        .unwrap();
+    assert!(events.is_empty(), "no event for a no-op delete");
+}
+
+#[tokio::test]
+async fn group_events_fold_through_fold_at() {
+    let store = InMemoryModelEventStore::new();
+    let v1 = rbac_entry("editors", &["cp:doc:read"]);
+    let v2 = rbac_entry("editors", &["cp:doc:read", "cp:doc:write"]);
+
+    store
+        .put_group("acme", v1, Actor::System, None)
+        .await
+        .unwrap();
+    store
+        .put_group("acme", v2.clone(), Actor::System, None)
+        .await
+        .unwrap();
+    store
+        .delete_group("acme", "editors", Actor::System, None)
+        .await
+        .unwrap();
+
+    let events = store
+        .events_after("acme", Revision::new(0), 10)
+        .await
+        .unwrap();
+
+    let at_2 = fold_events(&events, Revision::new(2)).unwrap();
+    assert_eq!(
+        at_2.group("editors").unwrap(),
+        &serde_json::to_value(&v2).unwrap()
+    );
+
+    let at_3 = fold_events(&events, Revision::new(3)).unwrap();
+    assert!(at_3.group("editors").is_none());
+}

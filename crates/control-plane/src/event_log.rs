@@ -225,6 +225,18 @@ impl DynamoEventLog {
     /// Build the event's conditional `Put` item: fails if the sort key is
     /// already occupied (a duplicate seq must never land silently). Shared by
     /// [`Self::append`] and [`Self::append_with_delete`].
+    /// Shared by [`Self::append`]/[`Self::append_with_delete`]: the D5
+    /// `expected_revision` precondition (`X-Fg-If-Revision`) against `current`.
+    /// A `None` precondition always passes.
+    fn check_expected_revision(current: u64, expected_revision: Option<Revision>) -> Result<()> {
+        if let Some(expected) = expected_revision {
+            if current != expected.value() {
+                return Err(Error::RevisionMismatch { current });
+            }
+        }
+        Ok(())
+    }
+
     fn event_put(&self, envelope: &EventEnvelope, payload_bytes: &[u8]) -> Result<Put> {
         let event_attrs = event_item(&self.org_pk, envelope, payload_bytes)?;
         Put::builder()
@@ -249,11 +261,7 @@ impl DynamoEventLog {
     ) -> Result<Revision> {
         for attempt in 0..MAX_APPEND_ATTEMPTS {
             let current = self.read_counter().await?;
-            if let Some(expected) = expected_revision {
-                if current != expected.value() {
-                    return Err(Error::RevisionMismatch { current });
-                }
-            }
+            Self::check_expected_revision(current, expected_revision)?;
             let candidate = current + 1;
             let revision = Revision::new(candidate);
             let (envelope, payload_bytes) = build(revision);
@@ -350,14 +358,21 @@ impl DynamoEventLog {
     ///
     /// Wired up by `handlers/promotions/mod.rs` in Task 4; until then
     /// transitively dead via `ModelEventStore::tombstone_promotion`.
+    ///
+    /// `expected_revision` mirrors [`Self::append`]'s precondition (#113 V4,
+    /// D5): when `Some`, a mismatch against the log's current revision fails
+    /// with `Error::RevisionMismatch` before anything is attempted. Existing
+    /// callers (`tombstone_promotion`) pass `None` — no precondition.
     #[allow(dead_code)]
     pub(crate) async fn append_with_delete(
         &self,
+        expected_revision: Option<Revision>,
         build: impl Fn(Revision) -> (EventEnvelope, Vec<u8>),
         state: StateDelete,
     ) -> Result<Option<Revision>> {
         for attempt in 0..MAX_APPEND_ATTEMPTS {
             let current = self.read_counter().await?;
+            Self::check_expected_revision(current, expected_revision)?;
             let candidate = current + 1;
             let revision = Revision::new(candidate);
             let (envelope, payload_bytes) = build(revision);
@@ -780,6 +795,7 @@ mod tests {
 
         let revision = log
             .append_with_delete(
+                None,
                 tombstone_envelope,
                 StateDelete {
                     pk: format!("{ORG_PREFIX}acme"),
@@ -809,6 +825,7 @@ mod tests {
         let log = new_log().await;
         let revision = log
             .append_with_delete(
+                None,
                 tombstone_envelope,
                 StateDelete {
                     pk: format!("{ORG_PREFIX}acme"),

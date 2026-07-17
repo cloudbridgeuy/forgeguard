@@ -5,13 +5,14 @@
 use std::sync::Arc;
 
 use super::{
-    async_trait, build_model_event, encode_verifying_key_pem, generate_key_material,
-    generate_key_transition, key_event_payload, org_payload, principal_event_payload,
-    promotion_event_payload, promotion_fgrn, revoke_key_transition, rotate_key_transition, Actor,
-    BuildModelEventParams, Error, EventEnvelope, EventKind, EventLog, EventSigningKey,
-    GenerateKeyResult, HashMap, InMemoryEventLog, ModelEventStore, Mutex, NativeId, OrgRecord,
-    PromotionEntry, Result, Revision, Segment, SigningKey, SigningKeyEntry, IN_MEMORY_KEY_ID,
-    IN_MEMORY_SEED,
+    async_trait, build_model_event, decide_upsert, encode_verifying_key_pem, generate_key_material,
+    generate_key_transition, group_deleted_payload, group_put_payload, key_event_payload,
+    org_payload, principal_event_payload, promotion_event_payload, promotion_fgrn,
+    revoke_key_transition, rotate_key_transition, Actor, BuildModelEventParams, Error,
+    EventEnvelope, EventKind, EventLog, EventSigningKey, GenerateKeyResult, GroupWriteOutcome,
+    HashMap, InMemoryEventLog, ModelEventStore, Mutex, NativeId, OrgRecord, PromotionEntry,
+    RbacEntry, Result, Revision, Segment, SigningKey, SigningKeyEntry, UpsertDecision,
+    IN_MEMORY_KEY_ID, IN_MEMORY_SEED,
 };
 use forgeguard_core::OrganizationId;
 
@@ -41,6 +42,11 @@ pub(crate) struct InMemoryModelEventStore {
     /// `signing_keys` attribute for `generate_org_key`/`revoke_org_key`/
     /// `rotate_org_key`.
     signing_keys: Mutex<HashMap<String, Vec<SigningKeyEntry>>>,
+    /// `(org_id, name) -> RbacEntry`, the group-domain analogue of
+    /// `principals` (#113 V4). No HTTP route reaches `put_group`/
+    /// `delete_group` yet — wired in Task 4, hence `dead_code`.
+    #[allow(dead_code)]
+    groups: Mutex<HashMap<(String, String), RbacEntry>>,
     /// Write-through target for `create_org`/`update_org`.
     ///
     /// In production, `DynamoOrgStore` and `DynamoModelEventStore` share one
@@ -58,6 +64,20 @@ fn lock_poisoned(map_name: &str, e: impl std::fmt::Display) -> Error {
     Error::Store(format!("in-memory {map_name} store lock poisoned: {e}"))
 }
 
+/// Shared by `append_org_state`/`put_group`/`delete_group`: the D5
+/// `expected_revision` precondition (`X-Fg-If-Revision`) against `current`.
+/// A `None` precondition always passes.
+fn check_expected_revision(current: Revision, expected_revision: Option<Revision>) -> Result<()> {
+    if let Some(expected) = expected_revision {
+        if current != expected {
+            return Err(Error::RevisionMismatch {
+                current: current.value(),
+            });
+        }
+    }
+    Ok(())
+}
+
 impl InMemoryModelEventStore {
     pub(crate) fn new() -> Self {
         Self {
@@ -67,6 +87,7 @@ impl InMemoryModelEventStore {
             promotions: Mutex::new(HashMap::new()),
             orgs: Mutex::new(HashMap::new()),
             signing_keys: Mutex::new(HashMap::new()),
+            groups: Mutex::new(HashMap::new()),
             org_store: None,
         }
     }
@@ -143,13 +164,7 @@ impl InMemoryModelEventStore {
         // between the two reads; real races are exercised only against
         // DynamoDB Local, Task 2/3 integration tests).
         let current = self.latest_revision(&org_id).await?;
-        if let Some(expected) = expected_revision {
-            if current != expected {
-                return Err(Error::RevisionMismatch {
-                    current: current.value(),
-                });
-            }
-        }
+        check_expected_revision(current, expected_revision)?;
 
         let payload = org_payload(&record)?;
         let revision = self.mint_and_push(&org_id, kind, actor, payload).await?;
@@ -548,5 +563,81 @@ impl ModelEventStore for InMemoryModelEventStore {
         };
 
         Ok((result, revision))
+    }
+
+    async fn put_group(
+        &self,
+        org_id: &str,
+        entry: RbacEntry,
+        actor: Actor,
+        expected_revision: Option<Revision>,
+    ) -> Result<GroupWriteOutcome> {
+        let name = entry.name.clone();
+        let key = (org_id.to_string(), name.clone());
+
+        let existing_value = {
+            let guard = self.groups.lock().map_err(|e| lock_poisoned("group", e))?;
+            guard
+                .get(&key)
+                .map(serde_json::to_value)
+                .transpose()
+                .map_err(|e| Error::Store(format!("serialize existing group entry: {e}")))?
+        };
+        let new_value = serde_json::to_value(&entry)
+            .map_err(|e| Error::Store(format!("serialize group entry: {e}")))?;
+
+        match decide_upsert(existing_value.as_ref(), &new_value) {
+            UpsertDecision::NoOp => {
+                let current = self.latest_revision(org_id).await?;
+                Ok(GroupWriteOutcome::NoOp { current })
+            }
+            UpsertDecision::Changed { .. } => {
+                // Read-then-act (not atomic — same test-double caveat as
+                // `append_org_state`): a concurrent write could slip in
+                // between the revision check and the mint below.
+                let current = self.latest_revision(org_id).await?;
+                check_expected_revision(current, expected_revision)?;
+
+                let payload = group_put_payload(&name, &new_value);
+                let revision = self
+                    .mint_and_push(org_id, EventKind::GroupPut, actor, payload)
+                    .await?;
+
+                let mut guard = self.groups.lock().map_err(|e| lock_poisoned("group", e))?;
+                guard.insert(key, entry);
+                Ok(GroupWriteOutcome::Applied { revision })
+            }
+        }
+    }
+
+    async fn delete_group(
+        &self,
+        org_id: &str,
+        name: &str,
+        actor: Actor,
+        expected_revision: Option<Revision>,
+    ) -> Result<GroupWriteOutcome> {
+        let key = (org_id.to_string(), name.to_string());
+
+        let exists = {
+            let guard = self.groups.lock().map_err(|e| lock_poisoned("group", e))?;
+            guard.contains_key(&key)
+        };
+        if !exists {
+            let current = self.latest_revision(org_id).await?;
+            return Ok(GroupWriteOutcome::NoOp { current });
+        }
+
+        let current = self.latest_revision(org_id).await?;
+        check_expected_revision(current, expected_revision)?;
+
+        let payload = group_deleted_payload(name);
+        let revision = self
+            .mint_and_push(org_id, EventKind::GroupDeleted, actor, payload)
+            .await?;
+
+        let mut guard = self.groups.lock().map_err(|e| lock_poisoned("group", e))?;
+        guard.remove(&key);
+        Ok(GroupWriteOutcome::Applied { revision })
     }
 }
