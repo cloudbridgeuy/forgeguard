@@ -426,18 +426,14 @@ impl OrgStore for DynamoOrgStore {
             .await?
             .ok_or_else(|| Error::NotFound(format!("organization '{org_id}' not found")))?;
 
-        let mut keys = signing_keys_from_item(&item)?;
-        let entry = keys
-            .iter_mut()
-            .find(|k| k.key_id() == key_id)
-            .ok_or_else(|| {
-                Error::NotFound(format!(
-                    "signing key '{key_id}' not found for organization '{org_id}'"
-                ))
-            })?;
-        entry.revoke();
+        let existing = signing_keys_from_item(&item)?;
+        let updated = crate::signing_key::revoke_entries(existing, key_id).ok_or_else(|| {
+            Error::NotFound(format!(
+                "signing key '{key_id}' not found for organization '{org_id}'"
+            ))
+        })?;
 
-        self.write_signing_keys(org_id, &keys).await
+        self.write_signing_keys(org_id, &updated).await
     }
 
     async fn rotate_signing_key(

@@ -186,9 +186,10 @@ impl SigningKeyEntry {
         }
     }
 
-    /// Transition this key to `Revoked` status.
+    /// Transition this key to `Revoked` status, clearing any rotation `expires_at`.
     pub(crate) fn revoke(&mut self) {
         self.status = SigningKeyStatus::Revoked;
+        self.expires_at = None;
     }
 
     /// Transition this key to `Rotating { expires_at }`.
@@ -295,6 +296,24 @@ pub(crate) fn rotate_entries(
     existing[idx].begin_rotating(expires_at);
     existing.push(new_entry);
     Ok(existing)
+}
+
+/// Transition the target key to `Revoked`. Pure — no I/O.
+///
+/// Returns `None` (a semantic no-op) when `target_key_id` is absent or the
+/// entry is already `Revoked` — both cases mean no event should be appended.
+pub(crate) fn revoke_entries(
+    mut existing: Vec<SigningKeyEntry>,
+    target_key_id: &str,
+) -> Option<Vec<SigningKeyEntry>> {
+    let idx = existing.iter().position(|e| e.key_id() == target_key_id)?;
+
+    if matches!(existing[idx].status(), SigningKeyStatus::Revoked) {
+        return None;
+    }
+
+    existing[idx].revoke();
+    Some(existing)
 }
 
 // ---------------------------------------------------------------------------
@@ -640,5 +659,85 @@ mod tests {
         // Other rotating entry unchanged
         assert_eq!(result[0].key_id(), "key-other");
         assert_eq!(result[0].expires_at(), Some(now + Duration::hours(6)));
+    }
+
+    // -- revoke_entries --
+
+    #[test]
+    fn revoke_entries_happy_path_marks_revoked_and_clears_expiry() {
+        let now = Utc::now();
+        let entry = SigningKeyEntry::new(
+            "key-1".into(),
+            "pem".into(),
+            SigningKeyStatus::Active,
+            now,
+            None,
+        )
+        .unwrap();
+
+        let result = revoke_entries(vec![entry], "key-1").unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert!(matches!(result[0].status(), SigningKeyStatus::Revoked));
+        assert_eq!(result[0].expires_at(), None);
+    }
+
+    #[test]
+    fn revoke_entries_absent_key_is_none() {
+        let now = Utc::now();
+        let entry = SigningKeyEntry::new(
+            "key-1".into(),
+            "pem".into(),
+            SigningKeyStatus::Active,
+            now,
+            None,
+        )
+        .unwrap();
+
+        assert!(revoke_entries(vec![entry], "key-missing").is_none());
+    }
+
+    #[test]
+    fn revoke_entries_already_revoked_is_none() {
+        let now = Utc::now();
+        let entry = SigningKeyEntry::new(
+            "key-1".into(),
+            "pem".into(),
+            SigningKeyStatus::Revoked,
+            now,
+            None,
+        )
+        .unwrap();
+
+        assert!(revoke_entries(vec![entry], "key-1").is_none());
+    }
+
+    #[test]
+    fn revoke_entries_leaves_other_entries_untouched() {
+        let now = Utc::now();
+        let target = SigningKeyEntry::new(
+            "key-1".into(),
+            "pem".into(),
+            SigningKeyStatus::Active,
+            now,
+            None,
+        )
+        .unwrap();
+        let other = SigningKeyEntry::new(
+            "key-other".into(),
+            "other-pem".into(),
+            SigningKeyStatus::Rotating {
+                expires_at: now + Duration::hours(6),
+            },
+            now,
+            Some(now + Duration::hours(6)),
+        )
+        .unwrap();
+
+        let result = revoke_entries(vec![target, other], "key-1").unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[1].key_id(), "key-other");
+        assert_eq!(result[1].expires_at(), Some(now + Duration::hours(6)));
     }
 }

@@ -340,15 +340,13 @@ impl OrgStore for InMemoryOrgStore {
         let keys = guard.get_mut(org_id).ok_or_else(|| {
             Error::NotFound(format!("no signing keys found for organization '{org_id}'"))
         })?;
-        let entry = keys
-            .iter_mut()
-            .find(|k| k.key_id() == key_id)
-            .ok_or_else(|| {
+        let updated =
+            crate::signing_key::revoke_entries(keys.clone(), key_id).ok_or_else(|| {
                 Error::NotFound(format!(
                     "signing key '{key_id}' not found for organization '{org_id}'"
                 ))
             })?;
-        entry.revoke();
+        *keys = updated;
         Ok(())
     }
 

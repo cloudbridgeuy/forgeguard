@@ -537,7 +537,7 @@ async fn revoke_key_nonexistent_key_returns_error() {
     let org_id = OrganizationId::new("org-badkey").unwrap();
 
     // Generate one key, then try to revoke a different key_id
-    store.generate_key(&org_id).await.unwrap();
+    let generated = store.generate_key(&org_id).await.unwrap();
 
     let result = store.revoke_key(&org_id, "key-nonexistent").await;
     assert!(result.is_err());
@@ -546,6 +546,12 @@ async fn revoke_key_nonexistent_key_returns_error() {
         matches!(err, Error::NotFound(_)),
         "expected NotFound, got: {err:?}"
     );
+
+    // The no-op path must not discard the org's real keys.
+    let keys = store.list_keys(&org_id).await.unwrap();
+    assert_eq!(keys.len(), 1);
+    assert_eq!(keys[0].key_id(), generated.key_id());
+    assert_eq!(*keys[0].status(), SigningKeyStatus::Active);
 }
 
 #[tokio::test]
