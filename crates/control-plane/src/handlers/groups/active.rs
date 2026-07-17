@@ -41,6 +41,8 @@
 use forgeguard_authz_core::{
     policy_name_for_group, Actor, NamedPermit, RbacEntry, Revision, ValidatedRbacEntry,
 };
+
+use crate::error::Error as CpError;
 use forgeguard_core::OrganizationId;
 
 use super::active_pure::{compile_for_active, compile_one, CompiledPermits, VpContext, VpStage};
@@ -171,6 +173,7 @@ pub(crate) async fn apply_create<V: VpClient>(
                 raw_org_id: p.raw_org_id,
                 group_name: &entry_name,
                 op: "active create",
+                expected_revision: p.expected_revision,
             })
             .await)
         }
@@ -312,6 +315,7 @@ pub(crate) async fn apply_update<V: VpClient>(
                 raw_org_id: p.raw_org_id,
                 group_name: &entry_name,
                 op: "active update",
+                expected_revision: p.expected_revision,
             })
             .await)
         }
@@ -425,6 +429,7 @@ pub(crate) async fn apply_delete<V: VpClient>(
                 raw_org_id: p.raw_org_id,
                 group_name: &p.name,
                 op: "active delete",
+                expected_revision: p.expected_revision,
             })
             .await)
         }
@@ -450,11 +455,11 @@ fn etaged_or_internal(
 }
 
 /// Inputs to [`resolve_append_compensation`].
-struct AppendCompensation<'a, Fut, E> {
+struct AppendCompensation<'a, Fut> {
     /// The compensating VP action to run (delete the just-created parent,
     /// restore prior statements, or re-push the deleted parent permit).
     compensate: Fut,
-    append_err: &'a E,
+    append_err: &'a CpError,
     stage: VpStage,
     /// Whether VP already reflects the write that DDB failed to record —
     /// `true` for create/update (the new statements were pushed before the
@@ -463,22 +468,28 @@ struct AppendCompensation<'a, Fut, E> {
     raw_org_id: &'a str,
     group_name: &'a str,
     op: &'a str,
+    /// The caller's `X-Fg-If-Revision` precondition (if any), threaded
+    /// through so the `RevisionMismatch` arm below can build the typed
+    /// `GroupHandlerError::RevisionMismatch` the handler shapes into a `412`.
+    expected_revision: Option<Revision>,
 }
 
 /// Runs the F-append compensation and classifies the result.
 ///
 /// Every orchestrator hits this after the append fails post-VP-push: run
-/// `compensate`, and on success the request still fails (the write never
-/// landed) but VP is back to its pre-call state, so it's a plain `Internal`
-/// (500) with no metric. On failure VP and DDB have now diverged — bump
-/// `forgeguard_cp_group_rollback_failed_total{stage}` and surface
-/// `InconsistentState` for manual reconciliation.
-async fn resolve_append_compensation<Fut, E>(
-    input: AppendCompensation<'_, Fut, E>,
-) -> GroupHandlerError
+/// `compensate`. On success, VP is back to its pre-call state:
+/// - if `append_err` was `Error::RevisionMismatch` (D5 stale precondition),
+///   compensation restoring VP is expected and silent — the client just gets
+///   a typed `412 RevisionMismatch`, not a `500`.
+/// - for any other append error, the write still failed for an unexpected
+///   (infrastructure) reason — plain `Internal` (500), no metric.
+///
+/// On a FAILED compensation, VP and DDB have now diverged regardless of why
+/// the append failed — bump `forgeguard_cp_group_rollback_failed_total{stage}`
+/// and surface `InconsistentState` for manual reconciliation.
+async fn resolve_append_compensation<Fut>(input: AppendCompensation<'_, Fut>) -> GroupHandlerError
 where
     Fut: std::future::Future<Output = Result<(), vp_client::Error>>,
-    E: std::fmt::Display,
 {
     let AppendCompensation {
         compensate,
@@ -488,10 +499,23 @@ where
         raw_org_id,
         group_name,
         op,
+        expected_revision,
     } = input;
 
     match compensate.await {
         Ok(()) => {
+            if let CpError::RevisionMismatch { current } = append_err {
+                tracing::warn!(
+                    org_id = %raw_org_id,
+                    group = %group_name,
+                    current_revision = current,
+                    "{op}: append failed on stale X-Fg-If-Revision; vp compensated cleanly",
+                );
+                return GroupHandlerError::RevisionMismatch {
+                    current_revision: *current,
+                    expected_revision: expected_revision.map(Revision::value),
+                };
+            }
             tracing::error!(
                 org_id = %raw_org_id,
                 group = %group_name,

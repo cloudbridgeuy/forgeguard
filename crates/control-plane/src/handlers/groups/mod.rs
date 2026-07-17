@@ -25,27 +25,24 @@ use axum::extract::{Path, State};
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use axum::{http::StatusCode, Json};
-use forgeguard_authz_core::{validate_rbac_entry, Actor, RbacEntry};
+use forgeguard_authz_core::{validate_rbac_entry, RbacEntry};
+use forgeguard_axum::ForgeGuardIdentity;
 use forgeguard_core::OrganizationId;
 use serde::Deserialize;
 
 use self::active_pure::{compile_for_active, ActiveStateError, OrgWriteContext, VpStage};
 use crate::etag::{self, Etag};
-use crate::handlers::AppState;
-use crate::metrics::PreconditionReason;
+use crate::handlers::{actor_for, AppState};
+use crate::model_event_store::GroupWriteOutcome;
 use crate::store::{EtagedGroup, OrgStore};
 use crate::vp_client::VpClient;
 
 // ---------------------------------------------------------------------------
-// NOTE (#113 V4, Task 4 — rough edge for Task 5):
-//
-// Task 5 owns the real handler rewrite: parsing `X-Fg-If-Revision`, threading
-// `actor_for(...)` from the resolved identity, and mapping `GroupWriteOutcome`
-// into the `x-fg-revision` response header. Until then, every call site below
-// passes `Actor::System` (no identity extractor is wired into these handlers
-// yet) and `expected_revision: None` (the existing `If-Match`/etag precondition
-// machinery is untouched and still governs these paths), and discards the
-// `GroupWriteOutcome` half of `apply_create`/`apply_update`'s return tuple.
+// #113 V4, Task 5: group mutations trade `If-Match`/ETag preconditions for
+// `X-Fg-If-Revision` (D5). `If-Match` is no longer read or honored on
+// PUT/DELETE — GET/LIST keep their `If-None-Match`/`ETag` machinery
+// untouched (HTTP caching, not write concurrency). The `Actor` recorded on
+// each appended event now comes from the resolved identity via `actor_for`.
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
@@ -137,13 +134,74 @@ fn etag_header(etag: &Etag) -> HeaderMap {
     headers
 }
 
-/// Extract and parse the `If-Match` header. Returns `None` when absent or
-/// unparsable (treated identically to "header not sent").
-fn parse_if_match_header(headers: &HeaderMap) -> Option<etag::IfMatch> {
-    headers
-        .get(axum::http::header::IF_MATCH)
-        .and_then(|v| v.to_str().ok())
-        .and_then(etag::parse_if_match)
+/// Build the `{group, revision}` response body for a successful group
+/// mutation (create/update).
+fn group_write_response_body(entry: &RbacEntry, etag: &str, revision: u64) -> serde_json::Value {
+    serde_json::json!({
+        "group": pure::group_resource_from(entry, etag),
+        "revision": revision,
+    })
+}
+
+/// Extract the response-relevant revision from a [`GroupWriteOutcome`] — the
+/// log's unchanged revision for a D6 no-op, or the revision the append landed
+/// at.
+fn outcome_revision(outcome: GroupWriteOutcome) -> u64 {
+    match outcome {
+        GroupWriteOutcome::NoOp { current } => current.value(),
+        GroupWriteOutcome::Applied { revision } => revision.value(),
+    }
+}
+
+/// Merge two `HeaderMap`s, with `b`'s entries taking precedence on key clash.
+fn merged_headers(mut a: HeaderMap, b: HeaderMap) -> HeaderMap {
+    a.extend(b);
+    a
+}
+
+/// Parse the `X-Fg-If-Revision` header into an optional precondition,
+/// returning a ready `400` `Response` (boxed — `clippy::result_large_err`,
+/// since the `Ok` payload here is a small `Option<Revision>`) when present
+/// but not a valid `u64`. Shared by `create_handler`/`update_handler`/
+/// `delete_handler` — all three need the identical parse-or-400 step before
+/// touching the store.
+fn parse_if_revision_header(
+    headers: &HeaderMap,
+) -> Result<Option<forgeguard_authz_core::Revision>, Box<Response>> {
+    let raw = headers
+        .get(crate::handlers::if_revision::IF_REVISION_HEADER)
+        .and_then(|v| v.to_str().ok());
+    crate::handlers::if_revision::parse_if_revision(raw).map_err(|_| {
+        Box::new(
+            (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "invalid X-Fg-If-Revision header"})),
+            )
+                .into_response(),
+        )
+    })
+}
+
+/// Map a `ModelEventStore::{put_group, delete_group}` error into the
+/// `GroupHandlerError` the Draft-org branch surfaces, mirroring
+/// `handlers::mod`'s org `update_handler` `RevisionMismatch` handling.
+fn map_group_write_error(
+    err: crate::error::Error,
+    if_revision: Option<forgeguard_authz_core::Revision>,
+    raw_org_id: &str,
+    ctx: &str,
+) -> GroupHandlerError {
+    match err {
+        crate::error::Error::RevisionMismatch { current } => GroupHandlerError::RevisionMismatch {
+            current_revision: current,
+            expected_revision: if_revision.map(forgeguard_authz_core::Revision::value),
+        },
+        crate::error::Error::NotFound(_) => GroupHandlerError::NotFound,
+        other => {
+            tracing::error!(org_id = %raw_org_id, error = %other, "{ctx} failed");
+            GroupHandlerError::Internal
+        }
+    }
 }
 
 /// Fetch an existing group or return a shaped 404/500 `Response`.
@@ -218,8 +276,10 @@ pub(crate) struct UpdateGroupRequest {
 ///
 /// Duplicate name returns `409 Conflict`.
 pub(crate) async fn create_handler<V: VpClient + 'static>(
+    ForgeGuardIdentity(identity): ForgeGuardIdentity,
     Path(raw_org_id): Path<String>,
     State(state): State<AppState<V>>,
+    headers: HeaderMap,
     Json(body): Json<CreateGroupRequest>,
 ) -> Response {
     let Ok(org_id) = OrganizationId::new(&raw_org_id) else {
@@ -227,6 +287,12 @@ pub(crate) async fn create_handler<V: VpClient + 'static>(
     };
     let store = &state.store;
     let vp = &state.vp;
+
+    let if_revision = match parse_if_revision_header(&headers) {
+        Ok(r) => r,
+        Err(resp) => return *resp,
+    };
+    let actor = actor_for(&raw_org_id, identity.as_ref());
 
     let record = match require_org(
         store.as_ref(),
@@ -252,6 +318,14 @@ pub(crate) async fn create_handler<V: VpClient + 'static>(
         Ok(v) => v,
         Err(resp) => return resp,
     };
+    // A group with this name already exists — 409, regardless of Draft/Active.
+    // (`model_events.put_group`'s D6 no-op rule only fires for identical
+    // entries under PUT/DELETE preconditions; POST /groups must reject any
+    // duplicate name outright, matching this handler's documented contract.)
+    if existing.iter().any(|e| e.name == proposed_name) {
+        return shape_group_error_response(&GroupHandlerError::AlreadyExists);
+    }
+
     let all_after = all_after_with_proposed(&existing, &proposed);
     let validated = match validate_rbac_entry(proposed, &all_after) {
         Ok(v) => v,
@@ -263,17 +337,23 @@ pub(crate) async fn create_handler<V: VpClient + 'static>(
         Err(err) => return shape_active_state_error(&err, &raw_org_id, &proposed_name),
     };
 
-    let result: Result<EtagedGroup, GroupHandlerError> = match write_ctx {
-        OrgWriteContext::Draft => store
-            .put_group(&org_id, validated, None)
-            .await
-            .map_err(|e| match e {
-                crate::error::Error::Conflict(_) => GroupHandlerError::AlreadyExists,
-                other => {
-                    tracing::error!(org_id = %raw_org_id, error = %other, "create group failed");
-                    GroupHandlerError::Internal
+    let result: Result<(EtagedGroup, GroupWriteOutcome), GroupHandlerError> = match write_ctx {
+        OrgWriteContext::Draft => {
+            let entry = validated.into_inner();
+            let etaged = match EtagedGroup::compute(entry.clone()) {
+                Ok(e) => e,
+                Err(e) => {
+                    tracing::error!(org_id = %raw_org_id, group = %proposed_name, error = %e, "create group: etag compute failed");
+                    return shape_group_error_response(&GroupHandlerError::Internal);
                 }
-            }),
+            };
+            state
+                .model_events
+                .put_group(org_id.as_str(), entry, actor, if_revision)
+                .await
+                .map(|outcome| (etaged, outcome))
+                .map_err(|e| map_group_write_error(e, if_revision, &raw_org_id, "create group"))
+        }
         OrgWriteContext::Active(vp_ctx) => {
             let compiled = match compile_for_active(validated.entry(), &all_after, &vp_ctx) {
                 Ok(c) => c,
@@ -289,21 +369,30 @@ pub(crate) async fn create_handler<V: VpClient + 'static>(
                 raw_org_id: &raw_org_id,
                 validated,
                 compiled,
-                actor: Actor::System,
-                expected_revision: None,
+                actor,
+                expected_revision: if_revision,
             })
             .await
-            .map(|(eg, _outcome)| eg)
         }
     };
 
     match result {
-        Ok(eg) => (
-            StatusCode::CREATED,
-            etag_header(eg.etag()),
-            Json(pure::group_resource_from(eg.entry(), eg.etag().as_str())),
-        )
-            .into_response(),
+        Ok((eg, outcome)) => {
+            let revision = outcome_revision(outcome);
+            (
+                StatusCode::CREATED,
+                merged_headers(
+                    etag_header(eg.etag()),
+                    crate::handlers::revision_header_map(revision),
+                ),
+                Json(group_write_response_body(
+                    eg.entry(),
+                    eg.etag().as_str(),
+                    revision,
+                )),
+            )
+                .into_response()
+        }
         Err(err) => shape_group_error_response(&err),
     }
 }
@@ -436,21 +525,28 @@ pub(crate) async fn get_handler(
 
 /// `PUT /api/v1/organizations/{org_id}/groups/{name}`
 ///
-/// Update an existing RBAC group. Requires `If-Match` (412 with
-/// `reason: "missing_if_match"` when absent). `If-Match: *` is accepted per
-/// RFC 7232 §3.1 — on a non-existent row this is treated as a 404 (fail
-/// closed, no row to match against).
+/// Update an existing RBAC group. Optimistic concurrency is revision-tokened
+/// (#113 V4, D5): callers send `X-Fg-If-Revision: <n>` to assert the org's
+/// event log is still at revision `n`; a mismatch responds `412` with both
+/// revisions. A missing header writes unconditionally. `If-Match`/`ETag` are
+/// no longer consulted by this handler (GET/LIST keep them for HTTP caching).
 ///
-/// Active-org behaviour (V3): the DDB put is paired with a VP delete-then-create
-/// of the parent permit, then the same delete-then-create fanned out across
-/// every transitive dependent in deterministic order. F3 (parent VP push fail
-/// after DDB commit) triggers a compensating put_back. F3' (rollback also
-/// fails) increments `forgeguard_cp_group_rollback_failed_total{stage="parent"}`.
-/// F4 (mid-fanout fail) returns 503 with `{completed, failed, remaining}` and
-/// no rollback.
+/// A request that would not change the group's semantic state (identical
+/// `RbacEntry`, D6) is a no-op: it responds `200` with the current revision
+/// and appends no event.
 ///
-/// Returns `200 OK` with updated `GroupResource` and an `ETag` header.
+/// Active-org behaviour (V4): VP is pushed FIRST — delete-then-create of the
+/// parent permit, then the same pair fanned out across every transitive
+/// dependent in deterministic order — followed by the event-sourced append.
+/// A VP push failure aborts cleanly (nothing written). An append failure
+/// after a successful push compensates by restoring VP to its prior state;
+/// for a stale `X-Fg-If-Revision` this is silent and surfaces `412`, for any
+/// other append error it surfaces `500`. Compensation failure bumps
+/// `forgeguard_cp_group_rollback_failed_total` and surfaces `500`.
+///
+/// Returns `200 OK` with `{group, revision}` and an `x-fg-revision` header.
 pub(crate) async fn update_handler<V: VpClient + 'static>(
+    ForgeGuardIdentity(identity): ForgeGuardIdentity,
     Path((raw_org_id, name)): Path<(String, String)>,
     State(state): State<AppState<V>>,
     headers: HeaderMap,
@@ -461,6 +557,12 @@ pub(crate) async fn update_handler<V: VpClient + 'static>(
     };
     let store = &state.store;
     let vp = &state.vp;
+
+    let if_revision = match parse_if_revision_header(&headers) {
+        Ok(r) => r,
+        Err(resp) => return *resp,
+    };
+    let actor = actor_for(&raw_org_id, identity.as_ref());
 
     let record = match require_org(
         store.as_ref(),
@@ -474,17 +576,8 @@ pub(crate) async fn update_handler<V: VpClient + 'static>(
         Err(resp) => return resp,
     };
 
-    // If-Match is required for PUT
-    let if_match_raw = parse_if_match_header(&headers);
-    if if_match_raw.is_none() {
-        crate::metrics::record_precondition_failed(PreconditionReason::MissingIfMatch);
-        return shape_group_error_response(&GroupHandlerError::PreconditionFailed {
-            current_etag: String::new(),
-            reason: PreconditionReason::MissingIfMatch,
-        });
-    }
-
-    // Fetch the existing group to validate the If-Match
+    // Fetch the existing group (404 if absent — PUT does not upsert a
+    // never-created name; only an already-declared group can be updated).
     let existing = match require_group(
         store.as_ref(),
         &org_id,
@@ -496,25 +589,6 @@ pub(crate) async fn update_handler<V: VpClient + 'static>(
     {
         Ok(g) => g,
         Err(resp) => return resp,
-    };
-
-    // Resolve If-Match against the stored etag
-    let resolved = etag::resolve_if_match(if_match_raw, Some(existing.etag()));
-    let expected_etag: String = match &resolved {
-        etag::ResolvedIfMatch::Strong(e) => e.to_string(),
-        // `If-Match: *` on an existing row — pass the stored etag so that
-        // `put_group` takes the conditional-update path rather than the
-        // create-only path (which rejects `(Some(_), None)` as Conflict).
-        etag::ResolvedIfMatch::WildcardMatched => existing.etag().to_string(),
-        // Wildcard on absent row — fail closed (404 already returned above)
-        etag::ResolvedIfMatch::WildcardOnDraft => {
-            return shape_group_error_response(&GroupHandlerError::NotFound);
-        }
-        // INVARIANT: if_match_raw.is_none() is checked above and returns 412
-        // before we reach resolve_if_match, so Absent is unreachable here.
-        etag::ResolvedIfMatch::Absent => {
-            unreachable!("if_match_raw.is_none() already guarded above");
-        }
     };
 
     // Pure conversion — validates name match between body and path
@@ -547,26 +621,23 @@ pub(crate) async fn update_handler<V: VpClient + 'static>(
         Err(err) => return shape_active_state_error(&err, &raw_org_id, &proposed_name),
     };
 
-    let result: Result<EtagedGroup, GroupHandlerError> = match write_ctx {
-        OrgWriteContext::Draft => store
-            .put_group(&org_id, validated, Some(&expected_etag))
-            .await
-            .map_err(|e| match e {
-                crate::error::Error::PreconditionFailed { current_etag } => {
-                    crate::metrics::record_precondition_failed(PreconditionReason::StaleEtag);
-                    GroupHandlerError::PreconditionFailed {
-                        current_etag: current_etag
-                            .map(|e| e.to_string())
-                            .unwrap_or_default(),
-                        reason: PreconditionReason::StaleEtag,
-                    }
+    let result: Result<(EtagedGroup, GroupWriteOutcome), GroupHandlerError> = match write_ctx {
+        OrgWriteContext::Draft => {
+            let entry = validated.into_inner();
+            let etaged = match EtagedGroup::compute(entry.clone()) {
+                Ok(e) => e,
+                Err(e) => {
+                    tracing::error!(org_id = %raw_org_id, group = %proposed_name, error = %e, "update group: etag compute failed");
+                    return shape_group_error_response(&GroupHandlerError::Internal);
                 }
-                crate::error::Error::NotFound(_) => GroupHandlerError::NotFound,
-                other => {
-                    tracing::error!(org_id = %raw_org_id, group = %proposed_name, error = %other, "update group failed");
-                    GroupHandlerError::Internal
-                }
-            }),
+            };
+            state
+                .model_events
+                .put_group(org_id.as_str(), entry, actor, if_revision)
+                .await
+                .map(|outcome| (etaged, outcome))
+                .map_err(|e| map_group_write_error(e, if_revision, &raw_org_id, "update group"))
+        }
         OrgWriteContext::Active(vp_ctx) => {
             let prior_for_rollback =
                 match validate_rbac_entry(existing.entry().clone(), &existing_entries) {
@@ -600,46 +671,62 @@ pub(crate) async fn update_handler<V: VpClient + 'static>(
                 compiled,
                 prior_for_rollback,
                 prior_all: existing_entries.clone(),
-                actor: Actor::System,
-                expected_revision: None,
+                actor,
+                expected_revision: if_revision,
             })
             .await
-            .map(|(eg, _outcome)| eg)
         }
     };
 
     match result {
-        Ok(eg) => (
-            StatusCode::OK,
-            etag_header(eg.etag()),
-            Json(pure::group_resource_from(eg.entry(), eg.etag().as_str())),
-        )
-            .into_response(),
+        Ok((eg, outcome)) => {
+            let revision = outcome_revision(outcome);
+            (
+                StatusCode::OK,
+                merged_headers(
+                    etag_header(eg.etag()),
+                    crate::handlers::revision_header_map(revision),
+                ),
+                Json(group_write_response_body(
+                    eg.entry(),
+                    eg.etag().as_str(),
+                    revision,
+                )),
+            )
+                .into_response()
+        }
         Err(err) => shape_group_error_response(&err),
     }
 }
 
 /// `DELETE /api/v1/organizations/{org_id}/groups/{name}`
 ///
-/// Delete an RBAC group. Requires `If-Match` (412 with
-/// `reason: "missing_if_match"` when absent).
+/// Delete an RBAC group. Optimistic concurrency is revision-tokened (#113
+/// V4, D5): callers may send `X-Fg-If-Revision: <n>`; a mismatch responds
+/// `412` with both revisions. A missing header deletes unconditionally.
+/// `If-Match`/`ETag` are no longer consulted (GET/LIST keep them).
+///
+/// Deleting an already-absent group is a no-op (D6): responds `204` with
+/// the org's current revision and appends no event.
 ///
 /// Pre-checks (both evaluated, results combined):
 /// - No other groups inherit from this one (`list_inheritors`).
 /// - No users are currently members of this group (`count_memberships_for_group`).
 ///
-/// Returns `204 No Content` on success.
+/// Returns `204 No Content` with an `x-fg-revision` header on success.
 ///
 /// Note: a member could be added or a new inheriting group could be wired
 /// between the concurrent pre-check reads and the conditional delete; this is
-/// acceptable for V2 (Draft-only orgs, low concurrency), and the etag
-/// pre-condition still protects against blind overwrite of the group row itself.
+/// acceptable for V2 (Draft-only orgs, low concurrency).
 ///
-/// Active-org behaviour (V3): the DDB delete is paired with a VP `DeletePolicy`
-/// for the parent permit; a VP `NotFound` is treated as idempotent success.
-/// On other VP failures the prior DDB row is restored; F3' (rollback fail)
-/// increments `forgeguard_cp_group_rollback_failed_total{stage="parent"}`.
+/// Active-org behaviour (V4): VP `DeletePolicy` for the parent permit is
+/// pushed FIRST (a VP `NotFound` is treated as idempotent success), then the
+/// event-sourced delete is appended. An append failure after a successful VP
+/// delete restores the prior VP state; for a stale `X-Fg-If-Revision` this is
+/// silent and surfaces `412`, otherwise `500`. Compensation failure bumps
+/// `forgeguard_cp_group_rollback_failed_total{stage="parent"}` and surfaces `500`.
 pub(crate) async fn delete_handler<V: VpClient + 'static>(
+    ForgeGuardIdentity(identity): ForgeGuardIdentity,
     Path((raw_org_id, name)): Path<(String, String)>,
     State(state): State<AppState<V>>,
     headers: HeaderMap,
@@ -649,6 +736,12 @@ pub(crate) async fn delete_handler<V: VpClient + 'static>(
     };
     let store = &state.store;
     let vp = &state.vp;
+
+    let if_revision = match parse_if_revision_header(&headers) {
+        Ok(r) => r,
+        Err(resp) => return *resp,
+    };
+    let actor = actor_for(&raw_org_id, identity.as_ref());
 
     let record = match require_org(
         store.as_ref(),
@@ -662,43 +755,26 @@ pub(crate) async fn delete_handler<V: VpClient + 'static>(
         Err(resp) => return resp,
     };
 
-    // If-Match is required for DELETE
-    let if_match_raw = parse_if_match_header(&headers);
-    if if_match_raw.is_none() {
-        crate::metrics::record_precondition_failed(PreconditionReason::MissingIfMatch);
-        return shape_group_error_response(&GroupHandlerError::PreconditionFailed {
-            current_etag: String::new(),
-            reason: PreconditionReason::MissingIfMatch,
-        });
-    }
-
-    // Fetch the group to validate it exists and get the etag
-    let existing = match require_group(
-        store.as_ref(),
-        &org_id,
-        &name,
-        &raw_org_id,
-        "delete group: get failed",
-    )
-    .await
-    {
-        Ok(g) => g,
-        Err(resp) => return resp,
-    };
-
-    // Resolve If-Match against the stored etag
-    let resolved = etag::resolve_if_match(if_match_raw, Some(existing.etag()));
-    let expected_etag: String = match &resolved {
-        etag::ResolvedIfMatch::Strong(e) => e.to_string(),
-        etag::ResolvedIfMatch::WildcardMatched => existing.etag().to_string(),
-        // Wildcard on absent row — not reachable (we 404'd above), but handle defensively
-        etag::ResolvedIfMatch::WildcardOnDraft => {
-            return shape_group_error_response(&GroupHandlerError::NotFound);
+    // D6 no-op: an absent group short-circuits before pre-checks/VP/append.
+    let existing = match store.get_group(&org_id, &name).await {
+        Ok(Some(g)) => g,
+        Ok(None) => {
+            let current = match state.model_events.latest_revision(org_id.as_str()).await {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::error!(org_id = %raw_org_id, group = %name, error = %e, "delete group: current revision lookup failed");
+                    return shape_group_error_response(&GroupHandlerError::Internal);
+                }
+            };
+            return (
+                StatusCode::NO_CONTENT,
+                crate::handlers::revision_header_map(current.value()),
+            )
+                .into_response();
         }
-        // INVARIANT: if_match_raw.is_none() is checked above and returns 412
-        // before we reach resolve_if_match, so Absent is unreachable here.
-        etag::ResolvedIfMatch::Absent => {
-            unreachable!("if_match_raw.is_none() already guarded above");
+        Err(e) => {
+            tracing::error!(org_id = %raw_org_id, group = %name, error = %e, "delete group: get failed");
+            return shape_group_error_response(&GroupHandlerError::Internal);
         }
     };
 
@@ -734,26 +810,12 @@ pub(crate) async fn delete_handler<V: VpClient + 'static>(
         Err(err) => return shape_active_state_error(&err, &raw_org_id, &name),
     };
 
-    let result: Result<(), GroupHandlerError> = match write_ctx {
-        OrgWriteContext::Draft => store
-            .delete_group(&org_id, &name, &expected_etag)
+    let result: Result<GroupWriteOutcome, GroupHandlerError> = match write_ctx {
+        OrgWriteContext::Draft => state
+            .model_events
+            .delete_group(org_id.as_str(), &name, actor, if_revision)
             .await
-            .map_err(|e| match e {
-                crate::error::Error::PreconditionFailed { current_etag } => {
-                    crate::metrics::record_precondition_failed(PreconditionReason::StaleEtag);
-                    GroupHandlerError::PreconditionFailed {
-                        current_etag: current_etag
-                            .map(|e| e.to_string())
-                            .unwrap_or_default(),
-                        reason: PreconditionReason::StaleEtag,
-                    }
-                }
-                crate::error::Error::NotFound(_) => GroupHandlerError::NotFound,
-                other => {
-                    tracing::error!(org_id = %raw_org_id, group = %name, error = %other, "delete group failed");
-                    GroupHandlerError::Internal
-                }
-            }),
+            .map_err(|e| map_group_write_error(e, if_revision, &raw_org_id, "delete group")),
         OrgWriteContext::Active(vp_ctx) => {
             let existing_entries = match list_existing_entries(
                 store.as_ref(),
@@ -791,16 +853,19 @@ pub(crate) async fn delete_handler<V: VpClient + 'static>(
                 raw_org_id: &raw_org_id,
                 name: name.clone(),
                 prior_for_rollback,
-                actor: Actor::System,
-                expected_revision: None,
+                actor,
+                expected_revision: if_revision,
             })
             .await
-            .map(|_outcome| ())
         }
     };
 
     match result {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Ok(outcome) => (
+            StatusCode::NO_CONTENT,
+            crate::handlers::revision_header_map(outcome_revision(outcome)),
+        )
+            .into_response(),
         Err(err) => shape_group_error_response(&err),
     }
 }

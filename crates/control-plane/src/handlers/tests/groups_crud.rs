@@ -29,7 +29,6 @@ async fn create_org_and_group(
     let resp = create_draft_org(&app, org_id, "Test Org").await;
     assert_eq!(resp.status(), StatusCode::CREATED);
 
-    let app = test_app(Arc::clone(&store));
     let body = group_body(group_name, allow);
     let resp = app
         .clone()
@@ -86,9 +85,10 @@ async fn create_group_returns_201_with_etag() {
 
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(json["name"], "admin");
-    assert_eq!(json["allow"], serde_json::json!(["cp:org:read"]));
-    assert!(json["etag"].is_string());
+    assert_eq!(json["group"]["name"], "admin");
+    assert_eq!(json["group"]["allow"], serde_json::json!(["cp:org:read"]));
+    assert!(json["group"]["etag"].is_string());
+    assert!(json["revision"].is_u64());
 }
 
 #[tokio::test]
@@ -277,7 +277,7 @@ async fn get_unknown_group_returns_404() {
 #[tokio::test]
 async fn update_group_with_matching_if_match_returns_200_and_new_etag() {
     let store = empty_store();
-    let (_, etag) =
+    let (app, etag) =
         create_org_and_group(Arc::clone(&store), "org-upd-g", "admin", &["cp:org:read"]).await;
 
     let update_body = serde_json::to_vec(&serde_json::json!({
@@ -285,7 +285,6 @@ async fn update_group_with_matching_if_match_returns_200_and_new_etag() {
     }))
     .unwrap();
 
-    let app = test_app(Arc::clone(&store));
     let resp = app
         .oneshot(
             Request::builder()
@@ -309,22 +308,23 @@ async fn update_group_with_matching_if_match_returns_200_and_new_etag() {
         .unwrap()
         .to_owned();
     assert_ne!(new_etag, etag, "updated resource must have a new etag");
+    assert!(resp.headers().get("x-fg-revision").is_some());
 
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(
-        json["allow"],
+        json["group"]["allow"],
         serde_json::json!(["cp:org:read", "cp:org:write"])
     );
+    assert!(json["revision"].is_u64());
 }
 
 #[tokio::test]
 async fn delete_group_returns_204() {
     let store = empty_store();
-    let (_, etag) =
+    let (app, etag) =
         create_org_and_group(Arc::clone(&store), "org-del-g", "admin", &["cp:org:read"]).await;
 
-    let app = test_app(Arc::clone(&store));
     let resp = app
         .oneshot(
             Request::builder()
@@ -339,6 +339,7 @@ async fn delete_group_returns_204() {
         .unwrap();
 
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    assert!(resp.headers().get("x-fg-revision").is_some());
 
     // Verify the group is gone
     let app = test_app(Arc::clone(&store));

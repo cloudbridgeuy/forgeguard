@@ -102,6 +102,12 @@ pub(crate) trait OrgStore: Send + Sync {
     /// | `(Some(e), Some(t))` where `e.etag() == t` | Update |
     /// | `(Some(e), Some(t))` where `e.etag() != t` | `PreconditionFailed` |
     /// | `(None, Some(_))`           | `PreconditionFailed { current_etag: "" }` |
+    ///
+    /// Superseded by `ModelEventStore::put_group` for the group-mutation
+    /// handlers (#113 V4) — kept defined (not yet retired; Task 6/7 scope)
+    /// so implementors don't need touching until the trait method itself is
+    /// removed.
+    #[allow(dead_code)]
     async fn put_group(
         &self,
         org_id: &OrganizationId,
@@ -117,6 +123,10 @@ pub(crate) trait OrgStore: Send + Sync {
     /// Callers MUST verify no live memberships (via `count_memberships_for_group`)
     /// and no inheritors (via `list_inheritors`) exist before calling this method;
     /// `delete_group` does not re-check these constraints.
+    ///
+    /// Superseded by `ModelEventStore::delete_group` for the group-mutation
+    /// handlers (#113 V4) — kept defined (not yet retired; Task 6/7 scope).
+    #[allow(dead_code)]
     async fn delete_group(
         &self,
         org_id: &OrganizationId,

@@ -13,18 +13,20 @@ use super::super::test_support::{
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Create an org, create a group, and return the group's etag.
+/// Create an org, create a group, and return the app (reused so the group
+/// write lands in the same `ModelEventStore` instance that a subsequent
+/// mutation call must observe) plus the group's etag.
 async fn setup_org_with_group(
     store: Arc<dyn crate::store::OrgStore>,
     org_id: &str,
     group_name: &str,
-) -> String {
+) -> (axum::Router, String) {
     let app = test_app(Arc::clone(&store));
     let resp = create_draft_org(&app, org_id, "Delete Org").await;
     assert_eq!(resp.status(), StatusCode::CREATED);
 
-    let app = test_app(Arc::clone(&store));
     let resp = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -43,12 +45,14 @@ async fn setup_org_with_group(
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::CREATED);
-    resp.headers()
+    let etag = resp
+        .headers()
         .get("etag")
         .unwrap()
         .to_str()
         .unwrap()
-        .to_owned()
+        .to_owned();
+    (app, etag)
 }
 
 async fn body_json(resp: axum::response::Response) -> serde_json::Value {
@@ -153,7 +157,7 @@ async fn delete_group_with_inheritor_returns_409_blocking_inheritors() {
 async fn delete_group_with_membership_returns_409_memberships_count() {
     let store = empty_in_memory_store();
     let store_dyn: Arc<dyn crate::store::OrgStore> = Arc::clone(&store) as _;
-    let etag = setup_org_with_group(Arc::clone(&store_dyn), "org-del-mem", "admin").await;
+    let (_, etag) = setup_org_with_group(Arc::clone(&store_dyn), "org-del-mem", "admin").await;
 
     // Seed a membership so count_memberships_for_group returns a non-empty map.
     use forgeguard_core::OrganizationId;
@@ -284,10 +288,9 @@ async fn delete_group_with_both_returns_409_both_arrays_populated() {
 #[tokio::test]
 async fn delete_group_clean_returns_204_then_get_returns_404() {
     let store = empty_store();
-    let etag = setup_org_with_group(Arc::clone(&store), "org-del-clean", "admin").await;
+    let (app, etag) = setup_org_with_group(Arc::clone(&store), "org-del-clean", "admin").await;
 
     // Delete the group (no inheritors, no members)
-    let app = test_app(Arc::clone(&store));
     let resp = app
         .oneshot(
             Request::builder()

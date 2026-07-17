@@ -30,6 +30,7 @@ use super::{sk, DynamoOrgStore};
 /// All three fields are derived together from `expected_etag` so a
 /// half-formed condition (name without placeholder, placeholder without value)
 /// is structurally impossible — Make Impossible States Impossible.
+#[allow(dead_code)] // supports OrgStore::put_group, unused-by-handlers since #113 V4 (Task 6/7 removes it)
 pub(crate) struct GroupConditionParts {
     pub(crate) expression: String,
     pub(crate) names: Vec<(&'static str, &'static str)>,
@@ -53,6 +54,7 @@ pub(crate) struct GroupConditionParts {
 ///
 /// Pure: deterministic, no I/O, trivially unit-testable.
 /// Functional Core — consumed by `put_group` (Imperative Shell in `mod.rs`).
+#[allow(dead_code)] // supports OrgStore::put_group, unused-by-handlers since #113 V4 (Task 6/7 removes it)
 pub(crate) fn build_group_put_condition(expected_etag: Option<&str>) -> GroupConditionParts {
     match expected_etag {
         None => GroupConditionParts {
@@ -75,6 +77,7 @@ pub(crate) fn build_group_put_condition(expected_etag: Option<&str>) -> GroupCon
 /// contract: if the group never existed, any `If-Match` value is wrong and
 /// `None` tells the handler to emit a `current_etag: ""` body (same as
 /// `InMemoryOrgStore`'s `(None, Some(_))` branch in `put_group`).
+#[allow(dead_code)] // supports OrgStore::put_group, unused-by-handlers since #113 V4 (Task 6/7 removes it)
 pub(crate) async fn recover_group_etag(
     store: &DynamoOrgStore,
     org_id: &OrganizationId,

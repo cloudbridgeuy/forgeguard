@@ -1,51 +1,9 @@
 //! Control-plane Prometheus metrics.
 //!
 //! Metric registration (impure: mutates the global `prometheus` default
-//! registry via `register_int_counter_vec!`) — the 412 label set is still
-//! consumed by the groups/user-schema `PUT`/`DELETE` etag paths.
+//! registry via `register_int_counter_vec!`).
 
 use std::sync::LazyLock;
-
-/// Why a group `PUT`/`DELETE` responded 412 (org `PUT` is revision-tokened,
-/// not etag-conditioned, since #113 V1 — see `handlers::update_handler`).
-///
-/// The label set is closed — we never emit `org_id` as a label (cardinality).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PreconditionReason {
-    /// Caller supplied a strong `If-Match` that did not equal the stored etag.
-    StaleEtag,
-    /// `PUT`/`DELETE` on a group requires `If-Match`, but the header was absent.
-    MissingIfMatch,
-}
-
-impl PreconditionReason {
-    pub(crate) fn as_label(self) -> &'static str {
-        match self {
-            Self::StaleEtag => "stale_etag",
-            Self::MissingIfMatch => "missing_if_match",
-        }
-    }
-}
-
-pub(crate) static PUT_ORG_412_TOTAL: LazyLock<prometheus::IntCounterVec> = LazyLock::new(|| {
-    prometheus::register_int_counter_vec!(
-        "forgeguard_control_plane_put_org_412_total",
-        "PUT /organizations/{id} responses that returned 412 Precondition Failed, by reason.",
-        &["reason"]
-    )
-    .unwrap_or_else(|e| {
-        panic!("failed to register forgeguard_control_plane_put_org_412_total: {e}")
-    })
-});
-
-/// Increment the 412 counter and record the reason as a span attribute.
-/// Intended to be called from the handler on every 412 path.
-pub(crate) fn record_precondition_failed(reason: PreconditionReason) {
-    PUT_ORG_412_TOTAL
-        .with_label_values(&[reason.as_label()])
-        .inc();
-    tracing::Span::current().record("precondition_reason", reason.as_label());
-}
 
 /// Rollback-failure counter labelled by VP stage (`"parent"` | `"fanout"`).
 ///
@@ -109,15 +67,6 @@ pub(crate) fn record_saga_compensation_failed() {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn as_label_values() {
-        assert_eq!(PreconditionReason::StaleEtag.as_label(), "stale_etag");
-        assert_eq!(
-            PreconditionReason::MissingIfMatch.as_label(),
-            "missing_if_match"
-        );
-    }
 
     #[test]
     fn record_group_rollback_failed_increments_counter() {

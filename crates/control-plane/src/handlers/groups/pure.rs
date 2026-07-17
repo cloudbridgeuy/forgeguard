@@ -14,8 +14,6 @@ use forgeguard_authz_core::{GroupValidationError, RbacEntry};
 use serde::Serialize;
 
 use crate::error::{Error, Result};
-use crate::handlers::PreconditionFailedBody;
-use crate::metrics::PreconditionReason;
 
 use super::active_pure::{InconsistentStateBody, VpPushFailedBody, VpStage};
 use super::{CreateGroupRequest, UpdateGroupRequest};
@@ -41,6 +39,16 @@ pub(crate) struct GroupResource<'a> {
     pub allow: &'a [String],
     pub tenant_scoped: bool,
     pub etag: &'a str,
+}
+
+/// Body for a `412` revision-mismatch response (#113 V4, D5). Mirrors
+/// `handlers::mod`'s org `update_handler` `RevisionMismatch` body shape.
+#[derive(Debug, Serialize)]
+pub(crate) struct RevisionMismatchBody {
+    /// Always `"revision_mismatch"`.
+    pub error: &'static str,
+    pub current_revision: u64,
+    pub expected_revision: Option<u64>,
 }
 
 /// Body for a `409 Delete Conflict` response.
@@ -164,12 +172,13 @@ pub(crate) enum GroupHandlerError {
     /// A `POST` attempted to create a group whose name already exists.
     #[error("group already exists")]
     AlreadyExists,
-    /// The caller's `If-Match` header did not match the stored etag, or was
-    /// required but absent.
-    #[error("precondition failed (reason: {reason:?}, current_etag: {current_etag})")]
-    PreconditionFailed {
-        current_etag: String,
-        reason: PreconditionReason,
+    /// The caller's `X-Fg-If-Revision` precondition did not match the log's
+    /// current revision at append time (#113 V4, D5). Replaces the retired
+    /// `If-Match`/etag `PreconditionFailed` variant.
+    #[error("revision mismatch (current: {current_revision}, expected: {expected_revision:?})")]
+    RevisionMismatch {
+        current_revision: u64,
+        expected_revision: Option<u64>,
     },
     /// The group cannot be deleted because other groups inherit from it, or
     /// users are still members of it.
@@ -226,7 +235,7 @@ fn validation_label(err: &GroupValidationError) -> (&'static str, &'static str) 
 /// | `Validation`           | 422    | `GroupValidationErrorBody`         |
 /// | `NotFound`             | 404    | `{"error": "not found"}`           |
 /// | `AlreadyExists`        | 409    | `{"error": "already_exists"}`      |
-/// | `PreconditionFailed`   | 412    | `PreconditionFailedBody`           |
+/// | `RevisionMismatch`     | 412    | `RevisionMismatchBody`              |
 /// | `DeleteConflict`       | 409    | `DeleteConflictBody`               |
 /// | `VpPushFailed`         | 503    | `VpPushFailedBody`                 |
 /// | `InconsistentState`    | 500    | `InconsistentStateBody`            |
@@ -253,23 +262,21 @@ pub(crate) fn shape_group_error_response(err: &GroupHandlerError) -> Response {
             Json(serde_json::json!({"error": "already_exists"})),
         )
             .into_response(),
-        GroupHandlerError::PreconditionFailed {
-            current_etag,
-            reason,
+        GroupHandlerError::RevisionMismatch {
+            current_revision,
+            expected_revision,
         } => {
             let mut headers = axum::http::HeaderMap::new();
-            if !current_etag.is_empty() {
-                if let Ok(val) = current_etag.parse() {
-                    headers.insert(axum::http::header::ETAG, val);
-                }
+            if let Ok(val) = current_revision.to_string().parse() {
+                headers.insert(crate::handlers::REVISION_HEADER, val);
             }
             (
                 StatusCode::PRECONDITION_FAILED,
                 headers,
-                Json(PreconditionFailedBody {
-                    error: "etag mismatch",
-                    reason: reason.as_label(),
-                    current_etag: current_etag.clone(),
+                Json(RevisionMismatchBody {
+                    error: "revision_mismatch",
+                    current_revision: *current_revision,
+                    expected_revision: *expected_revision,
                 }),
             )
                 .into_response()
@@ -532,29 +539,34 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn shape_error_precondition_failed_yields_412() {
-        let err = GroupHandlerError::PreconditionFailed {
-            current_etag: "\"abcdef0123456789\"".to_owned(),
-            reason: PreconditionReason::StaleEtag,
+    async fn shape_error_revision_mismatch_yields_412() {
+        let err = GroupHandlerError::RevisionMismatch {
+            current_revision: 7,
+            expected_revision: Some(3),
         };
         let resp = shape_group_error_response(&err);
         assert_eq!(resp.status(), StatusCode::PRECONDITION_FAILED);
+        assert_eq!(
+            resp.headers().get("x-fg-revision").unwrap(),
+            "7",
+            "x-fg-revision header must carry the current revision"
+        );
         let json = body_json(resp).await;
-        assert_eq!(json["error"], "etag mismatch");
-        assert_eq!(json["reason"], "stale_etag");
-        assert_eq!(json["current_etag"], "\"abcdef0123456789\"");
+        assert_eq!(json["error"], "revision_mismatch");
+        assert_eq!(json["current_revision"], 7);
+        assert_eq!(json["expected_revision"], 3);
     }
 
     #[tokio::test]
-    async fn shape_error_precondition_missing_if_match_yields_412() {
-        let err = GroupHandlerError::PreconditionFailed {
-            current_etag: "\"abcdef0123456789\"".to_owned(),
-            reason: PreconditionReason::MissingIfMatch,
+    async fn shape_error_revision_mismatch_absent_expected_is_null() {
+        let err = GroupHandlerError::RevisionMismatch {
+            current_revision: 5,
+            expected_revision: None,
         };
         let resp = shape_group_error_response(&err);
         assert_eq!(resp.status(), StatusCode::PRECONDITION_FAILED);
         let json = body_json(resp).await;
-        assert_eq!(json["reason"], "missing_if_match");
+        assert!(json["expected_revision"].is_null());
     }
 
     #[tokio::test]

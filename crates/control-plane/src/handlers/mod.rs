@@ -19,7 +19,7 @@ use axum::Json;
 use forgeguard_authz_core::Actor;
 use forgeguard_axum::ForgeGuardIdentity;
 use forgeguard_core::{Fgrn, NativeId, OrgStatus, Organization, OrganizationId, Segment};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::config::OrgConfig;
 use crate::etag::{self, Etag, IfNoneMatchResult};
@@ -135,23 +135,6 @@ impl<V> FromRef<AppState<V>> for Arc<dyn ModelEventStore> {
 pub(crate) use keys::{
     generate_key_handler, list_keys_handler, revoke_key_handler, rotate_key_handler,
 };
-
-/// Response body emitted on every `412 Precondition Failed` from `PUT /organizations/{id}`.
-///
-/// The `reason` field surfaces the same label that drives the Prometheus counter
-/// (`PreconditionReason::as_label()`), keeping the wire shape, metrics, and span
-/// fields a single source of truth.
-#[derive(Debug, Serialize)]
-pub(crate) struct PreconditionFailedBody {
-    /// Stable machine-readable error code. Always `"etag mismatch"` for 412 responses.
-    error: &'static str,
-    /// Machine-readable reason: one of `"stale_etag"`, `"draft_fail_closed"`,
-    /// or `"wildcard_on_draft"`.
-    reason: &'static str,
-    /// The ETag of the current stored representation as a string. Empty string for
-    /// Draft orgs that have no config yet (`None` current_etag from the store).
-    current_etag: String,
-}
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct CreateOrgRequest {
@@ -554,7 +537,10 @@ pub(crate) fn not_found() -> Response {
 /// Build a [`HeaderMap`] carrying the [`REVISION_HEADER`] for a model-plane
 /// write response. Silently omits the header if `revision` can't round-trip
 /// through [`HeaderValue`] (never happens for a `u64`, but avoids a panic).
-fn revision_header_map(revision: u64) -> HeaderMap {
+///
+/// Shared across every model-plane write handler (org, groups, ...) so the
+/// header-building logic has one implementation.
+pub(crate) fn revision_header_map(revision: u64) -> HeaderMap {
     let mut headers = HeaderMap::new();
     if let Ok(val) = HeaderValue::from_str(&revision.to_string()) {
         headers.insert(REVISION_HEADER, val);
