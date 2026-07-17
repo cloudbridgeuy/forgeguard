@@ -277,9 +277,8 @@ pub(crate) trait ModelEventStore: Send + Sync {
     /// `Error::RevisionMismatch` (#113 V2). `record` already carries the
     /// post-transition status.
     ///
-    /// No HTTP route calls this yet — Task 5 wires the lifecycle-verb
-    /// handlers against it, same precedent as `put_promotion`.
-    #[allow(dead_code)]
+    /// Called by the `activate`/`suspend`/`restore` handlers in
+    /// `handlers::lifecycle`.
     async fn transition_org(
         &self,
         record: OrgRecord,

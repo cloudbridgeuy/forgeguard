@@ -226,6 +226,9 @@ const API_ROUTES: &[(&str, &str)] = &[
     ),
     ("GET", "/api/v1/organizations/{org_id}/promoted-resources"),
     ("GET", "/api/v1/organizations/{org_id}/signing-keys"),
+    ("POST", "/api/v1/organizations/{org_id}/activate"),
+    ("POST", "/api/v1/organizations/{org_id}/suspend"),
+    ("POST", "/api/v1/organizations/{org_id}/restore"),
 ];
 
 /// Route-to-action mappings for all control-plane API routes.
@@ -564,6 +567,18 @@ fn build_router<V: VpClient + 'static>(state: AppState<V>, fg: Arc<ForgeGuard>) 
         .route(
             "/api/v1/organizations/{org_id}/signing-keys",
             axum::routing::get(handlers::signing_keys::list_signing_keys_handler::<V>),
+        )
+        .route(
+            "/api/v1/organizations/{org_id}/activate",
+            axum::routing::post(handlers::lifecycle::activate_handler::<V>),
+        )
+        .route(
+            "/api/v1/organizations/{org_id}/suspend",
+            axum::routing::post(handlers::lifecycle::suspend_handler::<V>),
+        )
+        .route(
+            "/api/v1/organizations/{org_id}/restore",
+            axum::routing::post(handlers::lifecycle::restore_handler::<V>),
         )
         .with_state(state)
         .layer(axum::middleware::from_fn_with_state(fg, forgeguard_layer))
