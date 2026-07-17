@@ -1,6 +1,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use std::sync::Arc;
+
 use super::*;
+use crate::model_event_store::ModelEventStore;
 use crate::signing_key::SigningKeyStatus;
 
 fn sample_json() -> &'static str {
@@ -457,39 +460,42 @@ fn make_store_with_org(org_id_str: &str) -> InMemoryOrgStore {
     store
 }
 
-#[tokio::test]
-async fn generate_key_happy_path() {
-    let store = make_store_with_org("org-keys");
-    let org_id = OrganizationId::new("org-keys").unwrap();
-
-    let result = store.generate_key(&org_id).await.unwrap();
-    assert!(!result.key_id().is_empty());
-    assert!(result.private_key_pem().contains("PRIVATE KEY"));
-    assert!(result.public_key_pem().contains("PUBLIC KEY"));
-    assert!(result.created_at() <= Utc::now());
-}
-
-#[tokio::test]
-async fn generate_key_nonexistent_org_returns_error() {
-    let store = InMemoryOrgStore::new(BTreeMap::new());
-    let org_id = OrganizationId::new("org-ghost").unwrap();
-
-    let result = store.generate_key(&org_id).await;
-    assert!(result.is_err());
-    let err = result.err().unwrap();
-    assert!(
-        matches!(err, Error::NotFound(_)),
-        "expected NotFound, got: {err:?}"
+/// Seed `org_id_str`'s keys by writing through
+/// [`crate::model_event_store::ModelEventStore`], mirroring how production
+/// wires `DynamoOrgStore`/`DynamoModelEventStore` onto one shared table: key
+/// mutations are `ModelEventStore`-only now (see
+/// `model_event_store::in_memory_tests` for the write-path coverage), so
+/// `OrgStore::list_keys` here is exercised only as the read side of that
+/// write-through.
+async fn model_events_for(
+    store: &Arc<InMemoryOrgStore>,
+    org_id: &OrganizationId,
+) -> crate::model_event_store::InMemoryModelEventStore {
+    let record = store.get(org_id).await.unwrap().unwrap();
+    let model_events = crate::model_event_store::InMemoryModelEventStore::new_with_org_store(
+        Arc::clone(store) as Arc<dyn OrgStore>,
     );
+    model_events
+        .create_org(record, forgeguard_authz_core::Actor::System)
+        .await
+        .unwrap();
+    model_events
 }
 
 #[tokio::test]
 async fn list_keys_returns_generated_keys() {
-    let store = make_store_with_org("org-list");
+    let store = Arc::new(make_store_with_org("org-list"));
     let org_id = OrganizationId::new("org-list").unwrap();
+    let model_events = model_events_for(&store, &org_id).await;
 
-    store.generate_key(&org_id).await.unwrap();
-    store.generate_key(&org_id).await.unwrap();
+    model_events
+        .generate_org_key(org_id.as_str(), forgeguard_authz_core::Actor::System)
+        .await
+        .unwrap();
+    model_events
+        .generate_org_key(org_id.as_str(), forgeguard_authz_core::Actor::System)
+        .await
+        .unwrap();
 
     let keys = store.list_keys(&org_id).await.unwrap();
     assert_eq!(keys.len(), 2);
@@ -505,139 +511,27 @@ async fn list_keys_no_keys_returns_empty() {
 }
 
 #[tokio::test]
-async fn revoke_key_happy_path() {
-    let store = make_store_with_org("org-revoke");
+async fn revoke_key_write_through_updates_list_keys() {
+    let store = Arc::new(make_store_with_org("org-revoke"));
     let org_id = OrganizationId::new("org-revoke").unwrap();
+    let model_events = model_events_for(&store, &org_id).await;
 
-    let generated = store.generate_key(&org_id).await.unwrap();
-    store.revoke_key(&org_id, generated.key_id()).await.unwrap();
+    let (generated, _revision) = model_events
+        .generate_org_key(org_id.as_str(), forgeguard_authz_core::Actor::System)
+        .await
+        .unwrap();
+    model_events
+        .revoke_org_key(
+            org_id.as_str(),
+            generated.key_id(),
+            forgeguard_authz_core::Actor::System,
+        )
+        .await
+        .unwrap();
 
     let keys = store.list_keys(&org_id).await.unwrap();
     assert_eq!(keys.len(), 1);
     assert_eq!(*keys[0].status(), SigningKeyStatus::Revoked);
-}
-
-#[tokio::test]
-async fn revoke_key_nonexistent_org_returns_error() {
-    let store = InMemoryOrgStore::new(BTreeMap::new());
-    let org_id = OrganizationId::new("org-ghost").unwrap();
-
-    let result = store.revoke_key(&org_id, "key-abc").await;
-    assert!(result.is_err());
-    let err = result.unwrap_err();
-    assert!(
-        matches!(err, Error::NotFound(_)),
-        "expected NotFound, got: {err:?}"
-    );
-}
-
-#[tokio::test]
-async fn revoke_key_nonexistent_key_returns_error() {
-    let store = make_store_with_org("org-badkey");
-    let org_id = OrganizationId::new("org-badkey").unwrap();
-
-    // Generate one key, then try to revoke a different key_id
-    let generated = store.generate_key(&org_id).await.unwrap();
-
-    let result = store.revoke_key(&org_id, "key-nonexistent").await;
-    assert!(result.is_err());
-    let err = result.unwrap_err();
-    assert!(
-        matches!(err, Error::NotFound(_)),
-        "expected NotFound, got: {err:?}"
-    );
-
-    // The no-op path must not discard the org's real keys.
-    let keys = store.list_keys(&org_id).await.unwrap();
-    assert_eq!(keys.len(), 1);
-    assert_eq!(keys[0].key_id(), generated.key_id());
-    assert_eq!(*keys[0].status(), SigningKeyStatus::Active);
-}
-
-#[tokio::test]
-async fn rotate_signing_key_happy_path() {
-    let store = make_store_with_org("org-rotate");
-    let org_id = OrganizationId::new("org-rotate").unwrap();
-
-    let original = store.generate_key(&org_id).await.unwrap();
-    let rotated = store
-        .rotate_signing_key(&org_id, original.key_id())
-        .await
-        .unwrap();
-
-    assert_ne!(rotated.key_id(), original.key_id());
-    assert!(rotated.private_key_pem().contains("PRIVATE KEY"));
-
-    let keys = store.list_keys(&org_id).await.unwrap();
-    assert_eq!(keys.len(), 2);
-
-    let old = keys
-        .iter()
-        .find(|k| k.key_id() == original.key_id())
-        .unwrap();
-    assert!(matches!(old.status(), SigningKeyStatus::Rotating { .. }));
-
-    let new = keys
-        .iter()
-        .find(|k| k.key_id() == rotated.key_id())
-        .unwrap();
-    assert!(matches!(new.status(), SigningKeyStatus::Active));
-}
-
-#[tokio::test]
-async fn rotate_signing_key_nonexistent_org_returns_not_found() {
-    let store = InMemoryOrgStore::new(BTreeMap::new());
-    let org_id = OrganizationId::new("org-ghost").unwrap();
-    let err = store
-        .rotate_signing_key(&org_id, "key-abc")
-        .await
-        .unwrap_err();
-    assert!(matches!(err, Error::NotFound(_)), "got: {err:?}");
-}
-
-#[tokio::test]
-async fn rotate_signing_key_nonexistent_key_returns_not_found() {
-    let store = make_store_with_org("org-rot-miss");
-    let org_id = OrganizationId::new("org-rot-miss").unwrap();
-    let err = store
-        .rotate_signing_key(&org_id, "key-missing")
-        .await
-        .unwrap_err();
-    assert!(matches!(err, Error::NotFound(_)), "got: {err:?}");
-}
-
-#[tokio::test]
-async fn rotate_signing_key_revoked_target_returns_conflict() {
-    let store = make_store_with_org("org-rot-revoked");
-    let org_id = OrganizationId::new("org-rot-revoked").unwrap();
-
-    let generated = store.generate_key(&org_id).await.unwrap();
-    store.revoke_key(&org_id, generated.key_id()).await.unwrap();
-
-    let err = store
-        .rotate_signing_key(&org_id, generated.key_id())
-        .await
-        .unwrap_err();
-    assert!(matches!(err, Error::Conflict(_)), "got: {err:?}");
-}
-
-#[tokio::test]
-async fn rotate_signing_key_rotating_target_returns_conflict() {
-    let store = make_store_with_org("org-rot-double");
-    let org_id = OrganizationId::new("org-rot-double").unwrap();
-
-    let generated = store.generate_key(&org_id).await.unwrap();
-    store
-        .rotate_signing_key(&org_id, generated.key_id())
-        .await
-        .unwrap();
-
-    // Second rotation of the now-Rotating key → 409
-    let err = store
-        .rotate_signing_key(&org_id, generated.key_id())
-        .await
-        .unwrap_err();
-    assert!(matches!(err, Error::Conflict(_)), "got: {err:?}");
 }
 
 // =============================================================================

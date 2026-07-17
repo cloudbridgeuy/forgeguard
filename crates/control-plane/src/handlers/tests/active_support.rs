@@ -40,7 +40,7 @@ use crate::error::{Error, Result};
 use crate::etag::Etag;
 use crate::handlers::test_support::TEST_API_KEY;
 use crate::handlers::AppState;
-use crate::signing_key::{GenerateKeyResult, SigningKeyEntry};
+use crate::signing_key::SigningKeyEntry;
 use crate::store::{
     build_org_store, EtagedGroup, EtagedUserSchema, InMemorySagaTicketStore, OrgRecord, OrgStore,
     PutMembershipRowParams, SagaTicketStore,
@@ -122,21 +122,15 @@ impl OrgStore for FailingStore {
     async fn write_through_org(&self, org: Organization, config: Option<OrgConfig>) {
         self.inner.write_through_org(org, config).await;
     }
-    async fn generate_key(&self, org_id: &OrganizationId) -> Result<GenerateKeyResult> {
-        self.inner.generate_key(org_id).await
+    async fn write_through_signing_keys(
+        &self,
+        org_id: &OrganizationId,
+        keys: Vec<SigningKeyEntry>,
+    ) {
+        self.inner.write_through_signing_keys(org_id, keys).await;
     }
     async fn list_keys(&self, org_id: &OrganizationId) -> Result<Vec<SigningKeyEntry>> {
         self.inner.list_keys(org_id).await
-    }
-    async fn revoke_key(&self, org_id: &OrganizationId, key_id: &str) -> Result<()> {
-        self.inner.revoke_key(org_id, key_id).await
-    }
-    async fn rotate_signing_key(
-        &self,
-        org_id: &OrganizationId,
-        key_id: &str,
-    ) -> Result<GenerateKeyResult> {
-        self.inner.rotate_signing_key(org_id, key_id).await
     }
     async fn get_group(&self, org_id: &OrganizationId, name: &str) -> Result<Option<EtagedGroup>> {
         self.inner.get_group(org_id, name).await

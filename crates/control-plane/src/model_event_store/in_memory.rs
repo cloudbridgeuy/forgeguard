@@ -13,6 +13,8 @@ use super::{
     PromotionEntry, Result, Revision, Segment, SigningKey, SigningKeyEntry, IN_MEMORY_KEY_ID,
     IN_MEMORY_SEED,
 };
+use forgeguard_core::OrganizationId;
+
 use crate::store::OrgStore;
 
 // ---------------------------------------------------------------------------
@@ -37,9 +39,7 @@ pub(crate) struct InMemoryModelEventStore {
     orgs: Mutex<HashMap<String, OrgRecord>>,
     /// `org_id -> signing_keys`, mirrors the DynamoDB META item's
     /// `signing_keys` attribute for `generate_org_key`/`revoke_org_key`/
-    /// `rotate_org_key`. No HTTP route calls those in Task 4 — wired in
-    /// Task 5, hence `dead_code`, same precedent as `put_promotion`.
-    #[allow(dead_code)]
+    /// `rotate_org_key`.
     signing_keys: Mutex<HashMap<String, Vec<SigningKeyEntry>>>,
     /// Write-through target for `create_org`/`update_org`.
     ///
@@ -174,10 +174,6 @@ impl InMemoryModelEventStore {
     /// `Ok(None)` is the D6 no-op — nothing is pushed. Not atomic with a
     /// concurrent mutation of the same org's keys — acceptable for a test
     /// double, same caveat as `append_org_state`.
-    ///
-    /// No HTTP route calls this in Task 4 — wired in Task 5, hence
-    /// `dead_code`, same precedent as `put_promotion`.
-    #[allow(dead_code)]
     async fn append_org_keys(
         &self,
         org_id: &str,
@@ -213,11 +209,25 @@ impl InMemoryModelEventStore {
         );
         let revision = self.mint_and_push(org_id, kind, actor, payload).await?;
 
-        let mut guard = self
-            .signing_keys
-            .lock()
-            .map_err(|e| lock_poisoned("signing keys", e))?;
-        guard.insert(org_id.to_string(), new_keys);
+        {
+            let mut guard = self
+                .signing_keys
+                .lock()
+                .map_err(|e| lock_poisoned("signing keys", e))?;
+            guard.insert(org_id.to_string(), new_keys.clone());
+        }
+
+        // Mirror into the org read-model, same rationale as
+        // `append_org_state`'s `write_through_org` call — production shares
+        // one DynamoDB item for both stores, this double does not.
+        if let Some(org_store) = &self.org_store {
+            if let Ok(typed_org_id) = OrganizationId::new(org_id) {
+                org_store
+                    .write_through_signing_keys(&typed_org_id, new_keys)
+                    .await;
+            }
+        }
+
         Ok(Some(revision))
     }
 }
@@ -475,7 +485,11 @@ impl ModelEventStore for InMemoryModelEventStore {
             .await
     }
 
-    async fn generate_org_key(&self, org_id: &str, actor: Actor) -> Result<GenerateKeyResult> {
+    async fn generate_org_key(
+        &self,
+        org_id: &str,
+        actor: Actor,
+    ) -> Result<(GenerateKeyResult, Revision)> {
         let result = generate_key_material()?;
         let new_entry = result.to_entry()?;
         let key_id = result.key_id().to_string();
@@ -488,9 +502,11 @@ impl ModelEventStore for InMemoryModelEventStore {
                 generate_key_transition(new_entry, key_id),
             )
             .await?;
-        debug_assert!(outcome.is_some(), "generate_org_key never no-ops");
+        let Some(revision) = outcome else {
+            unreachable!("generate_org_key never no-ops");
+        };
 
-        Ok(result)
+        Ok((result, revision))
     }
 
     async fn revoke_org_key(
@@ -513,20 +529,24 @@ impl ModelEventStore for InMemoryModelEventStore {
         org_id: &str,
         key_id: &str,
         actor: Actor,
-    ) -> Result<GenerateKeyResult> {
+    ) -> Result<(GenerateKeyResult, Revision)> {
         let result = generate_key_material()?;
         let new_entry = result.to_entry()?;
         let now = chrono::Utc::now();
         let grace = chrono::Duration::hours(crate::signing_key::ROTATION_GRACE_HOURS);
 
-        self.append_org_keys(
-            org_id,
-            EventKind::OrgKeyRotated,
-            actor,
-            rotate_key_transition(key_id.to_string(), new_entry, now, grace),
-        )
-        .await?;
+        let outcome = self
+            .append_org_keys(
+                org_id,
+                EventKind::OrgKeyRotated,
+                actor,
+                rotate_key_transition(key_id.to_string(), new_entry, now, grace),
+            )
+            .await?;
+        let Some(revision) = outcome else {
+            unreachable!("rotate_org_key never no-ops");
+        };
 
-        Ok(result)
+        Ok((result, revision))
     }
 }

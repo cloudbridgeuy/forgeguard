@@ -26,10 +26,9 @@ use crate::error::{Error, Result};
 use crate::etag::Etag;
 use crate::handlers::groups::codec::{group_pk, group_sk, to_group_item, SK_GROUP_PREFIX};
 use crate::handlers::groups::pure::compute_group_etag;
-use crate::signing_key::{GenerateKeyResult, SigningKeyEntry};
+use crate::signing_key::SigningKeyEntry;
 use crate::store::{
-    generate_key_material, ConfiguredConfig, EtagedGroup, EtagedUserSchema, OrgRecord, OrgStore,
-    PutMembershipRowParams,
+    ConfiguredConfig, EtagedGroup, EtagedUserSchema, OrgRecord, OrgStore, PutMembershipRowParams,
 };
 
 // ---------------------------------------------------------------------------
@@ -113,39 +112,6 @@ impl DynamoOrgStore {
             .await
             .map_err(map_sdk_error)?;
         Ok(result.item)
-    }
-
-    /// Write an updated `signing_keys` JSON list back to the org item.
-    ///
-    /// Uses `attribute_exists(#pk)` to ensure the org still exists.
-    async fn write_signing_keys(
-        &self,
-        org_id: &OrganizationId,
-        keys: &[SigningKeyEntry],
-    ) -> Result<()> {
-        let keys_json = serde_json::to_string(keys)
-            .map_err(|e| Error::Store(format!("serialize signing_keys: {e}")))?;
-
-        self.client
-            .update_item()
-            .table_name(&self.table_name)
-            .key(pk(), AttributeValue::S(format!("{ORG_PREFIX}{org_id}")))
-            .key(sk(), AttributeValue::S(SK_META.to_string()))
-            .update_expression("SET #sk_attr = :sk_val")
-            .expression_attribute_names("#sk_attr", "signing_keys")
-            .expression_attribute_values(":sk_val", AttributeValue::S(keys_json))
-            .condition_expression("attribute_exists(#pk)")
-            .expression_attribute_names("#pk", pk())
-            .send()
-            .await
-            .map_err(|sdk_err| {
-                map_update_item_error(
-                    sdk_err,
-                    Error::NotFound(format!("organization '{org_id}' not found")),
-                )
-            })?;
-
-        Ok(())
     }
 }
 
@@ -305,22 +271,6 @@ fn is_conditional_check_failed(
     )
 }
 
-/// Map an `UpdateItem` SDK error, converting `ConditionalCheckFailedException`
-/// into the provided domain error.
-fn map_update_item_error(
-    sdk_err: aws_sdk_dynamodb::error::SdkError<
-        aws_sdk_dynamodb::operation::update_item::UpdateItemError,
-    >,
-    on_condition_failed: Error,
-) -> Error {
-    if let aws_sdk_dynamodb::error::SdkError::ServiceError(ref service_err) = sdk_err {
-        if service_err.err().is_conditional_check_failed_exception() {
-            return on_condition_failed;
-        }
-    }
-    map_sdk_error(sdk_err)
-}
-
 // ---------------------------------------------------------------------------
 // Signing-key helpers
 // ---------------------------------------------------------------------------
@@ -396,71 +346,11 @@ impl OrgStore for DynamoOrgStore {
             .collect()
     }
 
-    async fn generate_key(&self, org_id: &OrganizationId) -> Result<GenerateKeyResult> {
-        // Synchronous — `ThreadRng` is not `Send`, must complete before `.await`.
-        let result = generate_key_material()?;
-        let entry = result.to_entry()?;
-
-        let item = self
-            .get_raw_item(org_id)
-            .await?
-            .ok_or_else(|| Error::NotFound(format!("organization '{org_id}' not found")))?;
-
-        let mut keys = signing_keys_from_item(&item)?;
-        keys.push(entry);
-        self.write_signing_keys(org_id, &keys).await?;
-
-        Ok(result)
-    }
-
     async fn list_keys(&self, org_id: &OrganizationId) -> Result<Vec<SigningKeyEntry>> {
         match self.get_raw_item(org_id).await? {
             Some(ref item) => signing_keys_from_item(item),
             None => Ok(Vec::new()),
         }
-    }
-
-    async fn revoke_key(&self, org_id: &OrganizationId, key_id: &str) -> Result<()> {
-        let item = self
-            .get_raw_item(org_id)
-            .await?
-            .ok_or_else(|| Error::NotFound(format!("organization '{org_id}' not found")))?;
-
-        let existing = signing_keys_from_item(&item)?;
-        let updated = crate::signing_key::revoke_entries(existing, key_id).ok_or_else(|| {
-            Error::NotFound(format!(
-                "signing key '{key_id}' not found for organization '{org_id}'"
-            ))
-        })?;
-
-        self.write_signing_keys(org_id, &updated).await
-    }
-
-    async fn rotate_signing_key(
-        &self,
-        org_id: &OrganizationId,
-        key_id: &str,
-    ) -> Result<GenerateKeyResult> {
-        // Generate material BEFORE any .await that touches !Send RNG state.
-        let result = generate_key_material()?;
-        let new_entry = result.to_entry()?;
-
-        let item = self
-            .get_raw_item(org_id)
-            .await?
-            .ok_or_else(|| Error::NotFound(format!("organization '{org_id}' not found")))?;
-
-        let existing = signing_keys_from_item(&item)?;
-        let updated = crate::signing_key::rotate_entries(
-            existing,
-            key_id,
-            new_entry,
-            chrono::Utc::now(),
-            chrono::Duration::hours(crate::signing_key::ROTATION_GRACE_HOURS),
-        )?;
-        self.write_signing_keys(org_id, &updated).await?;
-
-        Ok(result)
     }
 
     // -----------------------------------------------------------------------

@@ -537,15 +537,15 @@ fn build_router<V: VpClient + 'static>(state: AppState<V>, fg: Arc<ForgeGuard>) 
         )
         .route(
             "/api/v1/organizations/{org_id}/keys",
-            post(handlers::generate_key_handler).get(handlers::list_keys_handler),
+            post(handlers::generate_key_handler::<V>).get(handlers::list_keys_handler),
         )
         .route(
             "/api/v1/organizations/{org_id}/keys/{key_id}",
-            axum::routing::delete(handlers::revoke_key_handler),
+            axum::routing::delete(handlers::revoke_key_handler::<V>),
         )
         .route(
             "/api/v1/organizations/{org_id}/keys/{key_id}/rotate",
-            axum::routing::post(handlers::rotate_key_handler),
+            axum::routing::post(handlers::rotate_key_handler::<V>),
         )
         .route(
             "/api/v1/organizations/{org_id}/groups",

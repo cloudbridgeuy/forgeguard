@@ -4,21 +4,33 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use forgeguard_axum::ForgeGuardIdentity;
 use forgeguard_core::OrganizationId;
 
+use crate::handlers::{actor_for, revision_header_map, AppState};
 use crate::signing_key::{GenerateKeyResult, SigningKeyEntry};
 use crate::store::OrgStore;
+use crate::vp_client::VpClient;
 
-pub(crate) async fn generate_key_handler(
+/// `POST /api/v1/organizations/{org_id}/keys` — mint a request-signing key
+/// on the event log (`org.key_generated`, #113 V3).
+pub(crate) async fn generate_key_handler<V: VpClient + 'static>(
+    ForgeGuardIdentity(identity): ForgeGuardIdentity,
     Path(raw_org_id): Path<String>,
-    State(store): State<Arc<dyn OrgStore>>,
+    State(state): State<AppState<V>>,
 ) -> Response {
-    let Ok(org_id) = OrganizationId::new(&raw_org_id) else {
+    if OrganizationId::new(&raw_org_id).is_err() {
         return super::not_found();
-    };
+    }
 
-    match store.generate_key(&org_id).await {
-        Ok(result) => key_result_response(&result),
+    let actor = actor_for(&raw_org_id, identity.as_ref());
+
+    match state
+        .model_events
+        .generate_org_key(&raw_org_id, actor)
+        .await
+    {
+        Ok((result, revision)) => key_result_response(&result, revision.value()),
         Err(crate::error::Error::NotFound(msg)) => (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": msg})),
@@ -31,16 +43,49 @@ pub(crate) async fn generate_key_handler(
     }
 }
 
-pub(crate) async fn revoke_key_handler(
+/// `DELETE /api/v1/organizations/{org_id}/keys/{key_id}` — revoke a
+/// request-signing key on the event log (`org.key_revoked`, narrowing).
+///
+/// Unknown org -> `404`. Unknown/already-revoked key is the D6 no-op -> `204`
+/// with `x-fg-revision` set to the *current* revision (no event appended).
+/// Revoked key -> `204` with `x-fg-revision` set to the *new* revision.
+pub(crate) async fn revoke_key_handler<V: VpClient + 'static>(
+    ForgeGuardIdentity(identity): ForgeGuardIdentity,
     Path((raw_org_id, key_id)): Path<(String, String)>,
-    State(store): State<Arc<dyn OrgStore>>,
+    State(state): State<AppState<V>>,
 ) -> Response {
-    let Ok(org_id) = OrganizationId::new(&raw_org_id) else {
+    if OrganizationId::new(&raw_org_id).is_err() {
         return super::not_found();
-    };
+    }
 
-    match store.revoke_key(&org_id, &key_id).await {
-        Ok(()) | Err(crate::error::Error::NotFound(_)) => StatusCode::NO_CONTENT.into_response(),
+    let actor = actor_for(&raw_org_id, identity.as_ref());
+
+    match state
+        .model_events
+        .revoke_org_key(&raw_org_id, &key_id, actor)
+        .await
+    {
+        Ok(Some(revision)) => (
+            StatusCode::NO_CONTENT,
+            revision_header_map(revision.value()),
+        )
+            .into_response(),
+        Ok(None) => match state.model_events.latest_revision(&raw_org_id).await {
+            Ok(revision) => (
+                StatusCode::NO_CONTENT,
+                revision_header_map(revision.value()),
+            )
+                .into_response(),
+            Err(e) => {
+                tracing::error!(org_id = %raw_org_id, key_id = %key_id, error = %e, "revoke key: latest_revision failed");
+                StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            }
+        },
+        Err(crate::error::Error::NotFound(msg)) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": msg})),
+        )
+            .into_response(),
         Err(e) => {
             tracing::error!(org_id = %raw_org_id, key_id = %key_id, error = %e, "revoke key failed");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
@@ -48,16 +93,25 @@ pub(crate) async fn revoke_key_handler(
     }
 }
 
-pub(crate) async fn rotate_key_handler(
+/// `POST /api/v1/organizations/{org_id}/keys/{key_id}/rotate` — rotate a
+/// request-signing key on the event log (`org.key_rotated`).
+pub(crate) async fn rotate_key_handler<V: VpClient + 'static>(
+    ForgeGuardIdentity(identity): ForgeGuardIdentity,
     Path((raw_org_id, key_id)): Path<(String, String)>,
-    State(store): State<Arc<dyn OrgStore>>,
+    State(state): State<AppState<V>>,
 ) -> Response {
-    let Ok(org_id) = OrganizationId::new(&raw_org_id) else {
+    if OrganizationId::new(&raw_org_id).is_err() {
         return super::not_found();
-    };
+    }
 
-    match store.rotate_signing_key(&org_id, &key_id).await {
-        Ok(result) => key_result_response(&result),
+    let actor = actor_for(&raw_org_id, identity.as_ref());
+
+    match state
+        .model_events
+        .rotate_org_key(&raw_org_id, &key_id, actor)
+        .await
+    {
+        Ok((result, revision)) => key_result_response(&result, revision.value()),
         Err(crate::error::Error::NotFound(msg)) => (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": msg})),
@@ -106,18 +160,20 @@ pub(crate) async fn list_keys_handler(
     }
 }
 
-/// Build the 201 Created response returned when a new key is issued.
+/// Build the `201 Created` response returned when a new key is issued.
 ///
 /// Used by both `generate_key_handler` and `rotate_key_handler` — the response
-/// shape is identical: key_id, private_key, public_key, created_at.
-fn key_result_response(result: &GenerateKeyResult) -> Response {
+/// shape is identical: key_id, private_key, public_key, created_at, revision.
+fn key_result_response(result: &GenerateKeyResult, revision: u64) -> Response {
     (
         StatusCode::CREATED,
+        revision_header_map(revision),
         Json(serde_json::json!({
             "key_id": result.key_id(),
             "private_key": result.private_key_pem(),
             "public_key": result.public_key_pem(),
             "created_at": result.created_at().to_rfc3339(),
+            "revision": revision,
         })),
     )
         .into_response()
@@ -143,8 +199,6 @@ fn key_entry_json(entry: &SigningKeyEntry) -> serde_json::Value {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use std::sync::Arc;
-
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use http_body_util::BodyExt;
@@ -152,13 +206,8 @@ mod tests {
 
     use super::super::test_support::{create_org_json, empty_store, test_app, TEST_API_KEY};
 
-    #[tokio::test]
-    async fn generate_key_returns_201_with_keypair() {
-        let store = empty_store();
-
-        // Create an org first
-        let app = test_app(Arc::clone(&store));
-        let body = serde_json::to_string(&create_org_json("org-keygen", "Key Org")).unwrap();
+    async fn create_org(app: &axum::Router, org_id: &str, name: &str) {
+        let body = serde_json::to_string(&create_org_json(org_id, name)).unwrap();
         let request = Request::builder()
             .method("POST")
             .uri("/api/v1/organizations")
@@ -166,22 +215,86 @@ mod tests {
             .header("x-api-key", TEST_API_KEY)
             .body(Body::from(body))
             .unwrap();
-        let response = app.oneshot(request).await.unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::CREATED);
+    }
 
-        // Generate a key
-        let app = test_app(Arc::clone(&store));
+    async fn generate_key(app: &axum::Router, org_id: &str) -> axum::response::Response {
         let request = Request::builder()
             .method("POST")
-            .uri("/api/v1/organizations/org-keygen/keys")
+            .uri(format!("/api/v1/organizations/{org_id}/keys"))
             .header("x-api-key", TEST_API_KEY)
             .body(Body::empty())
             .unwrap();
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::CREATED);
+        app.clone().oneshot(request).await.unwrap()
+    }
 
+    async fn revoke_key(
+        app: &axum::Router,
+        org_id: &str,
+        key_id: &str,
+    ) -> axum::response::Response {
+        let request = Request::builder()
+            .method("DELETE")
+            .uri(format!("/api/v1/organizations/{org_id}/keys/{key_id}"))
+            .header("x-api-key", TEST_API_KEY)
+            .body(Body::empty())
+            .unwrap();
+        app.clone().oneshot(request).await.unwrap()
+    }
+
+    async fn rotate_key(
+        app: &axum::Router,
+        org_id: &str,
+        key_id: &str,
+    ) -> axum::response::Response {
+        let request = Request::builder()
+            .method("POST")
+            .uri(format!(
+                "/api/v1/organizations/{org_id}/keys/{key_id}/rotate"
+            ))
+            .header("x-api-key", TEST_API_KEY)
+            .body(Body::empty())
+            .unwrap();
+        app.clone().oneshot(request).await.unwrap()
+    }
+
+    async fn list_keys(app: &axum::Router, org_id: &str) -> axum::response::Response {
+        let request = Request::builder()
+            .uri(format!("/api/v1/organizations/{org_id}/keys"))
+            .header("x-api-key", TEST_API_KEY)
+            .body(Body::empty())
+            .unwrap();
+        app.clone().oneshot(request).await.unwrap()
+    }
+
+    async fn get_events(app: &axum::Router, org_id: &str) -> serde_json::Value {
+        let request = Request::builder()
+            .uri(format!("/api/v1/organizations/{org_id}/events"))
+            .header("x-api-key", TEST_API_KEY)
+            .body(Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    async fn body_json(response: axum::response::Response) -> serde_json::Value {
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    #[tokio::test]
+    async fn generate_key_returns_201_with_keypair() {
+        let app = test_app(empty_store());
+        create_org(&app, "org-keygen", "Key Org").await;
+
+        let response = generate_key(&app, "org-keygen").await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        assert!(response.headers().get("x-fg-revision").is_some());
+
+        let json = body_json(response).await;
         assert!(json["key_id"].is_string());
         assert!(!json["key_id"].as_str().unwrap().is_empty());
         assert!(json["private_key"]
@@ -190,143 +303,102 @@ mod tests {
             .contains("PRIVATE KEY"));
         assert!(json["public_key"].as_str().unwrap().contains("PUBLIC KEY"));
         assert!(json["created_at"].is_string());
+        assert!(json["revision"].is_u64());
     }
 
     #[tokio::test]
     async fn generate_key_unknown_org_returns_404() {
-        let store = empty_store();
-        let app = test_app(store);
+        let app = test_app(empty_store());
 
-        let request = Request::builder()
-            .method("POST")
-            .uri("/api/v1/organizations/org-ghost/keys")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::empty())
-            .unwrap();
-
-        let response = app.oneshot(request).await.unwrap();
+        let response = generate_key(&app, "org-ghost").await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
+    async fn generate_then_events_shows_org_key_generated() {
+        let app = test_app(empty_store());
+        create_org(&app, "org-keygen-ev", "Key Org").await;
+
+        let response = generate_key(&app, "org-keygen-ev").await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let events = get_events(&app, "org-keygen-ev").await;
+        let events = events["events"].as_array().unwrap();
+        let last = events.last().unwrap();
+        assert_eq!(last["kind"], "org.key_generated");
+    }
+
+    #[tokio::test]
     async fn revoke_key_returns_204() {
-        let store = empty_store();
+        let app = test_app(empty_store());
+        create_org(&app, "org-revoke", "Revoke Org").await;
 
-        // Create an org
-        let app = test_app(Arc::clone(&store));
-        let body = serde_json::to_string(&create_org_json("org-revoke", "Revoke Org")).unwrap();
-        let request = Request::builder()
-            .method("POST")
-            .uri("/api/v1/organizations")
-            .header("content-type", "application/json")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::from(body))
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
+        let response = generate_key(&app, "org-revoke").await;
         assert_eq!(response.status(), StatusCode::CREATED);
+        let json = body_json(response).await;
+        let key_id = json["key_id"].as_str().unwrap().to_string();
 
-        // Generate a key
-        let app = test_app(Arc::clone(&store));
-        let request = Request::builder()
-            .method("POST")
-            .uri("/api/v1/organizations/org-revoke/keys")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::empty())
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::CREATED);
-        let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        let key_id = json["key_id"].as_str().unwrap();
-
-        // Revoke it
-        let app = test_app(Arc::clone(&store));
-        let request = Request::builder()
-            .method("DELETE")
-            .uri(format!("/api/v1/organizations/org-revoke/keys/{key_id}"))
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::empty())
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
+        let response = revoke_key(&app, "org-revoke", &key_id).await;
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert!(response.headers().get("x-fg-revision").is_some());
+    }
+
+    #[tokio::test]
+    async fn revoke_then_last_event_is_narrowing() {
+        let app = test_app(empty_store());
+        create_org(&app, "org-revoke-ev", "Revoke Org").await;
+
+        let response = generate_key(&app, "org-revoke-ev").await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let json = body_json(response).await;
+        let key_id = json["key_id"].as_str().unwrap().to_string();
+
+        let response = revoke_key(&app, "org-revoke-ev", &key_id).await;
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+        let events = get_events(&app, "org-revoke-ev").await;
+        let events = events["events"].as_array().unwrap();
+        let last = events.last().unwrap();
+        assert_eq!(last["kind"], "org.key_revoked");
     }
 
     #[tokio::test]
     async fn revoke_nonexistent_key_returns_204() {
-        let store = empty_store();
+        let app = test_app(empty_store());
+        create_org(&app, "org-revoke-miss", "Revoke Miss").await;
 
-        // Create an org
-        let app = test_app(Arc::clone(&store));
-        let body =
-            serde_json::to_string(&create_org_json("org-revoke-miss", "Revoke Miss")).unwrap();
-        let request = Request::builder()
-            .method("POST")
-            .uri("/api/v1/organizations")
-            .header("content-type", "application/json")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::from(body))
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::CREATED);
-
-        // Revoke a key that doesn't exist
-        let app = test_app(Arc::clone(&store));
-        let request = Request::builder()
-            .method("DELETE")
-            .uri("/api/v1/organizations/org-revoke-miss/keys/key-does-not-exist")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::empty())
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
+        let response = revoke_key(&app, "org-revoke-miss", "key-does-not-exist").await;
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert!(response.headers().get("x-fg-revision").is_some());
+    }
+
+    #[tokio::test]
+    async fn revoke_key_unknown_org_returns_404() {
+        let app = test_app(empty_store());
+
+        let response = revoke_key(&app, "org-ghost", "key-does-not-exist").await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
     async fn list_keys_returns_generated_keys() {
-        let store = empty_store();
+        let app = test_app(empty_store());
+        create_org(&app, "org-list-keys", "List Keys Org").await;
 
-        // Create an org
-        let app = test_app(Arc::clone(&store));
-        let body =
-            serde_json::to_string(&create_org_json("org-list-keys", "List Keys Org")).unwrap();
-        let request = Request::builder()
-            .method("POST")
-            .uri("/api/v1/organizations")
-            .header("content-type", "application/json")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::from(body))
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::CREATED);
-
-        // Generate 2 keys
         for _ in 0..2 {
-            let app = test_app(Arc::clone(&store));
-            let request = Request::builder()
-                .method("POST")
-                .uri("/api/v1/organizations/org-list-keys/keys")
-                .header("x-api-key", TEST_API_KEY)
-                .body(Body::empty())
-                .unwrap();
-            let response = app.oneshot(request).await.unwrap();
+            let response = generate_key(&app, "org-list-keys").await;
             assert_eq!(response.status(), StatusCode::CREATED);
         }
 
-        // List keys
-        let app = test_app(Arc::clone(&store));
-        let request = Request::builder()
-            .uri("/api/v1/organizations/org-list-keys/keys")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::empty())
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
+        let response = list_keys(&app, "org-list-keys").await;
         assert_eq!(response.status(), StatusCode::OK);
 
-        let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        let json: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
+        let json: Vec<serde_json::Value> = {
+            let bytes = response.into_body().collect().await.unwrap().to_bytes();
+            serde_json::from_slice(&bytes).unwrap()
+        };
         assert_eq!(json.len(), 2);
 
-        // Verify each entry has public metadata but no private key
         for entry in &json {
             assert!(entry["key_id"].is_string());
             assert!(entry["public_key"].is_string());
@@ -338,97 +410,41 @@ mod tests {
 
     #[tokio::test]
     async fn list_keys_empty_org_returns_empty_array() {
-        let store = empty_store();
+        let app = test_app(empty_store());
+        create_org(&app, "org-empty-keys", "Empty Keys Org").await;
 
-        // Create an org
-        let app = test_app(Arc::clone(&store));
-        let body =
-            serde_json::to_string(&create_org_json("org-empty-keys", "Empty Keys Org")).unwrap();
-        let request = Request::builder()
-            .method("POST")
-            .uri("/api/v1/organizations")
-            .header("content-type", "application/json")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::from(body))
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::CREATED);
-
-        // List keys before generating any
-        let app = test_app(Arc::clone(&store));
-        let request = Request::builder()
-            .uri("/api/v1/organizations/org-empty-keys/keys")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::empty())
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
+        let response = list_keys(&app, "org-empty-keys").await;
         assert_eq!(response.status(), StatusCode::OK);
 
-        let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        let json: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
+        let json: Vec<serde_json::Value> = {
+            let bytes = response.into_body().collect().await.unwrap().to_bytes();
+            serde_json::from_slice(&bytes).unwrap()
+        };
         assert!(json.is_empty());
     }
 
     #[tokio::test]
     async fn list_keys_unknown_org_returns_404() {
-        let store = empty_store();
-        let app = test_app(store);
+        let app = test_app(empty_store());
 
-        let request = Request::builder()
-            .uri("/api/v1/organizations/org-ghost/keys")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::empty())
-            .unwrap();
-
-        let response = app.oneshot(request).await.unwrap();
+        let response = list_keys(&app, "org-ghost").await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
     async fn rotate_key_returns_201_with_new_keypair() {
-        let store = empty_store();
+        let app = test_app(empty_store());
+        create_org(&app, "org-rotate", "Rotate Org").await;
 
-        // Create org
-        let app = test_app(Arc::clone(&store));
-        let body = serde_json::to_string(&create_org_json("org-rotate", "Rotate Org")).unwrap();
-        let request = Request::builder()
-            .method("POST")
-            .uri("/api/v1/organizations")
-            .header("content-type", "application/json")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::from(body))
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
+        let response = generate_key(&app, "org-rotate").await;
         assert_eq!(response.status(), StatusCode::CREATED);
-
-        // Generate key
-        let app = test_app(Arc::clone(&store));
-        let request = Request::builder()
-            .method("POST")
-            .uri("/api/v1/organizations/org-rotate/keys")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::empty())
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::CREATED);
-        let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let json = body_json(response).await;
         let original_key_id = json["key_id"].as_str().unwrap().to_string();
 
-        // Rotate
-        let app = test_app(Arc::clone(&store));
-        let request = Request::builder()
-            .method("POST")
-            .uri(format!(
-                "/api/v1/organizations/org-rotate/keys/{original_key_id}/rotate"
-            ))
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::empty())
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
+        let response = rotate_key(&app, "org-rotate", &original_key_id).await;
         assert_eq!(response.status(), StatusCode::CREATED);
-        let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(response.headers().get("x-fg-revision").is_some());
+        let json = body_json(response).await;
         let new_key_id = json["key_id"].as_str().unwrap().to_string();
         assert_ne!(new_key_id, original_key_id);
         assert!(json["private_key"]
@@ -436,17 +452,12 @@ mod tests {
             .unwrap()
             .contains("PRIVATE KEY"));
 
-        // List → 2 keys; old is Rotating, new is Active
-        let app = test_app(Arc::clone(&store));
-        let request = Request::builder()
-            .uri("/api/v1/organizations/org-rotate/keys")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::empty())
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
+        let response = list_keys(&app, "org-rotate").await;
         assert_eq!(response.status(), StatusCode::OK);
-        let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        let keys: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
+        let keys: Vec<serde_json::Value> = {
+            let bytes = response.into_body().collect().await.unwrap().to_bytes();
+            serde_json::from_slice(&bytes).unwrap()
+        };
         assert_eq!(keys.len(), 2);
 
         let old = keys
@@ -462,144 +473,44 @@ mod tests {
 
     #[tokio::test]
     async fn rotate_key_unknown_key_returns_404() {
-        let store = empty_store();
+        let app = test_app(empty_store());
+        create_org(&app, "org-rot-404", "Rot 404").await;
 
-        let app = test_app(Arc::clone(&store));
-        let body = serde_json::to_string(&create_org_json("org-rot-404", "Rot 404")).unwrap();
-        let request = Request::builder()
-            .method("POST")
-            .uri("/api/v1/organizations")
-            .header("content-type", "application/json")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::from(body))
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::CREATED);
-
-        let app = test_app(Arc::clone(&store));
-        let request = Request::builder()
-            .method("POST")
-            .uri("/api/v1/organizations/org-rot-404/keys/key-does-not-exist/rotate")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::empty())
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
+        let response = rotate_key(&app, "org-rot-404", "key-does-not-exist").await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
     async fn rotate_key_revoked_returns_409() {
-        let store = empty_store();
+        let app = test_app(empty_store());
+        create_org(&app, "org-rot-revoked", "Rev").await;
 
-        let app = test_app(Arc::clone(&store));
-        let body = serde_json::to_string(&create_org_json("org-rot-revoked", "Rev")).unwrap();
-        let request = Request::builder()
-            .method("POST")
-            .uri("/api/v1/organizations")
-            .header("content-type", "application/json")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::from(body))
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
+        let response = generate_key(&app, "org-rot-revoked").await;
         assert_eq!(response.status(), StatusCode::CREATED);
+        let json = body_json(response).await;
+        let key_id = json["key_id"].as_str().unwrap().to_string();
 
-        // Generate + revoke
-        let app = test_app(Arc::clone(&store));
-        let request = Request::builder()
-            .method("POST")
-            .uri("/api/v1/organizations/org-rot-revoked/keys")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::empty())
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::CREATED);
-        let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        let key_id = serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()["key_id"]
-            .as_str()
-            .unwrap()
-            .to_string();
-
-        let app = test_app(Arc::clone(&store));
-        let request = Request::builder()
-            .method("DELETE")
-            .uri(format!(
-                "/api/v1/organizations/org-rot-revoked/keys/{key_id}"
-            ))
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::empty())
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
+        let response = revoke_key(&app, "org-rot-revoked", &key_id).await;
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
 
-        // Rotate the revoked key → 409
-        let app = test_app(Arc::clone(&store));
-        let request = Request::builder()
-            .method("POST")
-            .uri(format!(
-                "/api/v1/organizations/org-rot-revoked/keys/{key_id}/rotate"
-            ))
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::empty())
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
+        let response = rotate_key(&app, "org-rot-revoked", &key_id).await;
         assert_eq!(response.status(), StatusCode::CONFLICT);
     }
 
     #[tokio::test]
     async fn rotate_key_already_rotating_returns_409() {
-        let store = empty_store();
+        let app = test_app(empty_store());
+        create_org(&app, "org-rot-twice", "Twice").await;
 
-        let app = test_app(Arc::clone(&store));
-        let body = serde_json::to_string(&create_org_json("org-rot-twice", "Twice")).unwrap();
-        let request = Request::builder()
-            .method("POST")
-            .uri("/api/v1/organizations")
-            .header("content-type", "application/json")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::from(body))
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
+        let response = generate_key(&app, "org-rot-twice").await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let json = body_json(response).await;
+        let key_id = json["key_id"].as_str().unwrap().to_string();
+
+        let response = rotate_key(&app, "org-rot-twice", &key_id).await;
         assert_eq!(response.status(), StatusCode::CREATED);
 
-        let app = test_app(Arc::clone(&store));
-        let request = Request::builder()
-            .method("POST")
-            .uri("/api/v1/organizations/org-rot-twice/keys")
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::empty())
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::CREATED);
-        let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        let key_id = serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()["key_id"]
-            .as_str()
-            .unwrap()
-            .to_string();
-
-        // First rotate — 201
-        let app = test_app(Arc::clone(&store));
-        let request = Request::builder()
-            .method("POST")
-            .uri(format!(
-                "/api/v1/organizations/org-rot-twice/keys/{key_id}/rotate"
-            ))
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::empty())
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::CREATED);
-
-        // Second rotate on same (now Rotating) key → 409
-        let app = test_app(Arc::clone(&store));
-        let request = Request::builder()
-            .method("POST")
-            .uri(format!(
-                "/api/v1/organizations/org-rot-twice/keys/{key_id}/rotate"
-            ))
-            .header("x-api-key", TEST_API_KEY)
-            .body(Body::empty())
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
+        let response = rotate_key(&app, "org-rot-twice", &key_id).await;
         assert_eq!(response.status(), StatusCode::CONFLICT);
     }
 }

@@ -455,7 +455,7 @@ async fn generate_org_key_appends_event_with_public_half_only() {
         .await
         .unwrap();
 
-    let result = store.generate_org_key("acme", Actor::System).await.unwrap();
+    let (result, _revision) = store.generate_org_key("acme", Actor::System).await.unwrap();
 
     let events = store
         .events_after("acme", Revision::new(0), 10)
@@ -478,7 +478,7 @@ async fn revoke_org_key_is_narrowing_and_updates_list() {
         .create_org(org_record("acme", "Acme Inc"), Actor::System)
         .await
         .unwrap();
-    let generated = store.generate_org_key("acme", Actor::System).await.unwrap();
+    let (generated, _revision) = store.generate_org_key("acme", Actor::System).await.unwrap();
 
     let revision = store
         .revoke_org_key("acme", generated.key_id(), Actor::System)
@@ -524,9 +524,9 @@ async fn rotate_org_key_appends_event_and_grace_window() {
         .create_org(org_record("acme", "Acme Inc"), Actor::System)
         .await
         .unwrap();
-    let generated = store.generate_org_key("acme", Actor::System).await.unwrap();
+    let (generated, _revision) = store.generate_org_key("acme", Actor::System).await.unwrap();
 
-    let rotated = store
+    let (rotated, _revision) = store
         .rotate_org_key("acme", generated.key_id(), Actor::System)
         .await
         .unwrap();
@@ -560,7 +560,7 @@ async fn rotate_revoked_key_conflicts_no_event() {
         .create_org(org_record("acme", "Acme Inc"), Actor::System)
         .await
         .unwrap();
-    let generated = store.generate_org_key("acme", Actor::System).await.unwrap();
+    let (generated, _revision) = store.generate_org_key("acme", Actor::System).await.unwrap();
     store
         .revoke_org_key("acme", generated.key_id(), Actor::System)
         .await

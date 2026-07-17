@@ -732,16 +732,16 @@ pub(super) mod test_support {
             )
             .route(
                 "/api/v1/organizations/{org_id}/keys",
-                axum::routing::post(super::keys::generate_key_handler)
+                axum::routing::post(super::keys::generate_key_handler::<StubVpClient>)
                     .get(super::keys::list_keys_handler),
             )
             .route(
                 "/api/v1/organizations/{org_id}/keys/{key_id}",
-                axum::routing::delete(super::keys::revoke_key_handler),
+                axum::routing::delete(super::keys::revoke_key_handler::<StubVpClient>),
             )
             .route(
                 "/api/v1/organizations/{org_id}/keys/{key_id}/rotate",
-                axum::routing::post(super::keys::rotate_key_handler),
+                axum::routing::post(super::keys::rotate_key_handler::<StubVpClient>),
             )
             .route(
                 "/api/v1/organizations/{org_id}/groups",

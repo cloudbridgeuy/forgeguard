@@ -94,7 +94,7 @@ impl SigningKeyStore for DynamoSigningKeyStore {
 mod tests {
     use super::*;
     use crate::dynamo_store::{pk, sk};
-    use crate::store::OrgStore;
+    use crate::model_event_store::{DynamoModelEventStore, ModelEventStore};
 
     use aws_sdk_dynamodb::types::{
         AttributeDefinition, KeySchemaElement, KeyType, ProvisionedThroughput, ScalarAttributeType,
@@ -201,12 +201,14 @@ mod tests {
             .unwrap();
     }
 
-    /// Helper: create an `OrgStore` + `DynamoSigningKeyStore` sharing the same
-    /// table, with one org already inserted.
+    /// Helper: create a `DynamoModelEventStore` + `DynamoSigningKeyStore`
+    /// sharing the same table, with one org already inserted. Key mutations
+    /// are `ModelEventStore`-only now, so tests write through it instead of
+    /// `OrgStore`.
     async fn setup_with_org(
         org_id_str: &str,
     ) -> (
-        crate::dynamo_store::DynamoOrgStore,
+        DynamoModelEventStore,
         DynamoSigningKeyStore,
         forgeguard_core::OrganizationId,
     ) {
@@ -214,7 +216,7 @@ mod tests {
         let table = unique_table_name();
         create_test_table(&client, &table).await;
 
-        let org_store = crate::dynamo_store::DynamoOrgStore::new(client.clone(), table.clone());
+        let model_events = DynamoModelEventStore::new(client.clone(), table.clone());
         let key_store = DynamoSigningKeyStore::new(client.clone(), table.clone());
 
         let org_id = forgeguard_core::OrganizationId::new(org_id_str).unwrap();
@@ -226,15 +228,18 @@ mod tests {
         );
         put_test_org(&client, &table, &org, Some(sample_config())).await;
 
-        (org_store, key_store, org_id)
+        (model_events, key_store, org_id)
     }
 
     #[tokio::test]
     async fn get_key_returns_active_key() {
-        let (org_store, key_store, org_id) = setup_with_org("org-sks-active").await;
+        let (model_events, key_store, org_id) = setup_with_org("org-sks-active").await;
 
-        // Generate a key via the org store
-        let generated = org_store.generate_key(&org_id).await.unwrap();
+        // Generate a key via the model event store
+        let (generated, _revision) = model_events
+            .generate_org_key(org_id.as_str(), forgeguard_authz_core::Actor::System)
+            .await
+            .unwrap();
 
         // Look it up via the signing key store
         let vk = key_store
@@ -266,11 +271,18 @@ mod tests {
 
     #[tokio::test]
     async fn get_key_revoked_returns_error() {
-        let (org_store, key_store, org_id) = setup_with_org("org-sks-revoked").await;
+        let (model_events, key_store, org_id) = setup_with_org("org-sks-revoked").await;
 
-        let generated = org_store.generate_key(&org_id).await.unwrap();
-        org_store
-            .revoke_key(&org_id, generated.key_id())
+        let (generated, _revision) = model_events
+            .generate_org_key(org_id.as_str(), forgeguard_authz_core::Actor::System)
+            .await
+            .unwrap();
+        model_events
+            .revoke_org_key(
+                org_id.as_str(),
+                generated.key_id(),
+                forgeguard_authz_core::Actor::System,
+            )
             .await
             .unwrap();
 
@@ -287,7 +299,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_key_unknown_key_returns_error() {
-        let (_org_store, key_store, org_id) = setup_with_org("org-sks-unknown-key").await;
+        let (_model_events, key_store, org_id) = setup_with_org("org-sks-unknown-key").await;
 
         let result = key_store
             .get_key(org_id.as_str(), "key-does-not-exist")

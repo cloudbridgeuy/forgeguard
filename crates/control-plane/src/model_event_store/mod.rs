@@ -166,18 +166,18 @@ pub(crate) trait ModelEventStore: Send + Sync {
     /// Generate a new request-signing key, append `org.key_generated`
     /// (public half only) + the org's new `signing_keys` list in one
     /// transaction, and return the material (including the private half,
-    /// returned once and never persisted in the event payload). No HTTP
-    /// route calls this in Task 4 — wired in Task 5, hence `dead_code`, same
-    /// precedent as `put_promotion`.
-    #[allow(dead_code)]
-    async fn generate_org_key(&self, org_id: &str, actor: Actor) -> Result<GenerateKeyResult>;
+    /// returned once and never persisted in the event payload) alongside the
+    /// revision the append landed at — returned atomically with the append so
+    /// callers never need a separate racy `latest_revision` call.
+    async fn generate_org_key(
+        &self,
+        org_id: &str,
+        actor: Actor,
+    ) -> Result<(GenerateKeyResult, Revision)>;
 
     /// Revoke a request-signing key and append `org.key_revoked` (narrowing)
     /// + the org's new `signing_keys` list in one transaction. `None` is the
     /// D6 no-op: `key_id` absent or already revoked — nothing is appended.
-    /// No HTTP route calls this in Task 4 — wired in Task 5, hence
-    /// `dead_code`, same precedent as `put_promotion`.
-    #[allow(dead_code)]
     async fn revoke_org_key(
         &self,
         org_id: &str,
@@ -188,16 +188,14 @@ pub(crate) trait ModelEventStore: Send + Sync {
     /// Rotate a request-signing key (target moves to `Rotating` with a grace
     /// window, a new `Active` entry is appended) and append `org.key_rotated`
     /// + the org's new `signing_keys` list in one transaction. Errors
-    /// (`NotFound`/`Conflict`) propagate without appending. No HTTP route
-    /// calls this in Task 4 — wired in Task 5, hence `dead_code`, same
-    /// precedent as `put_promotion`.
-    #[allow(dead_code)]
+    /// (`NotFound`/`Conflict`) propagate without appending. Returns the new
+    /// key material alongside the revision the append landed at.
     async fn rotate_org_key(
         &self,
         org_id: &str,
         key_id: &str,
         actor: Actor,
-    ) -> Result<GenerateKeyResult>;
+    ) -> Result<(GenerateKeyResult, Revision)>;
 
     /// Append an `org.created` event + the org's initial state item in one
     /// transaction. `Err(Error::Conflict)` if the org already exists (#113 V1).
@@ -780,7 +778,11 @@ impl ModelEventStore for DynamoModelEventStore {
             .await
     }
 
-    async fn generate_org_key(&self, org_id: &str, actor: Actor) -> Result<GenerateKeyResult> {
+    async fn generate_org_key(
+        &self,
+        org_id: &str,
+        actor: Actor,
+    ) -> Result<(GenerateKeyResult, Revision)> {
         // `ThreadRng` is not `Send` — generate before any `.await`.
         let result = generate_key_material()?;
         let new_entry = result.to_entry()?;
@@ -794,9 +796,11 @@ impl ModelEventStore for DynamoModelEventStore {
                 generate_key_transition(new_entry, key_id),
             )
             .await?;
-        debug_assert!(outcome.is_some(), "generate_org_key never no-ops");
+        let Some(revision) = outcome else {
+            unreachable!("generate_org_key never no-ops");
+        };
 
-        Ok(result)
+        Ok((result, revision))
     }
 
     async fn revoke_org_key(
@@ -819,22 +823,26 @@ impl ModelEventStore for DynamoModelEventStore {
         org_id: &str,
         key_id: &str,
         actor: Actor,
-    ) -> Result<GenerateKeyResult> {
+    ) -> Result<(GenerateKeyResult, Revision)> {
         // `ThreadRng` is not `Send` — generate before any `.await`.
         let result = generate_key_material()?;
         let new_entry = result.to_entry()?;
         let now = chrono::Utc::now();
         let grace = chrono::Duration::hours(crate::signing_key::ROTATION_GRACE_HOURS);
 
-        self.append_org_keys(
-            org_id,
-            EventKind::OrgKeyRotated,
-            actor,
-            rotate_key_transition(key_id.to_string(), new_entry, now, grace),
-        )
-        .await?;
+        let outcome = self
+            .append_org_keys(
+                org_id,
+                EventKind::OrgKeyRotated,
+                actor,
+                rotate_key_transition(key_id.to_string(), new_entry, now, grace),
+            )
+            .await?;
+        let Some(revision) = outcome else {
+            unreachable!("rotate_org_key never no-ops");
+        };
 
-        Ok(result)
+        Ok((result, revision))
     }
 }
 

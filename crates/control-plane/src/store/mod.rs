@@ -49,17 +49,25 @@ pub(crate) trait OrgStore: Send + Sync {
     /// gates the mutation before this hook runs.
     async fn write_through_org(&self, _org: Organization, _config: Option<OrgConfig>) {}
 
-    async fn generate_key(&self, org_id: &OrganizationId) -> Result<GenerateKeyResult>;
+    /// Write-through hook for `InMemoryModelEventStore`'s
+    /// `generate_org_key`/`revoke_org_key`/`rotate_org_key` (#113 V3).
+    ///
+    /// In production, `DynamoOrgStore` and `DynamoModelEventStore` share one
+    /// DynamoDB table item's `signing_keys` attribute, so a key mutation
+    /// appended to the log is already visible via `list_keys` — no
+    /// write-through needed, hence the default no-op body. `InMemoryOrgStore`
+    /// overrides this to keep its separate in-memory `list_keys` read-model
+    /// mirrored with the event log (dev-mode `--store=memory` and handler
+    /// tests). `keys` is the full post-mutation list — an unconditional
+    /// replace, matching `write_through_org`'s semantics.
+    async fn write_through_signing_keys(
+        &self,
+        _org_id: &OrganizationId,
+        _keys: Vec<SigningKeyEntry>,
+    ) {
+    }
 
     async fn list_keys(&self, org_id: &OrganizationId) -> Result<Vec<SigningKeyEntry>>;
-
-    async fn revoke_key(&self, org_id: &OrganizationId, key_id: &str) -> Result<()>;
-
-    async fn rotate_signing_key(
-        &self,
-        org_id: &OrganizationId,
-        key_id: &str,
-    ) -> Result<GenerateKeyResult>;
 
     // -----------------------------------------------------------------------
     // Group CRUD (V2) — consumed by Group D handler bodies
@@ -309,76 +317,18 @@ impl OrgStore for InMemoryOrgStore {
         guard.insert(org_id, record);
     }
 
-    async fn generate_key(&self, org_id: &OrganizationId) -> Result<GenerateKeyResult> {
-        // Verify the organization exists before generating key material.
-        {
-            let orgs = self.orgs.read().await;
-            if !orgs.contains_key(org_id) {
-                return Err(Error::NotFound(format!(
-                    "organization '{org_id}' not found"
-                )));
-            }
-        }
-
-        // Synchronous — `ThreadRng` is not `Send`, must complete before `.await`.
-        let result = generate_key_material()?;
-        let entry = result.to_entry()?;
-
+    async fn write_through_signing_keys(
+        &self,
+        org_id: &OrganizationId,
+        keys: Vec<SigningKeyEntry>,
+    ) {
         let mut guard = self.signing_keys.write().await;
-        guard.entry(org_id.clone()).or_default().push(entry);
-
-        Ok(result)
+        guard.insert(org_id.clone(), keys);
     }
 
     async fn list_keys(&self, org_id: &OrganizationId) -> Result<Vec<SigningKeyEntry>> {
         let guard = self.signing_keys.read().await;
         Ok(guard.get(org_id).cloned().unwrap_or_default())
-    }
-
-    async fn revoke_key(&self, org_id: &OrganizationId, key_id: &str) -> Result<()> {
-        let mut guard = self.signing_keys.write().await;
-        let keys = guard.get_mut(org_id).ok_or_else(|| {
-            Error::NotFound(format!("no signing keys found for organization '{org_id}'"))
-        })?;
-        let updated =
-            crate::signing_key::revoke_entries(keys.clone(), key_id).ok_or_else(|| {
-                Error::NotFound(format!(
-                    "signing key '{key_id}' not found for organization '{org_id}'"
-                ))
-            })?;
-        *keys = updated;
-        Ok(())
-    }
-
-    async fn rotate_signing_key(
-        &self,
-        org_id: &OrganizationId,
-        key_id: &str,
-    ) -> Result<GenerateKeyResult> {
-        {
-            let orgs = self.orgs.read().await;
-            if !orgs.contains_key(org_id) {
-                return Err(Error::NotFound(format!(
-                    "organization '{org_id}' not found"
-                )));
-            }
-        }
-
-        // Generate material BEFORE any .await that touches !Send RNG state.
-        let result = generate_key_material()?;
-        let new_entry = result.to_entry()?;
-
-        let mut guard = self.signing_keys.write().await;
-        let existing = guard.get(org_id).cloned().unwrap_or_default();
-        let updated = crate::signing_key::rotate_entries(
-            existing,
-            key_id,
-            new_entry,
-            Utc::now(),
-            chrono::Duration::hours(crate::signing_key::ROTATION_GRACE_HOURS),
-        )?;
-        guard.insert(org_id.clone(), updated);
-        Ok(result)
     }
 
     // -----------------------------------------------------------------------

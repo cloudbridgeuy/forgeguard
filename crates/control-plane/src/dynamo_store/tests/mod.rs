@@ -1,4 +1,5 @@
 use super::*;
+use crate::model_event_store::DynamoModelEventStore;
 use aws_sdk_dynamodb::types::{
     AttributeDefinition, KeySchemaElement, KeyType, ProvisionedThroughput, ScalarAttributeType,
 };
@@ -310,13 +311,27 @@ async fn store_with_org(org_id_str: &str) -> (DynamoOrgStore, OrganizationId) {
     (store, org_id)
 }
 
+/// Seed `org_id`'s keys by writing through
+/// [`crate::model_event_store::DynamoModelEventStore`], mirroring how
+/// production wires `DynamoOrgStore`/`DynamoModelEventStore` onto one shared
+/// table: key mutations are `ModelEventStore`-only now, so `OrgStore::list_keys`
+/// here is exercised only as the read side of that write-through.
+fn model_events_for(client: &aws_sdk_dynamodb::Client, table: &str) -> DynamoModelEventStore {
+    DynamoModelEventStore::new(client.clone(), table.to_string())
+}
+
 #[tokio::test]
 async fn generate_key_round_trip() {
+    use crate::model_event_store::ModelEventStore;
     use crate::signing_key::SigningKeyStatus;
 
     let (store, org_id) = store_with_org("org-keygen").await;
+    let model_events = model_events_for(&store.client, &store.table_name);
 
-    let result = store.generate_key(&org_id).await.unwrap();
+    let (result, _revision) = model_events
+        .generate_org_key(org_id.as_str(), forgeguard_authz_core::Actor::System)
+        .await
+        .unwrap();
     assert!(!result.key_id().is_empty());
     assert!(result.private_key_pem().contains("PRIVATE KEY"));
     assert!(result.public_key_pem().contains("PUBLIC KEY"));
@@ -330,12 +345,24 @@ async fn generate_key_round_trip() {
 
 #[tokio::test]
 async fn revoke_key_sets_status() {
+    use crate::model_event_store::ModelEventStore;
     use crate::signing_key::SigningKeyStatus;
 
     let (store, org_id) = store_with_org("org-revoke").await;
+    let model_events = model_events_for(&store.client, &store.table_name);
 
-    let generated = store.generate_key(&org_id).await.unwrap();
-    store.revoke_key(&org_id, generated.key_id()).await.unwrap();
+    let (generated, _revision) = model_events
+        .generate_org_key(org_id.as_str(), forgeguard_authz_core::Actor::System)
+        .await
+        .unwrap();
+    model_events
+        .revoke_org_key(
+            org_id.as_str(),
+            generated.key_id(),
+            forgeguard_authz_core::Actor::System,
+        )
+        .await
+        .unwrap();
 
     let keys = store.list_keys(&org_id).await.unwrap();
     assert_eq!(keys.len(), 1);
@@ -343,31 +370,46 @@ async fn revoke_key_sets_status() {
 }
 
 #[tokio::test]
-async fn revoke_nonexistent_key_returns_error() {
+async fn revoke_nonexistent_key_is_noop() {
+    use crate::model_event_store::ModelEventStore;
+
     let (store, org_id) = store_with_org("org-rev-bad").await;
+    let model_events = model_events_for(&store.client, &store.table_name);
 
-    // Generate one key, then try to revoke a different key_id.
-    store.generate_key(&org_id).await.unwrap();
+    // Generate one key, then try to revoke a different key_id — D6 no-op.
+    model_events
+        .generate_org_key(org_id.as_str(), forgeguard_authz_core::Actor::System)
+        .await
+        .unwrap();
 
-    let result = store.revoke_key(&org_id, "key-nonexistent").await;
-    assert!(result.is_err());
-    let err = result.unwrap_err();
-    assert!(
-        matches!(err, Error::NotFound(_)),
-        "expected NotFound, got: {err:?}"
-    );
+    let result = model_events
+        .revoke_org_key(
+            org_id.as_str(),
+            "key-nonexistent",
+            forgeguard_authz_core::Actor::System,
+        )
+        .await
+        .unwrap();
+    assert!(result.is_none());
+
+    let keys = store.list_keys(&org_id).await.unwrap();
+    assert_eq!(keys.len(), 1);
 }
 
 #[tokio::test]
 async fn generate_key_on_nonexistent_org_fails() {
+    use crate::model_event_store::ModelEventStore;
+
     let client = test_client().await;
     let table = unique_table_name();
     create_test_table(&client, &table).await;
 
-    let store = DynamoOrgStore::new(client, table);
+    let model_events = model_events_for(&client, &table);
     let org_id = OrganizationId::new("org-ghost").unwrap();
 
-    let result = store.generate_key(&org_id).await;
+    let result = model_events
+        .generate_org_key(org_id.as_str(), forgeguard_authz_core::Actor::System)
+        .await;
     match result {
         Err(Error::NotFound(_)) => {}
         Err(other) => panic!("expected NotFound, got: {other:?}"),

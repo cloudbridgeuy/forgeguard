@@ -215,9 +215,6 @@ pub(super) fn build_model_event(
 /// `key_id` as the affected key. Shared by `DynamoModelEventStore` (which
 /// calls the closure repeatedly across its CAS retry loop, hence `Fn`) and
 /// `InMemoryModelEventStore` (which calls it once) — `Fn` satisfies both.
-/// No HTTP route calls `generate_org_key` in Task 4 — wired in Task 5, hence
-/// `dead_code`, same precedent as `put_promotion`.
-#[allow(dead_code)]
 pub(super) fn generate_key_transition(
     new_entry: SigningKeyEntry,
     key_id: String,
@@ -229,10 +226,7 @@ pub(super) fn generate_key_transition(
 }
 
 /// Build the `revoke_org_key` transition: `None` if `target` is absent or
-/// already revoked (D6 no-op), else the narrowed `signing_keys` list. No HTTP
-/// route calls `revoke_org_key` in Task 4 — wired in Task 5, hence
-/// `dead_code`, same precedent as `put_promotion`.
-#[allow(dead_code)]
+/// already revoked (D6 no-op), else the narrowed `signing_keys` list.
 pub(super) fn revoke_key_transition(
     target: String,
 ) -> impl Fn(Vec<SigningKeyEntry>) -> KeyTransition {
@@ -244,9 +238,6 @@ pub(super) fn revoke_key_transition(
 
 /// Build the `rotate_org_key` transition: move `target` to `Rotating` with a
 /// `grace` window as of `now`, and append `new_entry` as the new `Active` key.
-/// No HTTP route calls `rotate_org_key` in Task 4 — wired in Task 5, hence
-/// `dead_code`, same precedent as `put_promotion`.
-#[allow(dead_code)]
 pub(super) fn rotate_key_transition(
     target: String,
     new_entry: SigningKeyEntry,
