@@ -40,6 +40,8 @@ pub struct FoldedState {
     promotions: BTreeMap<(String, String), String>,
     /// The latest `org.created`/`org.updated` payload, if any.
     org: Option<serde_json::Value>,
+    /// The latest post-mutation signing-keys list from a key event, if any.
+    org_keys: Option<serde_json::Value>,
 }
 
 impl FoldedState {
@@ -50,6 +52,7 @@ impl FoldedState {
             principals: BTreeMap::new(),
             promotions: BTreeMap::new(),
             org: None,
+            org_keys: None,
         }
     }
 
@@ -84,6 +87,21 @@ impl FoldedState {
     pub fn org(&self) -> Option<&serde_json::Value> {
         self.org.as_ref()
     }
+
+    /// The latest post-mutation signing-keys list folded so far, if any.
+    pub fn org_keys(&self) -> Option<&serde_json::Value> {
+        self.org_keys.as_ref()
+    }
+}
+
+/// Build a request-signing-key event payload: the affected key id plus the
+/// full post-mutation keys list. `keys` is caller-serialized so `authz-core`
+/// stays ignorant of `SigningKeyEntry` (a control-plane type).
+pub fn key_event_payload(key_id: &str, keys: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "key_id": key_id,
+        "keys": keys,
+    })
 }
 
 /// Build the `org.created`/`org.updated` event payload: the full
@@ -127,6 +145,7 @@ pub fn fold_events(events: &[EventEnvelope], at: Revision) -> Result<FoldedState
         principals: BTreeMap::new(),
         promotions: BTreeMap::new(),
         org: None,
+        org_keys: None,
     };
     for (index, event) in events.iter().enumerate() {
         let seq = event.seq().value();
@@ -201,6 +220,12 @@ fn apply_event(event: &EventEnvelope, state: &mut FoldedState) -> Result<()> {
                 )));
             }
             state.org = Some(event.payload().clone());
+        }
+        EventKind::OrgKeyGenerated | EventKind::OrgKeyRevoked | EventKind::OrgKeyRotated => {
+            let keys = event.payload().get("keys").cloned().ok_or_else(|| {
+                unfoldable(format!("{} payload missing field keys", event.kind()))
+            })?;
+            state.org_keys = Some(keys);
         }
         other => {
             return Err(unfoldable(format!("no fold rule for kind {other}")));
@@ -383,6 +408,7 @@ mod tests {
         assert!(state.principals().is_empty());
         assert!(state.promotions().is_empty());
         assert!(state.org().is_none());
+        assert!(state.org_keys().is_none());
     }
 
     #[test]
@@ -461,6 +487,68 @@ mod tests {
             None,
         );
         assert_ne!(org_semantic_view(&a), org_semantic_view(&c));
+    }
+
+    #[test]
+    fn key_events_fold_to_latest_list() {
+        let key1 = serde_json::json!({ "key_id": "key_1", "status": "Active" });
+        let key2 = serde_json::json!({ "key_id": "key_2", "status": "Active" });
+        let key1_revoked = serde_json::json!({ "key_id": "key_1", "status": "Revoked" });
+        let events = vec![
+            envelope(
+                1,
+                EventKind::OrgKeyGenerated,
+                key_event_payload("key_1", &serde_json::json!([key1.clone()])),
+            ),
+            envelope(
+                2,
+                EventKind::OrgKeyGenerated,
+                key_event_payload("key_2", &serde_json::json!([key1.clone(), key2.clone()])),
+            ),
+            envelope(
+                3,
+                EventKind::OrgKeyRevoked,
+                key_event_payload(
+                    "key_1",
+                    &serde_json::json!([key1_revoked.clone(), key2.clone()]),
+                ),
+            ),
+        ];
+
+        let at_one = fold_events(&events, Revision::new(1)).unwrap();
+        assert_eq!(at_one.org_keys().unwrap().as_array().unwrap().len(), 1);
+
+        let at_two = fold_events(&events, Revision::new(2)).unwrap();
+        assert_eq!(at_two.org_keys().unwrap().as_array().unwrap().len(), 2);
+
+        let at_three = fold_events(&events, Revision::new(3)).unwrap();
+        let keys_at_three = at_three.org_keys().unwrap().as_array().unwrap();
+        assert_eq!(keys_at_three.len(), 2);
+        assert_eq!(keys_at_three[0]["status"], serde_json::json!("Revoked"));
+    }
+
+    #[test]
+    fn key_event_payload_shape() {
+        let payload = key_event_payload("key_1", &serde_json::json!([{ "key_id": "key_1" }]));
+        assert_eq!(
+            payload,
+            serde_json::json!({
+                "key_id": "key_1",
+                "keys": [{ "key_id": "key_1" }],
+            })
+        );
+    }
+
+    #[test]
+    fn key_payload_missing_keys_is_unfoldable() {
+        let events = vec![envelope(
+            1,
+            EventKind::OrgKeyGenerated,
+            serde_json::json!({}),
+        )];
+        let err = fold_events(&events, Revision::new(1)).unwrap_err();
+        assert!(matches!(err, Error::UnfoldableEvent { seq: 1, .. }));
+        assert!(err.to_string().contains("missing field keys"));
     }
 
     #[test]
