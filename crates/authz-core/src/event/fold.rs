@@ -42,6 +42,8 @@ pub struct FoldedState {
     org: Option<serde_json::Value>,
     /// The latest post-mutation signing-keys list from a key event, if any.
     org_keys: Option<serde_json::Value>,
+    /// `name -> RbacEntry doc` for live groups.
+    groups: BTreeMap<String, serde_json::Value>,
 }
 
 impl FoldedState {
@@ -53,6 +55,7 @@ impl FoldedState {
             promotions: BTreeMap::new(),
             org: None,
             org_keys: None,
+            groups: BTreeMap::new(),
         }
     }
 
@@ -92,6 +95,16 @@ impl FoldedState {
     pub fn org_keys(&self) -> Option<&serde_json::Value> {
         self.org_keys.as_ref()
     }
+
+    /// The `RbacEntry` doc stored under `name`, if the group is live.
+    pub fn group(&self, name: &str) -> Option<&serde_json::Value> {
+        self.groups.get(name)
+    }
+
+    /// All live groups, ascending by name.
+    pub fn groups(&self) -> &BTreeMap<String, serde_json::Value> {
+        &self.groups
+    }
 }
 
 /// Build a request-signing-key event payload: the affected key id plus the
@@ -116,6 +129,23 @@ pub fn org_event_payload(
         "organization": organization,
         "config": config,
     })
+}
+
+/// Build the `group.put` event payload: the group name plus its post-mutation
+/// `RbacEntry` doc. `group` is caller-serialized so `authz-core` stays
+/// ignorant of the control-plane's `RbacEntry` type.
+pub fn group_put_payload(name: &str, group: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "name": name,
+        "group": group,
+    })
+}
+
+/// Build the `group.deleted` event payload: just the deleted group's name
+/// (hard delete — the log is the history, mirroring the resource-tombstone
+/// rule).
+pub fn group_deleted_payload(name: &str) -> serde_json::Value {
+    serde_json::json!({ "name": name })
 }
 
 /// The semantic view of an org payload used for no-op detection: identical
@@ -146,6 +176,7 @@ pub fn fold_events(events: &[EventEnvelope], at: Revision) -> Result<FoldedState
         promotions: BTreeMap::new(),
         org: None,
         org_keys: None,
+        groups: BTreeMap::new(),
     };
     for (index, event) in events.iter().enumerate() {
         let seq = event.seq().value();
@@ -226,6 +257,17 @@ fn apply_event(event: &EventEnvelope, state: &mut FoldedState) -> Result<()> {
                 unfoldable(format!("{} payload missing field keys", event.kind()))
             })?;
             state.org_keys = Some(keys);
+        }
+        EventKind::GroupPut => {
+            let name = payload_str("name")?;
+            let group = event.payload().get("group").cloned().ok_or_else(|| {
+                unfoldable(format!("{} payload missing field group", event.kind()))
+            })?;
+            state.groups.insert(name, group);
+        }
+        EventKind::GroupDeleted => {
+            let name = payload_str("name")?;
+            state.groups.remove(&name);
         }
         other => {
             return Err(unfoldable(format!("no fold rule for kind {other}")));
@@ -409,6 +451,54 @@ mod tests {
         assert!(state.promotions().is_empty());
         assert!(state.org().is_none());
         assert!(state.org_keys().is_none());
+        assert!(state.groups().is_empty());
+    }
+
+    #[test]
+    fn group_put_then_delete_folds_to_absent() {
+        let first = serde_json::json!({ "allow": ["read"] });
+        let changed = serde_json::json!({ "allow": ["read", "write"] });
+        let events = vec![
+            envelope(1, EventKind::GroupPut, group_put_payload("editors", &first)),
+            envelope(
+                2,
+                EventKind::GroupPut,
+                group_put_payload("editors", &changed),
+            ),
+            envelope(3, EventKind::GroupDeleted, group_deleted_payload("editors")),
+        ];
+
+        let at_two = fold_events(&events, Revision::new(2)).unwrap();
+        assert_eq!(at_two.group("editors"), Some(&changed));
+
+        let at_three = fold_events(&events, Revision::new(3)).unwrap();
+        assert_eq!(at_three.group("editors"), None);
+        assert!(at_three.groups().is_empty());
+    }
+
+    #[test]
+    fn group_payload_shapes() {
+        let group = serde_json::json!({ "allow": ["read"] });
+        assert_eq!(
+            group_put_payload("editors", &group),
+            serde_json::json!({ "name": "editors", "group": group })
+        );
+        assert_eq!(
+            group_deleted_payload("editors"),
+            serde_json::json!({ "name": "editors" })
+        );
+    }
+
+    #[test]
+    fn group_payload_missing_group_is_unfoldable() {
+        let events = vec![envelope(
+            1,
+            EventKind::GroupPut,
+            serde_json::json!({ "name": "editors" }),
+        )];
+        let err = fold_events(&events, Revision::new(1)).unwrap_err();
+        assert!(matches!(err, Error::UnfoldableEvent { seq: 1, .. }));
+        assert!(err.to_string().contains("missing field group"));
     }
 
     #[test]

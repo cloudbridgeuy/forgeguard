@@ -11,8 +11,8 @@ mod upsert;
 pub use canonical::{canonical_envelope_bytes, canonical_event_bytes};
 pub use envelope::{Actor, EventDraft, EventDraftParams, EventEnvelope, EventId, SCHEMA_VERSION};
 pub use fold::{
-    fold_events, key_event_payload, org_event_payload, org_semantic_view, principal_event_payload,
-    FoldedState,
+    fold_events, group_deleted_payload, group_put_payload, key_event_payload, org_event_payload,
+    org_semantic_view, principal_event_payload, FoldedState,
 };
 pub use kind::EventKind;
 pub use log::EventLog;
