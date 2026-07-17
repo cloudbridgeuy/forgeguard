@@ -18,14 +18,12 @@ use async_trait::async_trait;
 use aws_sdk_dynamodb::types::AttributeValue;
 use chrono::{DateTime, Utc};
 use forgeguard_authn_core::UserSchema;
-use forgeguard_authz_core::ValidatedRbacEntry;
 use forgeguard_core::{OrgStatus, Organization, OrganizationId};
 
 use crate::config::OrgConfig;
 use crate::error::{Error, Result};
 use crate::etag::Etag;
-use crate::handlers::groups::codec::{group_pk, group_sk, to_group_item, SK_GROUP_PREFIX};
-use crate::handlers::groups::pure::compute_group_etag;
+use crate::handlers::groups::codec::{group_pk, group_sk, SK_GROUP_PREFIX};
 use crate::signing_key::SigningKeyEntry;
 use crate::store::{
     ConfiguredConfig, EtagedGroup, EtagedUserSchema, OrgRecord, OrgStore, PutMembershipRowParams,
@@ -376,51 +374,6 @@ impl OrgStore for DynamoOrgStore {
             .transpose()
     }
 
-    async fn put_group(
-        &self,
-        org_id: &OrganizationId,
-        entry: ValidatedRbacEntry,
-        expected_etag: Option<&str>,
-    ) -> Result<EtagedGroup> {
-        // Capture the name before any moves so both the `Ok` and `Err` branches
-        // can reference it without a borrow-after-move.
-        let group_name = entry.entry().name.clone();
-        let etag = compute_group_etag(entry.entry())?;
-        let item = to_group_item(org_id, entry.entry(), &etag)?;
-        let parts = groups::build_group_put_condition(expected_etag);
-
-        let mut req = self
-            .client
-            .put_item()
-            .table_name(&self.table_name)
-            .set_item(Some(item))
-            .condition_expression(parts.expression);
-        for (k, v) in parts.names {
-            req = req.expression_attribute_names(k, v);
-        }
-        for (k, v) in parts.values {
-            req = req.expression_attribute_values(k, v);
-        }
-
-        match req.send().await {
-            Ok(_) => Ok(EtagedGroup::from_stored(
-                entry.into_inner(),
-                Etag::from_validated(etag),
-            )),
-            Err(sdk_err) if is_conditional_check_failed(&sdk_err) => match expected_etag {
-                None => Err(Error::Conflict(format!(
-                    "group '{group_name}' already exists"
-                ))),
-                Some(_) => {
-                    let current_etag =
-                        groups::recover_group_etag(self, org_id, &group_name).await?;
-                    Err(Error::PreconditionFailed { current_etag })
-                }
-            },
-            Err(sdk_err) => Err(map_sdk_error(sdk_err)),
-        }
-    }
-
     async fn list_groups(&self, org_id: &OrganizationId) -> Result<Vec<EtagedGroup>> {
         let pk_value = group_pk(org_id);
 
@@ -462,56 +415,6 @@ impl OrgStore for DynamoOrgStore {
             .iter()
             .map(groups::etaged_group_from_item)
             .collect()
-    }
-
-    async fn delete_group(
-        &self,
-        org_id: &OrganizationId,
-        name: &str,
-        expected_etag: &str,
-    ) -> Result<()> {
-        let pk_value = group_pk(org_id);
-        let sk_value = group_sk(name);
-
-        let result = self
-            .client
-            .delete_item()
-            .table_name(&self.table_name)
-            .key(pk(), AttributeValue::S(pk_value))
-            .key(sk(), AttributeValue::S(sk_value))
-            .condition_expression("attribute_exists(#sk_attr) AND #etag = :expected_etag")
-            .expression_attribute_names("#sk_attr", sk())
-            .expression_attribute_names("#etag", "etag")
-            .expression_attribute_values(
-                ":expected_etag",
-                AttributeValue::S(expected_etag.to_string()),
-            )
-            .send()
-            .await;
-
-        match result {
-            Ok(_) => Ok(()),
-            Err(sdk_err) => {
-                // `DeleteItem` uses a different error type from `PutItem`.
-                let is_ccfe = matches!(
-                    sdk_err,
-                    aws_sdk_dynamodb::error::SdkError::ServiceError(ref e)
-                        if e.err().is_conditional_check_failed_exception()
-                );
-                if is_ccfe {
-                    // Either the group no longer exists (row absent → `attribute_exists` fired)
-                    // or the etag no longer matches. Re-read to distinguish.
-                    match self.get_group(org_id, name).await? {
-                        None => Err(Error::NotFound(format!("group '{name}' not found"))),
-                        Some(current) => Err(Error::PreconditionFailed {
-                            current_etag: Some(current.etag().clone()),
-                        }),
-                    }
-                } else {
-                    Err(map_sdk_error(sdk_err))
-                }
-            }
-        }
     }
 
     async fn list_inheritors(&self, org_id: &OrganizationId, name: &str) -> Result<Vec<String>> {

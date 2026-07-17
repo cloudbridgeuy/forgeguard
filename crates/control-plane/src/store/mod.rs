@@ -17,7 +17,6 @@ use ed25519_dalek::pkcs8::spki::der::pem::LineEnding;
 use ed25519_dalek::pkcs8::EncodePrivateKey as _;
 use ed25519_dalek::pkcs8::EncodePublicKey as _;
 use forgeguard_authn_core::{MembershipRow, UserSchema};
-use forgeguard_authz_core::ValidatedRbacEntry;
 use forgeguard_core::{OrgStatus, Organization, OrganizationId, UserId};
 use serde::Deserialize;
 
@@ -93,46 +92,8 @@ pub(crate) trait OrgStore: Send + Sync {
     /// Retrieve a single group by name, or `None` if it does not exist.
     async fn get_group(&self, org_id: &OrganizationId, name: &str) -> Result<Option<EtagedGroup>>;
 
-    /// Create or update a group with optimistic-locking semantics.
-    ///
-    /// | `(existing, expected_etag)` | Behaviour |
-    /// |-----------------------------|-----------|
-    /// | `(None, None)`              | Create    |
-    /// | `(Some(_), None)`           | `Conflict` — group already exists |
-    /// | `(Some(e), Some(t))` where `e.etag() == t` | Update |
-    /// | `(Some(e), Some(t))` where `e.etag() != t` | `PreconditionFailed` |
-    /// | `(None, Some(_))`           | `PreconditionFailed { current_etag: "" }` |
-    ///
-    /// Superseded by `ModelEventStore::put_group` for the group-mutation
-    /// handlers (#113 V4) — kept defined (not yet retired; Task 6/7 scope)
-    /// so implementors don't need touching until the trait method itself is
-    /// removed.
-    #[allow(dead_code)]
-    async fn put_group(
-        &self,
-        org_id: &OrganizationId,
-        entry: ValidatedRbacEntry,
-        expected_etag: Option<&str>,
-    ) -> Result<EtagedGroup>;
-
     /// List all groups for an org, sorted ascending by name.
     async fn list_groups(&self, org_id: &OrganizationId) -> Result<Vec<EtagedGroup>>;
-
-    /// Delete a group by name, checking the etag for optimistic locking.
-    ///
-    /// Callers MUST verify no live memberships (via `count_memberships_for_group`)
-    /// and no inheritors (via `list_inheritors`) exist before calling this method;
-    /// `delete_group` does not re-check these constraints.
-    ///
-    /// Superseded by `ModelEventStore::delete_group` for the group-mutation
-    /// handlers (#113 V4) — kept defined (not yet retired; Task 6/7 scope).
-    #[allow(dead_code)]
-    async fn delete_group(
-        &self,
-        org_id: &OrganizationId,
-        name: &str,
-        expected_etag: &str,
-    ) -> Result<()>;
 
     /// Return the names of groups that list `name` in their `inherits` field.
     async fn list_inheritors(&self, org_id: &OrganizationId, name: &str) -> Result<Vec<String>>;
@@ -377,42 +338,6 @@ impl OrgStore for InMemoryOrgStore {
         Ok(g.get(&(org_id.clone(), name.to_string())).cloned())
     }
 
-    async fn put_group(
-        &self,
-        org_id: &OrganizationId,
-        entry: ValidatedRbacEntry,
-        expected_etag: Option<&str>,
-    ) -> Result<EtagedGroup> {
-        let mut g = self.groups.write().await;
-        let key = (org_id.clone(), entry.entry().name.clone());
-        match (g.get(&key), expected_etag) {
-            // Create path: row absent and no etag provided.
-            (None, None) => { /* proceed to insert below */ }
-            // Conflict: row exists but caller did not provide an etag (POST semantics).
-            (Some(_), None) => {
-                return Err(Error::Conflict(format!(
-                    "group '{}' already exists",
-                    entry.entry().name
-                )));
-            }
-            // Conditional put on a non-existent row — etag can never match.
-            (None, Some(_)) => {
-                return Err(Error::PreconditionFailed { current_etag: None });
-            }
-            // Stale etag: row exists but etags differ.
-            (Some(existing), Some(t)) if existing.etag().as_str() != t => {
-                return Err(Error::PreconditionFailed {
-                    current_etag: Some(existing.etag().clone()),
-                });
-            }
-            // Matched — overwrite.
-            (Some(_), Some(_)) => { /* proceed to insert below */ }
-        }
-        let next = EtagedGroup::compute(entry.into_inner())?;
-        g.insert(key, next.clone());
-        Ok(next)
-    }
-
     async fn list_groups(&self, org_id: &OrganizationId) -> Result<Vec<EtagedGroup>> {
         let g = self.groups.read().await;
         // BTreeMap is already sorted by key; the key is `(org_id, name)` so
@@ -423,26 +348,6 @@ impl OrgStore for InMemoryOrgStore {
             .map(|(_, v)| v.clone())
             .collect();
         Ok(result)
-    }
-
-    async fn delete_group(
-        &self,
-        org_id: &OrganizationId,
-        name: &str,
-        expected_etag: &str,
-    ) -> Result<()> {
-        let mut g = self.groups.write().await;
-        let key = (org_id.clone(), name.to_string());
-        match g.get(&key) {
-            Some(existing) if existing.etag().as_str() == expected_etag => {
-                g.remove(&key);
-                Ok(())
-            }
-            Some(existing) => Err(Error::PreconditionFailed {
-                current_etag: Some(existing.etag().clone()),
-            }),
-            None => Err(Error::NotFound(format!("group '{name}' not found"))),
-        }
     }
 
     async fn list_inheritors(&self, org_id: &OrganizationId, name: &str) -> Result<Vec<String>> {

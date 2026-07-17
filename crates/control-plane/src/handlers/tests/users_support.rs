@@ -18,7 +18,7 @@ use forgeguard_authn_core::static_api_key::{ApiKeyEntry, StaticApiKeyResolver};
 use forgeguard_authn_core::IdentityChain;
 use forgeguard_authn_core::UserSchema;
 use forgeguard_authz_core::rbac::{validate_rbac_entry, RbacEntry};
-use forgeguard_authz_core::{PolicyDecision, PolicyEngine, StaticPolicyEngine, ValidatedRbacEntry};
+use forgeguard_authz_core::{Actor, PolicyDecision, PolicyEngine, StaticPolicyEngine};
 use forgeguard_axum::{forgeguard_layer, ForgeGuard};
 use forgeguard_core::{
     FlagConfig, GroupName, Organization, OrganizationId, ProjectId, TenantId, UserId,
@@ -33,6 +33,7 @@ use crate::error::{Error, Result};
 use crate::etag::Etag;
 use crate::handlers::test_support::TEST_API_KEY;
 use crate::handlers::AppState;
+use crate::model_event_store::{InMemoryModelEventStore, ModelEventStore};
 use crate::signing_key::SigningKeyEntry;
 use crate::store::{
     build_org_store, EtagedGroup, EtagedUserSchema, InMemoryOrgStore, InMemorySagaTicketStore,
@@ -84,18 +85,24 @@ pub(super) async fn active_org_with_schema(
         .await
         .unwrap();
 
-    for raw in declared_groups {
-        let proposed = RbacEntry {
-            name: (*raw).to_owned(),
-            description: None,
-            inherits: Vec::new(),
-            allow: vec!["app:noop:read".to_owned()],
-            tenant_scoped: true,
-        };
-        let entry = validate_rbac_entry(proposed.clone(), &[proposed]).expect("valid rbac entry");
-        OrgStore::put_group(store.as_ref(), &org_id_typed, entry, None)
-            .await
-            .unwrap();
+    if !declared_groups.is_empty() {
+        let model_events =
+            InMemoryModelEventStore::new_with_org_store(Arc::clone(&store) as Arc<dyn OrgStore>);
+        for raw in declared_groups {
+            let proposed = RbacEntry {
+                name: (*raw).to_owned(),
+                description: None,
+                inherits: Vec::new(),
+                allow: vec!["app:noop:read".to_owned()],
+                tenant_scoped: true,
+            };
+            let validated =
+                validate_rbac_entry(proposed.clone(), &[proposed]).expect("valid rbac entry");
+            model_events
+                .put_group(org_id, validated.into_inner(), Actor::System, None)
+                .await
+                .unwrap();
+        }
     }
     store
 }
@@ -256,24 +263,8 @@ impl OrgStore for FailingStore {
     async fn get_group(&self, org_id: &OrganizationId, name: &str) -> Result<Option<EtagedGroup>> {
         self.inner.get_group(org_id, name).await
     }
-    async fn put_group(
-        &self,
-        org_id: &OrganizationId,
-        entry: ValidatedRbacEntry,
-        expected_etag: Option<&str>,
-    ) -> Result<EtagedGroup> {
-        self.inner.put_group(org_id, entry, expected_etag).await
-    }
     async fn list_groups(&self, org_id: &OrganizationId) -> Result<Vec<EtagedGroup>> {
         self.inner.list_groups(org_id).await
-    }
-    async fn delete_group(
-        &self,
-        org_id: &OrganizationId,
-        name: &str,
-        expected_etag: &str,
-    ) -> Result<()> {
-        self.inner.delete_group(org_id, name, expected_etag).await
     }
     async fn list_inheritors(&self, org_id: &OrganizationId, name: &str) -> Result<Vec<String>> {
         self.inner.list_inheritors(org_id, name).await

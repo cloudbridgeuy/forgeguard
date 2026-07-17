@@ -7,12 +7,13 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use forgeguard_authz_core::{validate_rbac_entry, RbacEntry, TenantConfig};
+use forgeguard_authz_core::{validate_rbac_entry, Actor, RbacEntry, TenantConfig};
 use forgeguard_core::{OrgStatus, Organization, OrganizationId};
 
 use crate::handlers::groups::saga::{
     materialize_groups_to_vp, MaterializeError, MaterializeParams,
 };
+use crate::model_event_store::{InMemoryModelEventStore, ModelEventStore};
 use crate::store::{InMemoryOrgStore, OrgStore};
 use crate::vp_client::stub::{StubCall, StubVpClient};
 
@@ -41,6 +42,9 @@ async fn seed_org_with_groups(entries: Vec<RbacEntry>) -> (Arc<InMemoryOrgStore>
     );
     store.write_through_org(org, None).await;
 
+    let model_events =
+        InMemoryModelEventStore::new_with_org_store(Arc::clone(&store) as Arc<dyn OrgStore>);
+
     // Seed entries in order; each must validate against the running set
     // (any inherits referenced must already exist).
     for entry in entries {
@@ -48,7 +52,10 @@ async fn seed_org_with_groups(entries: Vec<RbacEntry>) -> (Arc<InMemoryOrgStore>
         let mut all_after: Vec<RbacEntry> = prior.iter().map(|eg| eg.entry().clone()).collect();
         all_after.push(entry.clone());
         let validated = validate_rbac_entry(entry, &all_after).unwrap();
-        store.put_group(&org_id, validated, None).await.unwrap();
+        model_events
+            .put_group(org_id.as_str(), validated.into_inner(), Actor::System, None)
+            .await
+            .unwrap();
     }
 
     (store, org_id)

@@ -62,10 +62,6 @@ const MAX_KEY_APPEND_ATTEMPTS: u8 = 3;
 /// (JSON-equality via `decide_upsert`) and a `delete_group` on an absent
 /// group — neither appends an event, so both report the log's current
 /// revision unchanged.
-///
-/// No HTTP route consumes this yet — wired in Task 4, hence `dead_code`,
-/// same precedent as `put_promotion`.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum GroupWriteOutcome {
     /// No event was appended; `current` is the log's unchanged revision.

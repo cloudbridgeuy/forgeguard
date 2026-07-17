@@ -21,7 +21,7 @@ use axum::Router;
 use forgeguard_authn_core::static_api_key::{ApiKeyEntry, StaticApiKeyResolver};
 use forgeguard_authn_core::IdentityChain;
 use forgeguard_authn_core::UserSchema;
-use forgeguard_authz_core::{PolicyDecision, PolicyEngine, StaticPolicyEngine, ValidatedRbacEntry};
+use forgeguard_authz_core::{PolicyDecision, PolicyEngine, StaticPolicyEngine};
 use forgeguard_axum::{forgeguard_layer, ForgeGuard};
 use forgeguard_core::{
     FlagConfig, GroupName, Organization, OrganizationId, ProjectId, TenantId, UserId,
@@ -254,24 +254,8 @@ impl OrgStore for FailingStore {
     async fn get_group(&self, org_id: &OrganizationId, name: &str) -> Result<Option<EtagedGroup>> {
         self.inner.get_group(org_id, name).await
     }
-    async fn put_group(
-        &self,
-        org_id: &OrganizationId,
-        entry: ValidatedRbacEntry,
-        expected_etag: Option<&str>,
-    ) -> Result<EtagedGroup> {
-        self.inner.put_group(org_id, entry, expected_etag).await
-    }
     async fn list_groups(&self, org_id: &OrganizationId) -> Result<Vec<EtagedGroup>> {
         self.inner.list_groups(org_id).await
-    }
-    async fn delete_group(
-        &self,
-        org_id: &OrganizationId,
-        name: &str,
-        expected_etag: &str,
-    ) -> Result<()> {
-        self.inner.delete_group(org_id, name, expected_etag).await
     }
     async fn list_inheritors(&self, org_id: &OrganizationId, name: &str) -> Result<Vec<String>> {
         self.inner.list_inheritors(org_id, name).await
