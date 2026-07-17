@@ -35,6 +35,12 @@ pub enum EventKind {
     OrgSuspended,
     /// An organization was restored from suspension.
     OrgRestored,
+    /// A request-signing key was generated.
+    OrgKeyGenerated,
+    /// A request-signing key was revoked.
+    OrgKeyRevoked,
+    /// A request-signing key was rotated.
+    OrgKeyRotated,
 }
 
 impl EventKind {
@@ -55,6 +61,9 @@ impl EventKind {
             Self::OrgActivated => "org.activated",
             Self::OrgSuspended => "org.suspended",
             Self::OrgRestored => "org.restored",
+            Self::OrgKeyGenerated => "org.key_generated",
+            Self::OrgKeyRevoked => "org.key_revoked",
+            Self::OrgKeyRotated => "org.key_rotated",
         }
     }
 
@@ -65,7 +74,11 @@ impl EventKind {
     pub fn narrowing(&self) -> bool {
         matches!(
             self,
-            Self::GrantRemoved | Self::ResourceTombstoned | Self::DenyCreated | Self::OrgSuspended
+            Self::GrantRemoved
+                | Self::ResourceTombstoned
+                | Self::DenyCreated
+                | Self::OrgSuspended
+                | Self::OrgKeyRevoked
         )
     }
 }
@@ -95,6 +108,9 @@ impl FromStr for EventKind {
             "org.activated" => Ok(Self::OrgActivated),
             "org.suspended" => Ok(Self::OrgSuspended),
             "org.restored" => Ok(Self::OrgRestored),
+            "org.key_generated" => Ok(Self::OrgKeyGenerated),
+            "org.key_revoked" => Ok(Self::OrgKeyRevoked),
+            "org.key_rotated" => Ok(Self::OrgKeyRotated),
             other => Err(Error::UnknownEventKind {
                 kind: other.to_string(),
             }),
@@ -107,7 +123,7 @@ impl FromStr for EventKind {
 mod tests {
     use super::*;
 
-    const ALL_KINDS: [EventKind; 14] = [
+    const ALL_KINDS: [EventKind; 17] = [
         EventKind::OrgCreated,
         EventKind::OrgUpdated,
         EventKind::OrgUnitPut,
@@ -122,6 +138,9 @@ mod tests {
         EventKind::OrgActivated,
         EventKind::OrgSuspended,
         EventKind::OrgRestored,
+        EventKind::OrgKeyGenerated,
+        EventKind::OrgKeyRevoked,
+        EventKind::OrgKeyRotated,
     ];
 
     #[test]
@@ -149,6 +168,9 @@ mod tests {
         assert!(!EventKind::OrgActivated.narrowing());
         assert!(EventKind::OrgSuspended.narrowing());
         assert!(!EventKind::OrgRestored.narrowing());
+        assert!(!EventKind::OrgKeyGenerated.narrowing());
+        assert!(EventKind::OrgKeyRevoked.narrowing());
+        assert!(!EventKind::OrgKeyRotated.narrowing());
     }
 
     #[test]
