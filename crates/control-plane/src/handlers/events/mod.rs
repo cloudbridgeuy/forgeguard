@@ -218,7 +218,7 @@ pub(crate) async fn list_events_handler<V: VpClient + 'static>(
 }
 
 /// 409 response for non-`Active`, non-`Deleted` org statuses (Draft,
-/// Provisioning, etc.). Mirrors `state_conflict` in the principals/users/
+/// Suspended, Deleting). Mirrors `state_conflict` in the principals/users/
 /// user_schema handlers but kept local per that same convention.
 fn state_conflict(status: OrgStatus) -> Response {
     use serde::Serialize;

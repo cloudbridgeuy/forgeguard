@@ -12,21 +12,16 @@ use crate::{Error, OrganizationId, Result};
 /// Organization lifecycle status.
 ///
 /// ```text
-/// Draft → PendingProvisioning → Provisioning → Active → Suspended → Deleting → Deleted
-///                                     ↓                      ↓
-///                                   Failed                 Failed
+/// Draft → Active ⇄ Suspended → Deleting → Deleted
 /// ```
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OrgStatus {
     Draft,
-    PendingProvisioning,
-    Provisioning,
     Active,
     Suspended,
     Deleting,
     Deleted,
-    Failed,
 }
 
 impl OrgStatus {
@@ -35,19 +30,13 @@ impl OrgStatus {
         matches!(
             (self, target),
             // Happy path
-            (Self::Draft, Self::PendingProvisioning)
-                | (Self::PendingProvisioning, Self::Provisioning)
-                | (Self::Provisioning, Self::Active)
+            (Self::Draft, Self::Active)
                 | (Self::Active, Self::Suspended)
                 | (Self::Suspended, Self::Active)
+                // Deletion (no HTTP surface yet — D1/D9)
                 | (Self::Active, Self::Deleting)
                 | (Self::Suspended, Self::Deleting)
                 | (Self::Deleting, Self::Deleted)
-                // Failure paths
-                | (Self::Provisioning, Self::Failed)
-                | (Self::Deleting, Self::Failed)
-                // Recovery
-                | (Self::Failed, Self::Draft)
         )
     }
 }
@@ -56,13 +45,10 @@ impl fmt::Display for OrgStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
             Self::Draft => "draft",
-            Self::PendingProvisioning => "pending_provisioning",
-            Self::Provisioning => "provisioning",
             Self::Active => "active",
             Self::Suspended => "suspended",
             Self::Deleting => "deleting",
             Self::Deleted => "deleted",
-            Self::Failed => "failed",
         };
         f.write_str(s)
     }
@@ -74,18 +60,14 @@ impl FromStr for OrgStatus {
     fn from_str(s: &str) -> Result<Self> {
         match s {
             "draft" => Ok(Self::Draft),
-            "pending_provisioning" => Ok(Self::PendingProvisioning),
-            "provisioning" => Ok(Self::Provisioning),
             "active" => Ok(Self::Active),
             "suspended" => Ok(Self::Suspended),
             "deleting" => Ok(Self::Deleting),
             "deleted" => Ok(Self::Deleted),
-            "failed" => Ok(Self::Failed),
             _ => Err(Error::Parse {
                 field: "org_status",
                 value: s.to_string(),
-                reason: "expected one of: draft, pending_provisioning, provisioning, active, \
-                         suspended, deleting, deleted, failed",
+                reason: "expected one of: draft, active, suspended, deleting, deleted",
             }),
         }
     }
@@ -217,21 +199,11 @@ mod tests {
     use crate::OrganizationId;
     use chrono::Utc;
 
-    // ── Valid transitions (11 total) ────────────────────────────────
+    // ── Valid transitions (6 total) ─────────────────────────────────
 
     #[test]
-    fn transition_draft_to_pending_provisioning() {
-        assert!(OrgStatus::Draft.can_transition_to(OrgStatus::PendingProvisioning));
-    }
-
-    #[test]
-    fn transition_pending_provisioning_to_provisioning() {
-        assert!(OrgStatus::PendingProvisioning.can_transition_to(OrgStatus::Provisioning));
-    }
-
-    #[test]
-    fn transition_provisioning_to_active() {
-        assert!(OrgStatus::Provisioning.can_transition_to(OrgStatus::Active));
+    fn transition_draft_to_active() {
+        assert!(OrgStatus::Draft.can_transition_to(OrgStatus::Active));
     }
 
     #[test]
@@ -259,26 +231,16 @@ mod tests {
         assert!(OrgStatus::Deleting.can_transition_to(OrgStatus::Deleted));
     }
 
-    #[test]
-    fn transition_provisioning_to_failed() {
-        assert!(OrgStatus::Provisioning.can_transition_to(OrgStatus::Failed));
-    }
-
-    #[test]
-    fn transition_deleting_to_failed() {
-        assert!(OrgStatus::Deleting.can_transition_to(OrgStatus::Failed));
-    }
-
-    #[test]
-    fn transition_failed_to_draft() {
-        assert!(OrgStatus::Failed.can_transition_to(OrgStatus::Draft));
-    }
-
     // ── Invalid transitions ─────────────────────────────────────────
 
     #[test]
-    fn invalid_draft_to_active() {
-        assert!(!OrgStatus::Draft.can_transition_to(OrgStatus::Active));
+    fn transition_draft_to_suspended_is_invalid() {
+        assert!(!OrgStatus::Draft.can_transition_to(OrgStatus::Suspended));
+    }
+
+    #[test]
+    fn transition_deleting_to_draft_is_invalid() {
+        assert!(!OrgStatus::Deleting.can_transition_to(OrgStatus::Draft));
     }
 
     #[test]
@@ -317,13 +279,10 @@ mod tests {
     fn serde_round_trip_all_variants() {
         let variants = [
             OrgStatus::Draft,
-            OrgStatus::PendingProvisioning,
-            OrgStatus::Provisioning,
             OrgStatus::Active,
             OrgStatus::Suspended,
             OrgStatus::Deleting,
             OrgStatus::Deleted,
-            OrgStatus::Failed,
         ];
         for variant in variants {
             let json = serde_json::to_string(&variant).unwrap();
@@ -334,8 +293,8 @@ mod tests {
 
     #[test]
     fn serde_uses_snake_case() {
-        let json = serde_json::to_string(&OrgStatus::PendingProvisioning).unwrap();
-        assert_eq!(json, "\"pending_provisioning\"");
+        let json = serde_json::to_string(&OrgStatus::Suspended).unwrap();
+        assert_eq!(json, "\"suspended\"");
     }
 
     // ── Display / FromStr round-trip ────────────────────────────────
@@ -344,13 +303,10 @@ mod tests {
     fn display_from_str_round_trip_all_variants() {
         let variants = [
             OrgStatus::Draft,
-            OrgStatus::PendingProvisioning,
-            OrgStatus::Provisioning,
             OrgStatus::Active,
             OrgStatus::Suspended,
             OrgStatus::Deleting,
             OrgStatus::Deleted,
-            OrgStatus::Failed,
         ];
         for variant in variants {
             let display = variant.to_string();
@@ -365,13 +321,10 @@ mod tests {
     fn org_status_display_fromstr_serde_equivalence() {
         let all_statuses = [
             OrgStatus::Draft,
-            OrgStatus::PendingProvisioning,
-            OrgStatus::Provisioning,
             OrgStatus::Active,
             OrgStatus::Suspended,
             OrgStatus::Deleting,
             OrgStatus::Deleted,
-            OrgStatus::Failed,
         ];
         for status in all_statuses {
             let display = status.to_string();
@@ -398,6 +351,16 @@ mod tests {
             msg.contains("not_a_status"),
             "error should contain the invalid value"
         );
+    }
+
+    #[test]
+    fn parsing_pruned_variant_strings_errs() {
+        for pruned in ["pending_provisioning", "provisioning", "failed"] {
+            assert!(
+                pruned.parse::<OrgStatus>().is_err(),
+                "expected {pruned:?} to no longer parse"
+            );
+        }
     }
 
     // ── Organization tests ─────────────────────────────────────────
@@ -444,7 +407,7 @@ mod tests {
             OrgStatus::Draft,
             now,
         );
-        let result = org.transition_to(OrgStatus::Active, now);
+        let result = org.transition_to(OrgStatus::Suspended, now);
         assert!(result.is_err());
     }
 

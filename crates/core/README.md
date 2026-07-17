@@ -9,7 +9,7 @@ Owns domain-level identifiers (TenantId, UserId, PolicyId), domain entities (Org
 | Type | Module | Purpose |
 |------|--------|---------|
 | `DefaultPolicy` | `default_policy` | What happens when no route matches: `Passthrough` or `Deny`. Moved here from `forgeguard_http` so all crates can reference it without an I/O dependency. |
-| `OrgStatus` | `org` | 8-variant lifecycle enum for organizations: `Draft`, `PendingProvisioning`, `Provisioning`, `Active`, `Suspended`, `Deleting`, `Deleted`, `Failed`. Includes `can_transition_to()` for validated state transitions. |
+| `OrgStatus` | `org` | 5-variant lifecycle enum for organizations: `Draft`, `Active`, `Suspended`, `Deleting`, `Deleted`. Includes `can_transition_to()` for validated state transitions. |
 | `Organization` | `org` | Domain entity with private fields, constructor (`new()`), and methods for status transitions (`transition_to()`) and name updates (`update_name()`). AWS resource fields (`cognito_pool_id`, `policy_store_id`, etc.) are `Option` -- populated after provisioning. |
 | `Percentage` | `percentage` | Bounded `0..=100` unsigned integer. Rejects out-of-range values at construction time (`Percentage::try_new(u8) -> Result`). Used by `FlagDefinition` for rollout gates. |
 | `ConfigVersion` | `config_version` | AWS-style date-based schema identifier (e.g. `"2026-04-07"`). Validated at construction; provides `as_str()` accessor. Used by `OrgConfig` to version proxy configuration schemas. |
@@ -18,11 +18,7 @@ Owns domain-level identifiers (TenantId, UserId, PolicyId), domain entities (Org
 ### OrgStatus Lifecycle
 
 ```text
-Draft -> PendingProvisioning -> Provisioning -> Active -> Suspended -> Deleting -> Deleted
-                                     |                        |
-                                   Failed                   Failed
-                                     |
-                                   Draft (recovery)
+Draft -> Active <-> Suspended -> Deleting -> Deleted
 ```
 
 Valid transitions are enforced by `OrgStatus::can_transition_to()`. `Organization::transition_to()` returns `Err` for invalid transitions.
