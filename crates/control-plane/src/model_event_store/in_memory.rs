@@ -113,6 +113,51 @@ impl InMemoryModelEventStore {
         log.push(envelope);
         Ok(revision)
     }
+
+    /// Shared by `update_org`/`transition_org`: precondition-check
+    /// `expected_revision` against the log, mint+push an org-domain event of
+    /// `kind`, mirror the write-through, and update the org read-model.
+    /// `create_org` stays separate — its precondition is "must not exist"
+    /// (a `contains_key` check), not a revision compare.
+    async fn append_org_state(
+        &self,
+        record: OrgRecord,
+        kind: EventKind,
+        actor: Actor,
+        expected_revision: Option<Revision>,
+    ) -> Result<Revision> {
+        let org_id = record.org().org_id().to_string();
+        // Read-then-act (not atomic — acceptable for a test double, but
+        // unlike the DynamoDB impl's CAS-based retry loop, this reads
+        // `latest_revision` here and again inside `mint_and_push` with no
+        // lock held across the steps, so a concurrent writer could slip in
+        // between the two reads; real races are exercised only against
+        // DynamoDB Local, Task 2/3 integration tests).
+        let current = self.latest_revision(&org_id).await?;
+        if let Some(expected) = expected_revision {
+            if current != expected {
+                return Err(Error::RevisionMismatch {
+                    current: current.value(),
+                });
+            }
+        }
+
+        let payload = org_payload(&record)?;
+        let revision = self.mint_and_push(&org_id, kind, actor, payload).await?;
+
+        if let Some(org_store) = &self.org_store {
+            // No etag precondition here — the log's revision precondition
+            // (checked above) is this store's optimistic-concurrency guard;
+            // the write-through is just keeping the org read-model mirrored.
+            org_store
+                .write_through_org(record.org().clone(), record.config().cloned())
+                .await;
+        }
+
+        let mut guard = self.orgs.lock().map_err(|e| lock_poisoned("org", e))?;
+        guard.insert(org_id, record);
+        Ok(revision)
+    }
 }
 
 impl Default for InMemoryModelEventStore {
@@ -348,38 +393,23 @@ impl ModelEventStore for InMemoryModelEventStore {
         actor: Actor,
         expected_revision: Option<Revision>,
     ) -> Result<Revision> {
-        let org_id = record.org().org_id().to_string();
-        // Read-then-act (not atomic — acceptable for a test double, but
-        // unlike the DynamoDB impl's CAS-based retry loop, this reads
-        // `latest_revision` here and again inside `mint_and_push` with no
-        // lock held across the steps, so a concurrent writer could slip in
-        // between the two reads; real races are exercised only against
-        // DynamoDB Local, Task 2/3 integration tests).
-        let current = self.latest_revision(&org_id).await?;
-        if let Some(expected) = expected_revision {
-            if current != expected {
-                return Err(Error::RevisionMismatch {
-                    current: current.value(),
-                });
-            }
-        }
+        self.append_org_state(record, EventKind::OrgUpdated, actor, expected_revision)
+            .await
+    }
 
-        let payload = org_payload(&record)?;
-        let revision = self
-            .mint_and_push(&org_id, EventKind::OrgUpdated, actor, payload)
-            .await?;
-
-        if let Some(org_store) = &self.org_store {
-            // No etag precondition here — the log's revision precondition
-            // (checked above) is this store's optimistic-concurrency guard;
-            // the write-through is just keeping the org read-model mirrored.
-            org_store
-                .write_through_org(record.org().clone(), record.config().cloned())
-                .await;
-        }
-
-        let mut guard = self.orgs.lock().map_err(|e| lock_poisoned("org", e))?;
-        guard.insert(org_id, record);
-        Ok(revision)
+    async fn transition_org(
+        &self,
+        record: OrgRecord,
+        kind: EventKind,
+        actor: Actor,
+        expected_revision: Revision,
+    ) -> Result<Revision> {
+        debug_assert_ne!(
+            kind,
+            EventKind::OrgCreated,
+            "transition_org must not be called with OrgCreated"
+        );
+        self.append_org_state(record, kind, actor, Some(expected_revision))
+            .await
     }
 }

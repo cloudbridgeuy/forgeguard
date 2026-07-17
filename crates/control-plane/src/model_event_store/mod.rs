@@ -270,6 +270,24 @@ pub(crate) trait ModelEventStore: Send + Sync {
         expected_revision: Option<Revision>,
     ) -> Result<Revision>;
 
+    /// Append a lifecycle event (`org.activated`/`org.suspended`/
+    /// `org.restored`) + the org's new state item in one transaction.
+    /// `expected_revision` is the handler's observed revision and is
+    /// MANDATORY: racing transitions serialize into one event and one
+    /// `Error::RevisionMismatch` (#113 V2). `record` already carries the
+    /// post-transition status.
+    ///
+    /// No HTTP route calls this yet — Task 5 wires the lifecycle-verb
+    /// handlers against it, same precedent as `put_promotion`.
+    #[allow(dead_code)]
+    async fn transition_org(
+        &self,
+        record: OrgRecord,
+        kind: EventKind,
+        actor: Actor,
+        expected_revision: Revision,
+    ) -> Result<Revision>;
+
     /// Revision-pinned historical read (V5 / N16, closing D9): fold the
     /// org's event log up to `at` (or the latest revision when `None`) into
     /// entity state. `None` on an empty log yields [`FoldedState::empty`];
@@ -479,6 +497,64 @@ impl DynamoModelEventStore {
                 Box::pin(self.ensure_signing_key(org_id)).await
             }
         }
+    }
+
+    /// Shared body for `create_org`/`update_org`/`transition_org`: append an
+    /// org-domain event of `kind` + the org's new state item in one
+    /// transaction. `create_org` passes `EventKind::OrgCreated` with a
+    /// `MustNotExist` guard and no revision precondition; the other two pass
+    /// `StateGuard::None` with their own `expected_revision`.
+    async fn append_org_state(
+        &self,
+        record: OrgRecord,
+        kind: EventKind,
+        actor: Actor,
+        expected_revision: Option<Revision>,
+    ) -> Result<Revision> {
+        let org_id = record.org().org_id().to_string();
+        let (signing_key, key_id) = self.ensure_signing_key(&org_id).await?;
+        let occurred_at = chrono::Utc::now().to_rfc3339();
+        let log = DynamoEventLog::new(self.client.clone(), self.table_name.clone(), &org_id);
+
+        let guard = if kind == EventKind::OrgCreated {
+            StateGuard::MustNotExist
+        } else {
+            // Preserve `signing_keys` across the state item's replacement —
+            // the META item is fully rewritten by `to_item`, and that
+            // attribute lives outside `OrgRecord` (see `dynamo_store::update`).
+            StateGuard::None
+        };
+        let existing_keys = match get_raw_org_item(&self.client, &self.table_name, &org_id).await? {
+            Some(item) => signing_keys_from_item(&item)?,
+            None => Vec::new(),
+        };
+
+        let payload = org_payload(&record)?;
+        let mut attributes = to_item(record.org(), record.configured(), &existing_keys)?;
+        attributes.remove(pk());
+        attributes.remove(sk());
+        let state = StatePut {
+            pk: format!("{ORG_PREFIX}{org_id}"),
+            sk: SK_META.to_string(),
+            attributes,
+            guard,
+        };
+
+        let org_id_owned = org_id.clone();
+        let build = move |revision: Revision| {
+            build_model_event(BuildModelEventParams {
+                org_id: &org_id_owned,
+                kind,
+                actor: actor.clone(),
+                payload: payload.clone(),
+                signing_key: &signing_key,
+                key_id: &key_id,
+                occurred_at: &occurred_at,
+                revision,
+            })
+        };
+
+        log.append(expected_revision, build, state).await
     }
 }
 
@@ -720,37 +796,8 @@ impl ModelEventStore for DynamoModelEventStore {
     }
 
     async fn create_org(&self, record: OrgRecord, actor: Actor) -> Result<Revision> {
-        let org_id = record.org().org_id().to_string();
-        let (signing_key, key_id) = self.ensure_signing_key(&org_id).await?;
-        let occurred_at = chrono::Utc::now().to_rfc3339();
-        let log = DynamoEventLog::new(self.client.clone(), self.table_name.clone(), &org_id);
-
-        let payload = org_payload(&record)?;
-        let mut attributes = to_item(record.org(), record.configured(), &[])?;
-        attributes.remove(pk());
-        attributes.remove(sk());
-        let state = StatePut {
-            pk: format!("{ORG_PREFIX}{org_id}"),
-            sk: SK_META.to_string(),
-            attributes,
-            guard: StateGuard::MustNotExist,
-        };
-
-        let org_id_owned = org_id.clone();
-        let build = move |revision: Revision| {
-            build_model_event(BuildModelEventParams {
-                org_id: &org_id_owned,
-                kind: EventKind::OrgCreated,
-                actor: actor.clone(),
-                payload: payload.clone(),
-                signing_key: &signing_key,
-                key_id: &key_id,
-                occurred_at: &occurred_at,
-                revision,
-            })
-        };
-
-        log.append(None, build, state).await
+        self.append_org_state(record, EventKind::OrgCreated, actor, None)
+            .await
     }
 
     async fn update_org(
@@ -759,45 +806,28 @@ impl ModelEventStore for DynamoModelEventStore {
         actor: Actor,
         expected_revision: Option<Revision>,
     ) -> Result<Revision> {
-        let org_id = record.org().org_id().to_string();
-        let (signing_key, key_id) = self.ensure_signing_key(&org_id).await?;
-        let occurred_at = chrono::Utc::now().to_rfc3339();
-        let log = DynamoEventLog::new(self.client.clone(), self.table_name.clone(), &org_id);
+        self.append_org_state(record, EventKind::OrgUpdated, actor, expected_revision)
+            .await
+    }
 
-        // Preserve `signing_keys` across the state item's replacement — the
-        // META item is fully rewritten by `to_item`, and that attribute lives
-        // outside `OrgRecord` (see `dynamo_store::update`).
-        let existing_keys = match get_raw_org_item(&self.client, &self.table_name, &org_id).await? {
-            Some(item) => signing_keys_from_item(&item)?,
-            None => Vec::new(),
-        };
-
-        let payload = org_payload(&record)?;
-        let mut attributes = to_item(record.org(), record.configured(), &existing_keys)?;
-        attributes.remove(pk());
-        attributes.remove(sk());
-        let state = StatePut {
-            pk: format!("{ORG_PREFIX}{org_id}"),
-            sk: SK_META.to_string(),
-            attributes,
-            guard: StateGuard::None,
-        };
-
-        let org_id_owned = org_id.clone();
-        let build = move |revision: Revision| {
-            build_model_event(BuildModelEventParams {
-                org_id: &org_id_owned,
-                kind: EventKind::OrgUpdated,
-                actor: actor.clone(),
-                payload: payload.clone(),
-                signing_key: &signing_key,
-                key_id: &key_id,
-                occurred_at: &occurred_at,
-                revision,
-            })
-        };
-
-        log.append(expected_revision, build, state).await
+    async fn transition_org(
+        &self,
+        record: OrgRecord,
+        kind: EventKind,
+        actor: Actor,
+        expected_revision: Revision,
+    ) -> Result<Revision> {
+        // `kind` must be a lifecycle event, never `OrgCreated` — that would
+        // take the `MustNotExist` state-guard branch in `append_org_state`
+        // for an org callers already believe exists, surfacing a confusing
+        // `Error::Conflict` instead of the expected `RevisionMismatch`.
+        debug_assert_ne!(
+            kind,
+            EventKind::OrgCreated,
+            "transition_org must not be called with OrgCreated"
+        );
+        self.append_org_state(record, kind, actor, Some(expected_revision))
+            .await
     }
 }
 

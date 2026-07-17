@@ -18,10 +18,14 @@ fn nid(s: &str) -> NativeId {
 }
 
 fn org_record(org_id: &str, name: &str) -> OrgRecord {
+    org_record_with_status(org_id, name, OrgStatus::Draft)
+}
+
+fn org_record_with_status(org_id: &str, name: &str, status: OrgStatus) -> OrgRecord {
     let org = Organization::new(
         OrganizationId::new(org_id).unwrap(),
         name.to_string(),
-        OrgStatus::Draft,
+        status,
         chrono::Utc::now(),
     );
     OrgRecord::new(org, None)
@@ -355,4 +359,90 @@ async fn update_org_bumps_revision_and_folds_to_latest() {
         folded.org().unwrap()["organization"]["name"],
         "Acme Renamed"
     );
+}
+
+#[tokio::test]
+async fn transition_org_appends_lifecycle_kind_and_new_status() {
+    let store = InMemoryModelEventStore::new();
+    store
+        .create_org(org_record("acme", "Acme Inc"), Actor::System)
+        .await
+        .unwrap();
+
+    let revision = store
+        .transition_org(
+            org_record_with_status("acme", "Acme Inc", OrgStatus::Active),
+            EventKind::OrgActivated,
+            Actor::System,
+            Revision::new(1),
+        )
+        .await
+        .unwrap();
+    assert_eq!(revision, Revision::new(2));
+
+    let events = store
+        .events_after("acme", Revision::new(0), 10)
+        .await
+        .unwrap();
+    assert_eq!(events[1].kind().as_str(), "org.activated");
+    assert_eq!(events[1].payload()["organization"]["status"], "active");
+}
+
+#[tokio::test]
+async fn transition_org_with_stale_revision_mismatches() {
+    let store = InMemoryModelEventStore::new();
+    store
+        .create_org(org_record("acme", "Acme Inc"), Actor::System)
+        .await
+        .unwrap();
+
+    let err = store
+        .transition_org(
+            org_record_with_status("acme", "Acme Inc", OrgStatus::Active),
+            EventKind::OrgActivated,
+            Actor::System,
+            Revision::new(0),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::RevisionMismatch { current: 1 }));
+    assert_eq!(
+        store.latest_revision("acme").await.unwrap(),
+        Revision::new(1)
+    );
+}
+
+#[tokio::test]
+async fn suspend_event_is_narrowing() {
+    let store = InMemoryModelEventStore::new();
+    store
+        .create_org(org_record("acme", "Acme Inc"), Actor::System)
+        .await
+        .unwrap();
+    store
+        .transition_org(
+            org_record_with_status("acme", "Acme Inc", OrgStatus::Active),
+            EventKind::OrgActivated,
+            Actor::System,
+            Revision::new(1),
+        )
+        .await
+        .unwrap();
+    store
+        .transition_org(
+            org_record_with_status("acme", "Acme Inc", OrgStatus::Suspended),
+            EventKind::OrgSuspended,
+            Actor::System,
+            Revision::new(2),
+        )
+        .await
+        .unwrap();
+
+    let events = store
+        .events_after("acme", Revision::new(0), 10)
+        .await
+        .unwrap();
+    let last = events.last().unwrap();
+    assert_eq!(last.kind().as_str(), "org.suspended");
+    assert!(last.kind().narrowing());
 }
