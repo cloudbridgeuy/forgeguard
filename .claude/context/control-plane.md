@@ -122,9 +122,11 @@ etag-conditioned:
 `If-Match`/`ETag` no longer apply to org `PUT` — they're ignored if sent.
 There is no `DELETE /api/v1/organizations/{org_id}`; org deletion isn't
 supported on the log yet, so the route falls through to Axum's default `405`.
-Groups and user-schema `PUT`/`DELETE` are unaffected — they still use
-`ETag`/`If-Match` (see [optimistic-locking.md](./optimistic-locking.md),
-superseded for org mutations only).
+Group `PUT`/`DELETE` moved to the same revision-tokened model in #113 V4 (see
+[groups-v3.md](./groups-v3.md)); user-schema `PUT`/`DELETE` are unaffected —
+they still use `ETag`/`If-Match` (see
+[optimistic-locking.md](./optimistic-locking.md), superseded for org and
+group mutations only).
 
 ## Lifecycle Verbs (#113 V2)
 
@@ -485,9 +487,23 @@ Response (201, `x-fg-revision` header also set): same shape as Generate Key.
 - CORS middleware (no browser clients -- deferred to #40 dashboard)
 - Hot-reload of config file
 
-## V2 of #102 — Groups CRUD (Draft only)
+## Groups CRUD (#102 V2/V3, #113 V4)
 
-Endpoints under `/api/v1/organizations/{org_id}/groups[/{name}]`. ETag/`If-Match` is mandatory on PUT/DELETE (omitting it returns 422). DELETE pre-checks for both live memberships (`count_memberships_for_group`) and inheriting groups (`list_inheritors`); either non-empty set blocks deletion. The Active-org branch that pushes compiled Cedar policies to Verified Permissions is `todo!("V3")` until VP push lands. The `is_declared_group(org_id, name)` predicate is exposed on `OrgStore` for issue #100's `POST /users` validator, which must confirm that a referenced group name is actually declared before accepting a membership assignment.
+Endpoints under `/api/v1/organizations/{org_id}/groups[/{name}]`. Group writes
+are event-sourced (`ModelEventStore::{put_group,delete_group}`, #113 V4) —
+`X-Fg-If-Revision` is optional on PUT/DELETE (a stale value returns `412` with
+the current revision; omitting it skips the check), replacing the old
+mandatory ETag/`If-Match` model. DELETE pre-checks for both live memberships
+(`count_memberships_for_group`) and inheriting groups (`list_inheritors`);
+either non-empty set blocks deletion. On Active orgs, the write pushes
+compiled Cedar policies to Verified Permissions **first**, then appends the
+event only once the VP push succeeds (push-then-append, D6) — see
+[groups-v3.md](./groups-v3.md) for the full write pipeline and the
+F-VP/F-VP-mid/F-append failure-mode taxonomy that supersedes the old
+F3/F3'/F4 model. The `is_declared_group(org_id, name)` predicate is exposed
+on `OrgStore` for issue #100's `POST /users` validator, which must confirm
+that a referenced group name is actually declared before accepting a
+membership assignment.
 
 ## Event Append Spine (V1)
 

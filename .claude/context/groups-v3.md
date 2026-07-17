@@ -1,13 +1,24 @@
-# Groups V3 — Active-org VP Materialization
+# Groups V3/V4 — Active-org VP Materialization
 
-V3 extends the V2 Groups CRUD (DDB-only, Draft orgs) with the distributed-write
+V3 extended the V2 Groups CRUD (DDB-only, Draft orgs) with the distributed-write
 path that materialises compiled Cedar permits into each Active org's Verified
 Permissions (VP) policy store on every CREATE/UPDATE/DELETE. The handler shape
-stays the same; the V2 `todo!("V3")` Active branches are now real.
+stayed the same; the V2 `todo!("V3")` Active branches became real.
+
+**Superseded by #113 V4 (issue #113, "Groups — Push-Then-Append"):** group
+writes are event-sourced (`ModelEventStore::{put_group,delete_group}`) instead
+of `OrgStore::{put_group,delete_group}`, revision tokens (`X-Fg-If-Revision`)
+replace ETag/`If-Match` on group `PUT`/`DELETE`, and the write ordering is
+**inverted** — VP push now happens first, the event-sourced append second.
+The F3/F3'/F4 failure-mode taxonomy below is superseded by F-VP / F-VP-mid /
+F-append (see _Failure Mode Taxonomy_). Sections describing the VP client,
+policy naming, and the `[name]` description-prefix encoding are unaffected by
+V4 and remain accurate.
 
 > Implementation plan: `.claude/designs/issue-102-v3-implementation-plan.md`
 > (local-only). Manual QA plan: `.claude/plans/issue-102-v3-implementation-plan-qa.md`
 > (local-only). Both are gitignored — see [CONTEXT.md § Local-Only Documents](../../CONTEXT.md).
+> V4 plan: `.claude/plans/2026-07-17-issue-113-v4-groups-push-then-append-plan.md`.
 
 ## Active-org Boundary
 
@@ -32,22 +43,35 @@ Active path needs. `OrgWriteContext::from_record` is the only constructor:
 The orchestrator never re-checks `Option<vp_store_id>` — make-impossible-states-impossible
 done at the handler edge.
 
-## Write Pipeline
+## Write Pipeline (V4 — push-then-append, D6)
 
-For each handler the shape is:
+For each handler the shape is now **inverted** from V3: the VP push happens
+first, and the event-sourced append (`ModelEventStore::{put_group,delete_group}`)
+happens only after the push succeeds.
 
 ```
 pure pre-flight (parse + compile)
-    └─> DDB write
-            └─> VP parent push  (CREATE: create / DELETE: delete /
-                                 UPDATE: delete-then-create)
-                    └─> VP fanout to dependents  (UPDATE only; alphabetical)
+    └─> VP parent push  (CREATE: create / DELETE: delete /
+                         UPDATE: delete-then-create)
+            └─> VP fanout to dependents  (UPDATE only; alphabetical)
+                    └─> event-sourced append (ModelEventStore::put_group / delete_group)
 ```
 
 The fanout walks transitive inheritors of the parent (computed by
 `compute_dependents_in_order`) and re-emits a compiled permit for each one.
-Dependent ordering is **globally alphabetical** so F4 reproductions land on the
-same boundary every run.
+Dependent ordering is **globally alphabetical** so F-VP-mid reproductions land
+on the same boundary every run.
+
+Rationale for the inversion: VP is the harder side to compensate (no atomic
+transaction across DDB and VP), so the shell pushes to VP first — if that
+fails, nothing has been written anywhere and there is nothing to roll back.
+Only once VP reflects the new state does the shell attempt the event append;
+if *that* fails, the shell compensates by reverting the VP push it just made
+(see _Failure Mode Taxonomy_, F-append).
+
+Group writes on Draft orgs skip the VP push entirely (`OrgWriteContext::Draft`)
+and go straight to the event-sourced append — there's no VP store to push to
+before an org is Active.
 
 ## VP Client
 
@@ -107,40 +131,57 @@ member  →  cp-rbac-member
 This mapping is canonical and shared with `xtask cedar sync` so policies
 materialised by either tool collide deterministically.
 
-## Failure Mode Taxonomy
+## Failure Mode Taxonomy (V4 — supersedes F3/F3'/F4)
 
-The shell pairs each VP push with a rollback strategy. The three failure
-classes have distinct status codes and body shapes (driven by
-`VpPushFailedBody` / `InconsistentStateBody` in `active_pure.rs`):
+Push-then-append inverts which side needs compensation. Under V3, DDB was
+written first and a failed VP push meant rolling back DDB. Under V4, VP is
+pushed first — a failed VP push leaves nothing written anywhere, and a failed
+*append* (after a successful VP push) means compensating VP instead of DDB.
+The three failure classes have distinct status codes and body shapes:
 
-| Mode | Trigger | Status | Rollback | Body |
-|------|---------|--------|----------|------|
-| **F3** | VP parent push fails after DDB write; rollback succeeds | `503` | DDB compensating write succeeds | `{"error":"vp_push_failed","stage":"parent","completed":[],"failed":"<policy>","remaining":[]}` |
-| **F3'** | F3 trigger AND the DDB compensating write also fails | `500` | n/a — DDB and VP have diverged | `{"error":"inconsistent_state","ddb_committed":true,"vp_committed":false}` |
-| **F4** | UPDATE: parent push succeeded, then a dependent push failed mid-fanout | `503` | None — see Risk #5 in plan | `{"error":"vp_push_failed","stage":"fanout","completed":[…],"failed":"<policy>","remaining":[…]}` |
+| Mode | Trigger | Status | Compensation | Body |
+|------|---------|--------|--------------|------|
+| **F-VP** | VP parent push fails before anything is written | `503` | None needed — nothing was written | `{"error":"vp_push_failed","stage":"parent","completed":[],"failed":"<policy>","remaining":[]}` |
+| **F-VP-mid** | UPDATE: parent push succeeded, then a dependent push failed mid-fanout | `503` | Restore already-completed dependents' prior permits | `{"error":"vp_push_failed","stage":"fanout","completed":[…],"failed":"<policy>","remaining":[…]}` |
+| **F-append** | VP push (parent + fanout) succeeded, but the event-sourced append failed | `412` (revision mismatch) or `500` (other append error) | Revert the VP push just made (`resolve_append_compensation` in `active.rs`) | `412`: same shape as any revision-mismatch response (`{"error":"revision_mismatch",...}`). `500`: `{"error":"internal"}` |
+| **F-append, compensation also fails** | F-append trigger AND the VP-reverting compensation also fails | `500` | n/a — VP and the event log have diverged | `{"error":"inconsistent_state","vp_committed":true,"append_committed":false}` |
+
+`resolve_append_compensation` (`active.rs`) special-cases the append error:
+a `RevisionMismatch` from the append attempt, once compensation succeeds,
+surfaces as `412` (the client's stale-revision request bounced cleanly, with
+VP already reverted) — not the generic `500`. Any other append error still
+maps to `500 Internal` after successful compensation. Compensation *failure*
+always maps to `500 InconsistentState` regardless of the underlying append
+error, since at that point VP and the event log genuinely disagree.
 
 ### Boundary cases
 
-- **Active-without-vp_store_id** (Risk #5). An Active org with
-  `vp_store_id == None` is a saga-invariant violation. The handler surfaces the
-  same `503 vp_push_failed{stage="parent"}` shape as F3, with `failed` set to
-  the canonical policy name the request would have written. No DDB mutation
-  happens, so no rollback is needed.
+- **Active-without-vp_store_id** (Risk #5, carried from V3). An Active org
+  with `vp_store_id == None` is a saga-invariant violation. The handler
+  surfaces the same `503 vp_push_failed{stage="parent"}` shape as F-VP, with
+  `failed` set to the canonical policy name the request would have written.
+  Nothing is written, so no compensation is needed.
 - **Idempotent DELETE on Active**. `DELETE` on a missing group still returns
-  `404` (matches V2 behaviour). The Active branch only runs after the DDB
-  pre-check succeeds.
+  `404`/absent-noop semantics — the VP push only runs after the pre-flight
+  read confirms the group exists.
+- **D6 no-op rule**. If the incoming entry is identical (JSON-equality) to
+  the current one, no VP push and no append happen at all — the handler
+  short-circuits to `GroupWriteOutcome::NoOp` before either side is touched.
 
 ## Metrics
 
 | Metric | Labels | Bumped on |
 |--------|--------|-----------|
-| `forgeguard_cp_group_rollback_failed_total` | `stage="parent"\|"fanout"` | F3' (rollback fails). Each increment means **DDB and VP are inconsistent** — alert and reconcile. |
+| `forgeguard_cp_group_rollback_failed_total` | `stage="parent"\|"fanout"` | F-append's compensation failing (VP-revert fails after a failed append). Each increment means **VP and the event log are inconsistent** — alert and reconcile. |
 
-`stage="fanout"` is reserved for forward compatibility — V3 fanout failures
-(F4) do not attempt rollback, so the label is currently never bumped from
-production code paths. The `update_org` and group-write tracing spans also
-record `rollback_stage` so per-request attribution is available without
-exploding cardinality.
+Note the metric's meaning changed under V4: under V3 it counted failed DDB
+rollbacks after a failed VP push; under V4 it counts failed VP-revert
+compensations after a failed event append — the compensation direction
+reversed along with the write ordering, but the metric name and alert
+semantics ("something failed to roll back cleanly") stayed the same.
+`stage="fanout"` remains reserved for forward compatibility. The
+`update_org` and group-write tracing spans also record `rollback_stage` so
+per-request attribution is available without exploding cardinality.
 
 Recommended alert: `rate(forgeguard_cp_group_rollback_failed_total[5m]) > 0`.
 
@@ -162,8 +203,9 @@ from `tests/active_support.rs`:
   `swap(false, SeqCst)` so subsequent calls pass through.
 - **`metric_lock()`** — process-wide async lock guarding tests that read
   `GROUP_ROLLBACK_FAILED_TOTAL` deltas. The Prometheus counter is
-  process-global and `cargo test` runs in parallel, so concurrent F3/F3'/F4
-  tests would race on `counter_after - counter_before` without it. Uses
+  process-global and `cargo test` runs in parallel, so concurrent
+  F-VP/F-VP-mid/F-append tests would race on `counter_after - counter_before`
+  without it. Uses
   `tokio::sync::Mutex` (not `std::sync::Mutex`) because the guard must cross
   `await` points — `clippy::await_holding_lock` would otherwise reject it.
 
@@ -181,19 +223,21 @@ to fail on the 3rd handler-driven create must arm `fail_after_n_creates(4 + 2)`
 — 4 seed creates already burnt `creates_so_far` to 4, the parent push burns
 the 5th, the first dependent burns the 6th, and the 7th fails.
 
-## Saga Coupling (V4 follow-up)
+## Saga Coupling (follow-up)
 
-V3 makes the Active write path real but **no real Active org exists yet** —
-the saga that flips `Draft → Active` and seeds the per-org VP store with the
-project schema is V4. V3 is end-to-end exercised through the stub today; the
-production hot path stays Draft until V4 ships. F3'/F4 reconciliation work is
-also a V4 concern (the alert points operators at it; nothing automated runs
-yet).
+V3 made the Active write path real but **no real Active org existed yet at
+the time** — the saga that flips `Draft → Active` and seeds the per-org VP
+store with the project schema is a separate follow-up ticket from both V3 and
+#113 V4. V3/V4 are end-to-end exercised through the stub today; the
+production hot path stays Draft until that saga ships. Automated
+reconciliation for F-append's compensation-failure case is also a follow-up
+concern (the alert points operators at it; nothing automated runs yet).
 
-## V4 saga stub
+## Materialize-to-VP saga stub
 
-V4 lands the orchestration boundary the saga ticket will call once it owns
-the Draft → Active transition. It does **not** ship a saga.
+This (predates #113 V4; not to be confused with it) lands the orchestration
+boundary the saga ticket will call once it owns the Draft → Active
+transition. It does **not** ship a saga.
 
 **Pure inner** (`forgeguard_authz_core::rbac::permits`):
 

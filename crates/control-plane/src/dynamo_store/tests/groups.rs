@@ -1,4 +1,10 @@
-//! DynamoDB integration tests for the Groups V2 store methods.
+//! DynamoDB integration tests for the Groups store.
+//!
+//! Writes go through `DynamoModelEventStore::{put_group,delete_group}`
+//! (event-sourced, #113 V4 Task 6 — `DynamoOrgStore::{put_group,delete_group}`
+//! were retired); reads stay on `DynamoOrgStore`'s read methods, which is
+//! what production's write-then-read-back handlers actually exercise since
+//! both stores share the same table.
 //!
 //! Each test provisions its own fresh table (via `unique_table_name` +
 //! `create_test_table`) so tests are fully isolated and safe to run in
@@ -7,10 +13,11 @@
 //! Run with: `cargo xtask control-plane test`
 
 use aws_sdk_dynamodb::types::AttributeValue;
-use forgeguard_authz_core::{validate_rbac_entry, RbacEntry};
+use forgeguard_authz_core::{validate_rbac_entry, Actor, RbacEntry};
 use forgeguard_core::OrganizationId;
 
 use super::*;
+use crate::model_event_store::{DynamoModelEventStore, GroupWriteOutcome, ModelEventStore};
 use crate::store::OrgStore;
 
 // ---------------------------------------------------------------------------
@@ -39,19 +46,17 @@ fn make_entry_with_inherits(name: &str, allow: &[&str], inherits: &[&str]) -> Rb
     }
 }
 
-/// Validate and wrap an entry as `ValidatedRbacEntry` for single-group
-/// operations where no peer context is needed (the entry is its own context).
-fn validated_single(entry: RbacEntry) -> forgeguard_authz_core::ValidatedRbacEntry {
-    let all = vec![entry.clone()];
-    validate_rbac_entry(entry, &all).unwrap()
-}
-
-/// Provision a fresh store with one Draft org and return (store, org_id).
-async fn fresh_store_with_draft_org(org_id_str: &str) -> (DynamoOrgStore, OrganizationId) {
+/// Provision a fresh, shared-table `(OrgStore, ModelEventStore, org_id)` with
+/// one Draft org — mirrors production wiring, where both stores read/write
+/// the same DynamoDB table.
+async fn fresh_stores_with_draft_org(
+    org_id_str: &str,
+) -> (DynamoOrgStore, DynamoModelEventStore, OrganizationId) {
     let client = test_client().await;
     let table = unique_table_name();
     create_test_table(&client, &table).await;
-    let store = DynamoOrgStore::new(client.clone(), table.clone());
+    let org_store = DynamoOrgStore::new(client.clone(), table.clone());
+    let events = DynamoModelEventStore::new(client.clone(), table.clone());
     let now = chrono::Utc::now();
     let org_id = OrganizationId::new(org_id_str).unwrap();
     let org = forgeguard_core::Organization::new(
@@ -61,41 +66,31 @@ async fn fresh_store_with_draft_org(org_id_str: &str) -> (DynamoOrgStore, Organi
         now,
     );
     put_test_org(&client, &table, &org, None).await;
-    (store, org_id)
+    (org_store, events, org_id)
 }
 
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
-/// POST group (create) then GET — confirms round-trip storage and etag stability.
+/// `put_group` (create) then GET — confirms round-trip storage.
 #[tokio::test]
 async fn dynamodb_create_then_get_group() {
-    let (store, org_id) = fresh_store_with_draft_org("dg-create-get").await;
+    let (org_store, events, org_id) = fresh_stores_with_draft_org("dg-create-get").await;
 
     let entry = make_entry("admin", &["cp:org:read"]);
-    let validated = validated_single(entry);
-    let created = store.put_group(&org_id, validated, None).await.unwrap();
+    let outcome = events
+        .put_group(org_id.as_str(), entry, Actor::System, None)
+        .await
+        .unwrap();
+    assert!(matches!(outcome, GroupWriteOutcome::Applied { .. }));
 
-    assert_eq!(created.entry().name, "admin");
-    assert!(
-        !created.etag().as_str().is_empty(),
-        "etag must be non-empty"
-    );
-    assert!(
-        created.etag().as_str().starts_with('"') && created.etag().as_str().ends_with('"'),
-        "etag must be a quoted string, got: {}",
-        created.etag()
-    );
-
-    // GET must return the same etag
-    let fetched = store.get_group(&org_id, "admin").await.unwrap().unwrap();
+    let fetched = org_store
+        .get_group(&org_id, "admin")
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(fetched.entry().name, "admin");
-    assert_eq!(
-        fetched.etag(),
-        created.etag(),
-        "GET etag must match PUT etag"
-    );
     assert_eq!(
         fetched.entry().allow,
         vec!["cp:org:read"],
@@ -103,62 +98,96 @@ async fn dynamodb_create_then_get_group() {
     );
 }
 
-/// Second POST with the same name must return `Error::Conflict`.
+/// A second `put_group` with the same name but different content is an
+/// update (D5/D6), not a conflict — `expected_revision: None` means "no
+/// precondition," so it applies and appends a second event.
 #[tokio::test]
-async fn dynamodb_create_duplicate_returns_conflict() {
-    let (store, org_id) = fresh_store_with_draft_org("dg-dup").await;
+async fn dynamodb_second_put_group_same_name_is_an_update() {
+    let (org_store, events, org_id) = fresh_stores_with_draft_org("dg-update").await;
 
-    let entry1 = make_entry("admin", &["cp:org:read"]);
-    store
-        .put_group(&org_id, validated_single(entry1), None)
+    let first = make_entry("admin", &["cp:org:read"]);
+    events
+        .put_group(org_id.as_str(), first, Actor::System, None)
         .await
         .unwrap();
 
-    let entry2 = make_entry("admin", &["cp:org:write"]);
-    let result = store
-        .put_group(&org_id, validated_single(entry2), None)
-        .await;
+    let second = make_entry("admin", &["cp:org:write"]);
+    let outcome = events
+        .put_group(org_id.as_str(), second, Actor::System, None)
+        .await
+        .unwrap();
+    assert!(matches!(outcome, GroupWriteOutcome::Applied { .. }));
 
-    assert!(result.is_err());
-    assert!(
-        matches!(result.unwrap_err(), crate::error::Error::Conflict(_)),
-        "second create must return Conflict"
-    );
+    let fetched = org_store
+        .get_group(&org_id, "admin")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(fetched.entry().allow, vec!["cp:org:write"]);
 }
 
-/// PUT with a stale `If-Match` must return `Error::PreconditionFailed` carrying
-/// the current stored etag.
+/// An identical `put_group` (same content) is the D6 no-op — `NoOp` reports
+/// the log's unchanged revision, and no second event is appended.
 #[tokio::test]
-async fn dynamodb_update_with_stale_etag_returns_precondition_failed() {
-    let (store, org_id) = fresh_store_with_draft_org("dg-stale-etag").await;
+async fn dynamodb_identical_put_group_is_noop() {
+    let (_org_store, events, org_id) = fresh_stores_with_draft_org("dg-noop").await;
 
-    // Create the group
-    let entry = make_entry("member", &["cp:org:read"]);
-    let created = store
-        .put_group(&org_id, validated_single(entry), None)
+    let entry = make_entry("admin", &["cp:org:read"]);
+    let first = events
+        .put_group(org_id.as_str(), entry.clone(), Actor::System, None)
         .await
         .unwrap();
-    let correct_etag = created.etag().clone();
+    let GroupWriteOutcome::Applied {
+        revision: first_revision,
+    } = first
+    else {
+        panic!("first put_group must apply, got: {first:?}");
+    };
 
-    // Try to update with a wrong etag
+    let second = events
+        .put_group(org_id.as_str(), entry, Actor::System, None)
+        .await
+        .unwrap();
+    match second {
+        GroupWriteOutcome::NoOp { current } => assert_eq!(current, first_revision),
+        other => panic!("identical put_group must be a no-op, got: {other:?}"),
+    }
+}
+
+/// `put_group` with a stale `expected_revision` fails with
+/// `Error::RevisionMismatch` and does not write anything.
+#[tokio::test]
+async fn dynamodb_put_group_with_stale_revision_returns_revision_mismatch() {
+    let (org_store, events, org_id) = fresh_stores_with_draft_org("dg-stale-revision").await;
+
+    let entry = make_entry("member", &["cp:org:read"]);
+    let created = events
+        .put_group(org_id.as_str(), entry, Actor::System, None)
+        .await
+        .unwrap();
+    let GroupWriteOutcome::Applied { revision } = created else {
+        panic!("create must apply, got: {created:?}");
+    };
+
     let update_entry = make_entry("member", &["cp:org:read", "cp:org:write"]);
-    let all_after = vec![update_entry.clone()];
-    let validated_update = validate_rbac_entry(update_entry, &all_after).unwrap();
-
-    let result = store
-        .put_group(&org_id, validated_update, Some("\"wrong-etag\""))
+    let stale = forgeguard_authz_core::Revision::new(revision.value().saturating_sub(1).max(0));
+    let result = events
+        .put_group(org_id.as_str(), update_entry, Actor::System, Some(stale))
         .await;
 
-    match result {
-        Err(crate::error::Error::PreconditionFailed { current_etag }) => {
-            assert_eq!(
-                current_etag,
-                Some(correct_etag),
-                "recovered etag must match the stored one"
-            );
-        }
-        other => panic!("expected PreconditionFailed, got {other:?}"),
-    }
+    assert!(
+        matches!(result, Err(crate::error::Error::RevisionMismatch { .. })),
+        "expected RevisionMismatch, got: {result:?}"
+    );
+
+    // Nothing was written — the stored group must still carry the original
+    // `allow` list.
+    let fetched = org_store
+        .get_group(&org_id, "member")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(fetched.entry().allow, vec!["cp:org:read"]);
 }
 
 /// `list_groups` must return groups sorted ascending by name.
@@ -167,18 +196,18 @@ async fn dynamodb_update_with_stale_etag_returns_precondition_failed() {
 /// ascending by group name after stripping the prefix — no client-side sort.
 #[tokio::test]
 async fn dynamodb_list_groups_returns_sorted() {
-    let (store, org_id) = fresh_store_with_draft_org("dg-list-sorted").await;
+    let (org_store, events, org_id) = fresh_stores_with_draft_org("dg-list-sorted").await;
 
     // Insert in non-alphabetical order
     for name in &["owner", "admin", "member"] {
         let entry = make_entry(name, &["cp:org:read"]);
-        store
-            .put_group(&org_id, validated_single(entry), None)
+        events
+            .put_group(org_id.as_str(), entry, Actor::System, None)
             .await
             .unwrap();
     }
 
-    let groups = store.list_groups(&org_id).await.unwrap();
+    let groups = org_store.list_groups(&org_id).await.unwrap();
     let names: Vec<&str> = groups.iter().map(|g| g.entry().name.as_str()).collect();
     assert_eq!(
         names,
@@ -187,37 +216,51 @@ async fn dynamodb_list_groups_returns_sorted() {
     );
 }
 
-/// DELETE with the correct etag must succeed (return `Ok(())`), and a
-/// subsequent GET must return `None`.
+/// `delete_group` on an existing group must apply, and a subsequent GET
+/// must return `None`.
 #[tokio::test]
-async fn dynamodb_delete_group_with_matching_etag_succeeds() {
-    let (store, org_id) = fresh_store_with_draft_org("dg-delete-ok").await;
+async fn dynamodb_delete_group_applies_and_removes_item() {
+    let (org_store, events, org_id) = fresh_stores_with_draft_org("dg-delete-ok").await;
 
     let entry = make_entry("admin", &["cp:org:read"]);
-    let created = store
-        .put_group(&org_id, validated_single(entry), None)
+    events
+        .put_group(org_id.as_str(), entry, Actor::System, None)
         .await
         .unwrap();
 
-    store
-        .delete_group(&org_id, "admin", created.etag().as_str())
+    let outcome = events
+        .delete_group(org_id.as_str(), "admin", Actor::System, None)
         .await
         .unwrap();
+    assert!(matches!(outcome, GroupWriteOutcome::Applied { .. }));
 
-    let fetched = store.get_group(&org_id, "admin").await.unwrap();
+    let fetched = org_store.get_group(&org_id, "admin").await.unwrap();
     assert!(fetched.is_none(), "group must be absent after DELETE");
+}
+
+/// `delete_group` on an absent group is the D6 no-op — no event appended,
+/// current revision reported unchanged.
+#[tokio::test]
+async fn dynamodb_delete_absent_group_is_noop() {
+    let (_org_store, events, org_id) = fresh_stores_with_draft_org("dg-delete-absent").await;
+
+    let outcome = events
+        .delete_group(org_id.as_str(), "admin", Actor::System, None)
+        .await
+        .unwrap();
+    assert!(matches!(outcome, GroupWriteOutcome::NoOp { .. }));
 }
 
 /// `list_inheritors` must return groups whose `inherits` list includes the
 /// target group name.
 #[tokio::test]
 async fn dynamodb_list_inheritors_finds_dependents() {
-    let (store, org_id) = fresh_store_with_draft_org("dg-inheritors").await;
+    let (org_store, events, org_id) = fresh_stores_with_draft_org("dg-inheritors").await;
 
     // Create base group "member"
     let member = make_entry("member", &["cp:org:read"]);
-    store
-        .put_group(&org_id, validated_single(member.clone()), None)
+    events
+        .put_group(org_id.as_str(), member.clone(), Actor::System, None)
         .await
         .unwrap();
 
@@ -225,8 +268,13 @@ async fn dynamodb_list_inheritors_finds_dependents() {
     let admin = make_entry_with_inherits("admin", &["cp:org:write"], &["member"]);
     let all_after = vec![member.clone(), admin.clone()];
     let validated_admin = validate_rbac_entry(admin, &all_after).unwrap();
-    store
-        .put_group(&org_id, validated_admin, None)
+    events
+        .put_group(
+            org_id.as_str(),
+            validated_admin.into_inner(),
+            Actor::System,
+            None,
+        )
         .await
         .unwrap();
 
@@ -238,14 +286,19 @@ async fn dynamodb_list_inheritors_finds_dependents() {
         owner.clone(),
     ];
     let validated_owner = validate_rbac_entry(owner, &all_after2).unwrap();
-    store
-        .put_group(&org_id, validated_owner, None)
+    events
+        .put_group(
+            org_id.as_str(),
+            validated_owner.into_inner(),
+            Actor::System,
+            None,
+        )
         .await
         .unwrap();
 
     // list_inheritors("member") must return ["admin"] only (owner does not
     // directly inherit member)
-    let mut inheritors = store.list_inheritors(&org_id, "member").await.unwrap();
+    let mut inheritors = org_store.list_inheritors(&org_id, "member").await.unwrap();
     inheritors.sort();
     assert_eq!(
         inheritors,
@@ -254,12 +307,12 @@ async fn dynamodb_list_inheritors_finds_dependents() {
     );
 
     // list_inheritors("admin") must return ["owner"]
-    let mut inheritors2 = store.list_inheritors(&org_id, "admin").await.unwrap();
+    let mut inheritors2 = org_store.list_inheritors(&org_id, "admin").await.unwrap();
     inheritors2.sort();
     assert_eq!(inheritors2, vec!["owner"]);
 
     // list_inheritors("owner") must return []
-    let no_inheritors = store.list_inheritors(&org_id, "owner").await.unwrap();
+    let no_inheritors = org_store.list_inheritors(&org_id, "owner").await.unwrap();
     assert!(
         no_inheritors.is_empty(),
         "owner has no dependents, got: {no_inheritors:?}"
@@ -277,7 +330,8 @@ async fn dynamodb_count_memberships_for_group_returns_per_user_counts() {
     let client = test_client().await;
     let table = unique_table_name();
     create_test_table(&client, &table).await;
-    let store = DynamoOrgStore::new(client.clone(), table.clone());
+    let org_store = DynamoOrgStore::new(client.clone(), table.clone());
+    let events = DynamoModelEventStore::new(client.clone(), table.clone());
 
     let now = chrono::Utc::now();
     let org_id = OrganizationId::new("dg-count-mem").unwrap();
@@ -291,8 +345,8 @@ async fn dynamodb_count_memberships_for_group_returns_per_user_counts() {
 
     // Create the group "admin"
     let entry = make_entry("admin", &["cp:org:read"]);
-    store
-        .put_group(&org_id, validated_single(entry), None)
+    events
+        .put_group(org_id.as_str(), entry, Actor::System, None)
         .await
         .unwrap();
 
@@ -321,7 +375,7 @@ async fn dynamodb_count_memberships_for_group_returns_per_user_counts() {
     // user-c is in "member" only
     seed_member("user-c", "member").await.unwrap();
 
-    let counts = store
+    let counts = org_store
         .count_memberships_for_group(&org_id, "admin")
         .await
         .unwrap();
@@ -344,25 +398,25 @@ async fn dynamodb_count_memberships_for_group_returns_per_user_counts() {
 /// an unknown name.
 #[tokio::test]
 async fn dynamodb_is_declared_group_round_trip() {
-    let (store, org_id) = fresh_store_with_draft_org("dg-is-declared").await;
+    let (org_store, events, org_id) = fresh_stores_with_draft_org("dg-is-declared").await;
 
     // Not yet declared
-    let before = store.is_declared_group(&org_id, "admin").await.unwrap();
+    let before = org_store.is_declared_group(&org_id, "admin").await.unwrap();
     assert!(!before, "group must not exist before creation");
 
     // Create it
     let entry = make_entry("admin", &["cp:org:read"]);
-    store
-        .put_group(&org_id, validated_single(entry), None)
+    events
+        .put_group(org_id.as_str(), entry, Actor::System, None)
         .await
         .unwrap();
 
     // Now declared
-    let after = store.is_declared_group(&org_id, "admin").await.unwrap();
+    let after = org_store.is_declared_group(&org_id, "admin").await.unwrap();
     assert!(after, "group must exist after creation");
 
     // Unknown name still false
-    let unknown = store
+    let unknown = org_store
         .is_declared_group(&org_id, "nonexistent")
         .await
         .unwrap();
