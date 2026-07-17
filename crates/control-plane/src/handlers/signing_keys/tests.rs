@@ -8,10 +8,38 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
+use forgeguard_core::{OrgStatus, Organization, OrganizationId};
+
 use crate::handlers::test_support::{
-    build_test_store, create_draft_org, test_app, test_app_with_principals, TEST_API_KEY,
+    build_test_store, create_draft_org, empty_in_memory_store, empty_store, test_app,
+    test_app_with_principals, TEST_API_KEY,
 };
+use crate::store::OrgStore;
 use crate::vp_client::stub::happy_stub;
+
+async fn seed_org_with_status(
+    store: &Arc<crate::store::InMemoryOrgStore>,
+    org_id: &str,
+    status: OrgStatus,
+) {
+    let id = OrganizationId::new(org_id).unwrap();
+    let org = Organization::new(id, format!("{org_id} org"), status, chrono::Utc::now());
+    store.write_through_org(org, None).await;
+}
+
+async fn post_verb(app: &axum::Router, org_id: &str, verb: &str) -> axum::response::Response {
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/organizations/{org_id}/{verb}"))
+                .header("x-api-key", TEST_API_KEY)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}
 
 async fn get_json(app: &axum::Router, uri: &str) -> (StatusCode, serde_json::Value) {
     let response = app
@@ -60,16 +88,52 @@ async fn signing_keys_unknown_org_returns_404() {
 }
 
 #[tokio::test]
-async fn signing_keys_draft_org_returns_409() {
+async fn signing_keys_still_404_for_deleted_org() {
+    let store = empty_in_memory_store();
+    seed_org_with_status(&store, "org-deleted-keys", OrgStatus::Deleted).await;
+    let app = test_app(store);
+
+    let (status, _) = get_json(&app, "/api/v1/organizations/org-deleted-keys/signing-keys").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn signing_keys_readable_for_draft_org() {
     let store = build_test_store();
     let app = test_app(Arc::clone(&store));
     let response = create_draft_org(&app, "org-draft-keys", "Draft Keys").await;
     assert_eq!(response.status(), StatusCode::CREATED);
 
     let (status, json) = get_json(&app, "/api/v1/organizations/org-draft-keys/signing-keys").await;
-    assert_eq!(status, StatusCode::CONFLICT);
-    assert_eq!(json["error"], "org_state_conflict");
-    assert_eq!(json["reason"], "draft");
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["keys"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn signing_keys_readable_for_suspended_org() {
+    let (app, _model_events) = test_app_with_principals(empty_store(), happy_stub());
+    let response = create_draft_org(&app, "org-suspended-keys", "Suspended Keys").await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    assert_eq!(
+        post_verb(&app, "org-suspended-keys", "activate")
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        post_verb(&app, "org-suspended-keys", "suspend")
+            .await
+            .status(),
+        StatusCode::OK
+    );
+
+    let (status, json) = get_json(
+        &app,
+        "/api/v1/organizations/org-suspended-keys/signing-keys",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["keys"].as_array().unwrap().len(), 1);
 }
 
 /// End-to-end external verification through the HTTP surface only (D8, the

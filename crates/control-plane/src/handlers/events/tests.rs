@@ -9,7 +9,24 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
-use crate::handlers::test_support::{build_test_store, test_app, TEST_API_KEY};
+use forgeguard_core::{OrgStatus, Organization, OrganizationId};
+
+use crate::handlers::test_support::{
+    build_test_store, create_draft_org, empty_in_memory_store, empty_store, test_app,
+    test_app_with_principals, TEST_API_KEY,
+};
+use crate::store::OrgStore;
+use crate::vp_client::stub::happy_stub;
+
+async fn seed_org_with_status(
+    store: &std::sync::Arc<crate::store::InMemoryOrgStore>,
+    org_id: &str,
+    status: OrgStatus,
+) {
+    let id = OrganizationId::new(org_id).unwrap();
+    let org = Organization::new(id, format!("{org_id} org"), status, chrono::Utc::now());
+    store.write_through_org(org, None).await;
+}
 
 const ORG: &str = "org-acme";
 
@@ -307,6 +324,86 @@ async fn missing_org_returns_404() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn events_still_404_for_deleted_org() {
+    let store = empty_in_memory_store();
+    seed_org_with_status(&store, "org-deleted-events", OrgStatus::Deleted).await;
+    let app = test_app(store);
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/v1/organizations/org-deleted-events/events")
+                .header("x-api-key", TEST_API_KEY)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn events_readable_for_draft_org() {
+    let app = test_app(build_test_store());
+    let response = create_draft_org(&app, "org-draft-events", "Draft Events").await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/v1/organizations/org-draft-events/events")
+                .header("x-api-key", TEST_API_KEY)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp).await;
+    assert_eq!(json["events"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn events_readable_for_suspended_org() {
+    let (app, _model_events) = test_app_with_principals(empty_store(), happy_stub());
+    let response = create_draft_org(&app, "org-suspended-events", "Suspended Events").await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    for verb in ["activate", "suspend"] {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/organizations/org-suspended-events/{verb}"))
+                    .header("x-api-key", TEST_API_KEY)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/v1/organizations/org-suspended-events/events")
+                .header("x-api-key", TEST_API_KEY)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
 }
 
 #[tokio::test]

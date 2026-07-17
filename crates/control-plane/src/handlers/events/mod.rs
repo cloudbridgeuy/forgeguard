@@ -95,7 +95,7 @@ async fn watch_for_events(
 ///
 /// Flow:
 /// 1. Parse `wait` and `X-Fg-Min-Revision`; malformed values -> `400`.
-/// 2. Org existence/Active-state check, mirroring the Task 7 handler.
+/// 2. Org existence/non-Deleted check (D10).
 /// 3. Min-revision guard: behind -> `412` (before any wait).
 /// 4. Clamp `limit`, read the page; empty page + `wait=1` -> watch loop.
 /// 5. Read latest revision, respond.
@@ -129,12 +129,8 @@ pub(crate) async fn list_events_handler<V: VpClient + 'static>(
         return crate::handlers::not_found();
     };
     match state.store.get(&org_id).await {
-        Ok(Some(record)) => match record.org().status() {
-            OrgStatus::Active => {}
-            OrgStatus::Deleted => return crate::handlers::not_found(),
-            status => return state_conflict(status),
-        },
-        Ok(None) => return crate::handlers::not_found(),
+        Ok(Some(record)) if record.org().status() != OrgStatus::Deleted => {}
+        Ok(_) => return crate::handlers::not_found(),
         Err(e) => {
             tracing::error!(org_id = %raw_org_id, error = %e, "list_events: org lookup failed");
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
@@ -213,26 +209,6 @@ pub(crate) async fn list_events_handler<V: VpClient + 'static>(
             "next_after": next_after,
             "revision": revision.value(),
         })),
-    )
-        .into_response()
-}
-
-/// 409 response for non-`Active`, non-`Deleted` org statuses (Draft,
-/// Suspended, Deleting). Mirrors `state_conflict` in the principals/users/
-/// user_schema handlers but kept local per that same convention.
-fn state_conflict(status: OrgStatus) -> Response {
-    use serde::Serialize;
-    #[derive(Serialize)]
-    struct Body {
-        error: &'static str,
-        reason: String,
-    }
-    (
-        StatusCode::CONFLICT,
-        Json(Body {
-            error: "org_state_conflict",
-            reason: status.to_string(),
-        }),
     )
         .into_response()
 }

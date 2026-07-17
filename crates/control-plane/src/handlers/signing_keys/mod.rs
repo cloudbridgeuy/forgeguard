@@ -34,14 +34,15 @@ struct ListSigningKeysResponse {
 /// `GET /api/v1/organizations/{org_id}/signing-keys`
 ///
 /// `200` + `{"keys":[{"key_id","public_key"}]}` (empty list if no model
-/// event has ever been appended); `404` unknown/deleted org; `409` non-active.
-/// No revision header — keys are not event-log state.
+/// event has ever been appended); `404` unknown/deleted org (D10: any
+/// non-`Deleted` status is readable). No revision header — keys are not
+/// event-log state.
 #[tracing::instrument(name = "list_signing_keys", skip_all, fields(org_id = %raw_org_id))]
 pub(crate) async fn list_signing_keys_handler<V: VpClient + 'static>(
     Path(raw_org_id): Path<String>,
     State(state): State<AppState<V>>,
 ) -> Response {
-    if let Err(resp) = require_active_org(&state, &raw_org_id).await {
+    if let Err(resp) = require_not_deleted_org(&state, &raw_org_id).await {
         return resp;
     }
 
@@ -63,10 +64,9 @@ pub(crate) async fn list_signing_keys_handler<V: VpClient + 'static>(
     }
 }
 
-/// Org existence + `Active` gate — same contract as the promotions module's
-/// local helper (404 unknown/deleted, 409 otherwise-non-active, 500 on store
-/// error).
-async fn require_active_org<V: VpClient + 'static>(
+/// Org existence + non-`Deleted` gate (D10) — 404 unknown/deleted, 500 on
+/// store error. Draft/Active/Suspended/Deleting are all readable.
+async fn require_not_deleted_org<V: VpClient + 'static>(
     state: &AppState<V>,
     raw_org_id: &str,
 ) -> Result<(), Response> {
@@ -74,35 +74,13 @@ async fn require_active_org<V: VpClient + 'static>(
         return Err(crate::handlers::not_found());
     };
     match state.store.get(&org_id).await {
-        Ok(Some(record)) => match record.org().status() {
-            OrgStatus::Active => Ok(()),
-            OrgStatus::Deleted => Err(crate::handlers::not_found()),
-            status => Err(state_conflict(status)),
-        },
-        Ok(None) => Err(crate::handlers::not_found()),
+        Ok(Some(record)) if record.org().status() != OrgStatus::Deleted => Ok(()),
+        Ok(_) => Err(crate::handlers::not_found()),
         Err(e) => {
             tracing::error!(org_id = %raw_org_id, error = %e, "list_signing_keys: org lookup failed");
             Err(StatusCode::INTERNAL_SERVER_ERROR.into_response())
         }
     }
-}
-
-/// 409 for non-`Active`, non-`Deleted` statuses. Local per module convention
-/// (mirrors the promotions module's helper of the same name).
-fn state_conflict(status: OrgStatus) -> Response {
-    #[derive(Serialize)]
-    struct Body {
-        error: &'static str,
-        reason: String,
-    }
-    (
-        StatusCode::CONFLICT,
-        Json(Body {
-            error: "org_state_conflict",
-            reason: status.to_string(),
-        }),
-    )
-        .into_response()
 }
 
 #[cfg(test)]
