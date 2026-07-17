@@ -41,6 +41,10 @@ pub enum EventKind {
     OrgKeyRevoked,
     /// A request-signing key was rotated.
     OrgKeyRotated,
+    /// A group was created or updated.
+    GroupPut,
+    /// A group was deleted.
+    GroupDeleted,
 }
 
 impl EventKind {
@@ -64,6 +68,8 @@ impl EventKind {
             Self::OrgKeyGenerated => "org.key_generated",
             Self::OrgKeyRevoked => "org.key_revoked",
             Self::OrgKeyRotated => "org.key_rotated",
+            Self::GroupPut => "group.put",
+            Self::GroupDeleted => "group.deleted",
         }
     }
 
@@ -71,6 +77,10 @@ impl EventKind {
     ///
     /// `OrgUnitPut` returns `false`: re-parent narrowing detection (whether
     /// moving an org unit could narrow inherited grants) is out of V1 scope.
+    ///
+    /// `GroupPut` is conservatively narrowing: a put may remove entries from
+    /// `allow`, and kind-level `narrowing()` cannot inspect payloads, so any
+    /// group change is treated as potentially narrowing for cache invalidation.
     pub fn narrowing(&self) -> bool {
         matches!(
             self,
@@ -79,6 +89,8 @@ impl EventKind {
                 | Self::DenyCreated
                 | Self::OrgSuspended
                 | Self::OrgKeyRevoked
+                | Self::GroupPut
+                | Self::GroupDeleted
         )
     }
 }
@@ -111,6 +123,8 @@ impl FromStr for EventKind {
             "org.key_generated" => Ok(Self::OrgKeyGenerated),
             "org.key_revoked" => Ok(Self::OrgKeyRevoked),
             "org.key_rotated" => Ok(Self::OrgKeyRotated),
+            "group.put" => Ok(Self::GroupPut),
+            "group.deleted" => Ok(Self::GroupDeleted),
             other => Err(Error::UnknownEventKind {
                 kind: other.to_string(),
             }),
@@ -123,7 +137,7 @@ impl FromStr for EventKind {
 mod tests {
     use super::*;
 
-    const ALL_KINDS: [EventKind; 17] = [
+    const ALL_KINDS: [EventKind; 19] = [
         EventKind::OrgCreated,
         EventKind::OrgUpdated,
         EventKind::OrgUnitPut,
@@ -141,6 +155,8 @@ mod tests {
         EventKind::OrgKeyGenerated,
         EventKind::OrgKeyRevoked,
         EventKind::OrgKeyRotated,
+        EventKind::GroupPut,
+        EventKind::GroupDeleted,
     ];
 
     #[test]
@@ -171,6 +187,8 @@ mod tests {
         assert!(!EventKind::OrgKeyGenerated.narrowing());
         assert!(EventKind::OrgKeyRevoked.narrowing());
         assert!(!EventKind::OrgKeyRotated.narrowing());
+        assert!(EventKind::GroupPut.narrowing());
+        assert!(EventKind::GroupDeleted.narrowing());
     }
 
     #[test]
