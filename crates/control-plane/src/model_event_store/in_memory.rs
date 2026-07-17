@@ -5,10 +5,12 @@
 use std::sync::Arc;
 
 use super::{
-    async_trait, build_model_event, encode_verifying_key_pem, org_payload, principal_event_payload,
-    promotion_event_payload, promotion_fgrn, Actor, BuildModelEventParams, Error, EventEnvelope,
-    EventKind, EventLog, EventSigningKey, HashMap, InMemoryEventLog, ModelEventStore, Mutex,
-    NativeId, OrgRecord, PromotionEntry, Result, Revision, Segment, SigningKey, IN_MEMORY_KEY_ID,
+    async_trait, build_model_event, encode_verifying_key_pem, generate_key_material,
+    generate_key_transition, key_event_payload, org_payload, principal_event_payload,
+    promotion_event_payload, promotion_fgrn, revoke_key_transition, rotate_key_transition, Actor,
+    BuildModelEventParams, Error, EventEnvelope, EventKind, EventLog, EventSigningKey,
+    GenerateKeyResult, HashMap, InMemoryEventLog, ModelEventStore, Mutex, NativeId, OrgRecord,
+    PromotionEntry, Result, Revision, Segment, SigningKey, SigningKeyEntry, IN_MEMORY_KEY_ID,
     IN_MEMORY_SEED,
 };
 use crate::store::OrgStore;
@@ -33,6 +35,12 @@ pub(crate) struct InMemoryModelEventStore {
     promotions: Mutex<HashMap<(String, String, String), String>>,
     /// `org_id -> OrgRecord`, the org-domain analogue of `principals`.
     orgs: Mutex<HashMap<String, OrgRecord>>,
+    /// `org_id -> signing_keys`, mirrors the DynamoDB META item's
+    /// `signing_keys` attribute for `generate_org_key`/`revoke_org_key`/
+    /// `rotate_org_key`. No HTTP route calls those in Task 4 — wired in
+    /// Task 5, hence `dead_code`, same precedent as `put_promotion`.
+    #[allow(dead_code)]
+    signing_keys: Mutex<HashMap<String, Vec<SigningKeyEntry>>>,
     /// Write-through target for `create_org`/`update_org`.
     ///
     /// In production, `DynamoOrgStore` and `DynamoModelEventStore` share one
@@ -58,6 +66,7 @@ impl InMemoryModelEventStore {
             signing_key: SigningKey::from_bytes(&IN_MEMORY_SEED),
             promotions: Mutex::new(HashMap::new()),
             orgs: Mutex::new(HashMap::new()),
+            signing_keys: Mutex::new(HashMap::new()),
             org_store: None,
         }
     }
@@ -157,6 +166,59 @@ impl InMemoryModelEventStore {
         let mut guard = self.orgs.lock().map_err(|e| lock_poisoned("org", e))?;
         guard.insert(org_id, record);
         Ok(revision)
+    }
+
+    /// Shared by `generate_org_key`/`revoke_org_key`/`rotate_org_key`: read
+    /// the org's current `signing_keys`, run the pure `transition`, and
+    /// mint+push `kind` + update the read-model. `transition` returning
+    /// `Ok(None)` is the D6 no-op — nothing is pushed. Not atomic with a
+    /// concurrent mutation of the same org's keys — acceptable for a test
+    /// double, same caveat as `append_org_state`.
+    ///
+    /// No HTTP route calls this in Task 4 — wired in Task 5, hence
+    /// `dead_code`, same precedent as `put_promotion`.
+    #[allow(dead_code)]
+    async fn append_org_keys(
+        &self,
+        org_id: &str,
+        kind: EventKind,
+        actor: Actor,
+        transition: impl FnOnce(Vec<SigningKeyEntry>) -> Result<Option<(String, Vec<SigningKeyEntry>)>>,
+    ) -> Result<Option<Revision>> {
+        {
+            let guard = self.orgs.lock().map_err(|e| lock_poisoned("org", e))?;
+            if !guard.contains_key(org_id) {
+                return Err(Error::NotFound(format!(
+                    "organization '{org_id}' not found"
+                )));
+            }
+        }
+
+        let existing_keys = {
+            let guard = self
+                .signing_keys
+                .lock()
+                .map_err(|e| lock_poisoned("signing keys", e))?;
+            guard.get(org_id).cloned().unwrap_or_default()
+        };
+
+        let Some((affected_key_id, new_keys)) = transition(existing_keys)? else {
+            return Ok(None);
+        };
+
+        let payload = key_event_payload(
+            &affected_key_id,
+            &serde_json::to_value(&new_keys)
+                .map_err(|e| Error::Store(format!("serialize signing_keys: {e}")))?,
+        );
+        let revision = self.mint_and_push(org_id, kind, actor, payload).await?;
+
+        let mut guard = self
+            .signing_keys
+            .lock()
+            .map_err(|e| lock_poisoned("signing keys", e))?;
+        guard.insert(org_id.to_string(), new_keys);
+        Ok(Some(revision))
     }
 }
 
@@ -411,5 +473,60 @@ impl ModelEventStore for InMemoryModelEventStore {
         );
         self.append_org_state(record, kind, actor, Some(expected_revision))
             .await
+    }
+
+    async fn generate_org_key(&self, org_id: &str, actor: Actor) -> Result<GenerateKeyResult> {
+        let result = generate_key_material()?;
+        let new_entry = result.to_entry()?;
+        let key_id = result.key_id().to_string();
+
+        let outcome = self
+            .append_org_keys(
+                org_id,
+                EventKind::OrgKeyGenerated,
+                actor,
+                generate_key_transition(new_entry, key_id),
+            )
+            .await?;
+        debug_assert!(outcome.is_some(), "generate_org_key never no-ops");
+
+        Ok(result)
+    }
+
+    async fn revoke_org_key(
+        &self,
+        org_id: &str,
+        key_id: &str,
+        actor: Actor,
+    ) -> Result<Option<Revision>> {
+        self.append_org_keys(
+            org_id,
+            EventKind::OrgKeyRevoked,
+            actor,
+            revoke_key_transition(key_id.to_string()),
+        )
+        .await
+    }
+
+    async fn rotate_org_key(
+        &self,
+        org_id: &str,
+        key_id: &str,
+        actor: Actor,
+    ) -> Result<GenerateKeyResult> {
+        let result = generate_key_material()?;
+        let new_entry = result.to_entry()?;
+        let now = chrono::Utc::now();
+        let grace = chrono::Duration::hours(crate::signing_key::ROTATION_GRACE_HOURS);
+
+        self.append_org_keys(
+            org_id,
+            EventKind::OrgKeyRotated,
+            actor,
+            rotate_key_transition(key_id.to_string(), new_entry, now, grace),
+        )
+        .await?;
+
+        Ok(result)
     }
 }

@@ -11,20 +11,17 @@ use std::sync::Mutex;
 
 use async_trait::async_trait;
 use aws_sdk_dynamodb::types::AttributeValue;
-use ed25519_dalek::pkcs8::spki::der::pem::LineEnding;
-use ed25519_dalek::pkcs8::{DecodePrivateKey as _, EncodePublicKey as _};
-use forgeguard_authn_core::signing::{sign_bytes, SigningKey};
+use forgeguard_authn_core::signing::SigningKey;
 use forgeguard_authz_core::{
-    canonical_event_bytes, fold_events, org_event_payload, principal_event_payload, Actor,
-    EventDraft, EventDraftParams, EventEnvelope, EventId, EventKind, EventLog, FoldedState,
-    InMemoryEventLog, Revision,
+    fold_events, key_event_payload, principal_event_payload, Actor, EventEnvelope, EventKind,
+    EventLog, FoldedState, InMemoryEventLog, Revision,
 };
 use forgeguard_core::NativeId;
 
 use forgeguard_core::Segment;
 
 use crate::dynamo_store::{
-    get_s, map_sdk_error, pk, signing_keys_from_item, sk, to_item, ORG_PREFIX, SK_META,
+    from_item, get_s, map_sdk_error, pk, signing_keys_from_item, sk, to_item, ORG_PREFIX, SK_META,
 };
 use crate::error::{Error, Result};
 use crate::event_log::{DynamoEventLog, StateDelete, StateGuard, StatePut};
@@ -32,9 +29,17 @@ use crate::promotion_store::{
     promotion_event_payload, promotion_fgrn, promotion_sk, promotion_state_put, PromotionEntry,
     PromotionStatePutParams, PROMO_PREFIX,
 };
-use crate::store::OrgRecord;
+use crate::signing_key::{GenerateKeyResult, SigningKeyEntry};
+use crate::store::{generate_key_material, OrgRecord};
 
-const PRINCIPAL_PREFIX: &str = "PRINCIPAL#";
+mod support;
+use support::{
+    build_model_event, encode_verifying_key_pem, generate_key_transition, get_raw_org_item,
+    org_payload, public_pem_from_private, revoke_key_transition, rotate_key_transition,
+    BuildModelEventParams,
+};
+pub(crate) use support::{get_principal, principal_state_put, EventSigningKey};
+
 const SK_EVENT_SIGNING_KEY: &str = "EVENT_SIGNING_KEY";
 const EVENT_SIGNING_KEY_ID: &str = "event-signing-key-1";
 /// Fixed Ed25519 seed for `InMemoryModelEventStore`'s signing key — kept
@@ -44,108 +49,11 @@ const IN_MEMORY_SEED: [u8; 32] = [7u8; 32];
 const IN_MEMORY_KEY_ID: &str = "in-memory-test-key";
 /// Page size for `fold_at`'s log replay.
 const FOLD_PAGE_SIZE: usize = 100;
-
-/// Build the `StatePut` for a principal's current payload.
-///
-/// `PK=ORG#{org_id}, SK=PRINCIPAL#{native_id}`, carrying `payload` (the exact
-/// canonical bytes, as a UTF-8 string) and `updated_at` (RFC3339, minted by
-/// the caller — this function stays a pure mapping).
-pub(crate) fn principal_state_put(
-    org_id: &str,
-    native_id: &NativeId,
-    payload_bytes: &[u8],
-    updated_at: &str,
-) -> Result<StatePut> {
-    let payload = std::str::from_utf8(payload_bytes)
-        .map_err(|e| Error::Store(format!("principal payload is not valid UTF-8: {e}")))?;
-    serde_json::from_str::<serde_json::Value>(payload)
-        .map_err(|e| Error::Store(format!("principal payload is not valid JSON: {e}")))?;
-
-    let mut attributes = HashMap::new();
-    attributes.insert(
-        "payload".to_string(),
-        AttributeValue::S(payload.to_string()),
-    );
-    attributes.insert(
-        "updated_at".to_string(),
-        AttributeValue::S(updated_at.to_string()),
-    );
-
-    Ok(StatePut {
-        pk: format!("{ORG_PREFIX}{org_id}"),
-        sk: format!("{PRINCIPAL_PREFIX}{native_id}"),
-        attributes,
-        guard: StateGuard::None,
-    })
-}
-
-/// Strongly-consistent read of a principal's current payload.
-///
-/// Must be consistent, not eventually-consistent: `decide_upsert` compares
-/// against this value, and a stale replica-lagged read could produce a
-/// spurious `NoOp` or a spurious `Changed` (D6).
-pub(crate) async fn get_principal(
-    client: &aws_sdk_dynamodb::Client,
-    table_name: &str,
-    org_id: &str,
-    native_id: &NativeId,
-) -> Result<Option<serde_json::Value>> {
-    let result = client
-        .get_item()
-        .table_name(table_name)
-        .key(pk(), AttributeValue::S(format!("{ORG_PREFIX}{org_id}")))
-        .key(
-            sk(),
-            AttributeValue::S(format!("{PRINCIPAL_PREFIX}{native_id}")),
-        )
-        .consistent_read(true)
-        .send()
-        .await
-        .map_err(map_sdk_error)?;
-
-    let Some(item) = result.item else {
-        return Ok(None);
-    };
-    let payload = get_s(&item, "payload")?;
-    serde_json::from_str(&payload)
-        .map_err(|e| Error::Store(format!("deserialize principal payload: {e}")))
-        .map(Some)
-}
-
-/// Strongly-consistent read of an org's raw state item, or `None` if absent.
-///
-/// Mirrors `DynamoOrgStore::get_raw_item`, duplicated here (rather than
-/// shared) because that method lives on a different struct with no shared
-/// base — both are thin wrappers around the same `GetItem` call.
-async fn get_raw_org_item(
-    client: &aws_sdk_dynamodb::Client,
-    table_name: &str,
-    org_id: &str,
-) -> Result<Option<HashMap<String, AttributeValue>>> {
-    let result = client
-        .get_item()
-        .table_name(table_name)
-        .key(pk(), AttributeValue::S(format!("{ORG_PREFIX}{org_id}")))
-        .key(sk(), AttributeValue::S(SK_META.to_string()))
-        .consistent_read(true)
-        .send()
-        .await
-        .map_err(map_sdk_error)?;
-    Ok(result.item)
-}
-
-/// Build the D3/D4 event payload for an org mutation: `{"organization",
-/// "config"}`, full post-mutation state.
-fn org_payload(record: &OrgRecord) -> Result<serde_json::Value> {
-    let organization = serde_json::to_value(record.org())
-        .map_err(|e| Error::Store(format!("serialize organization: {e}")))?;
-    let config = record
-        .config()
-        .map(serde_json::to_value)
-        .transpose()
-        .map_err(|e| Error::Store(format!("serialize org config: {e}")))?;
-    Ok(org_event_payload(&organization, config.as_ref()))
-}
+/// Retry budget for `append_org_keys`' internal revision-mismatch loop.
+/// No HTTP route calls `append_org_keys` in Task 4 — wired in Task 5, hence
+/// `dead_code`, same precedent as `put_promotion`.
+#[allow(dead_code)]
+const MAX_KEY_APPEND_ATTEMPTS: u8 = 3;
 
 // ---------------------------------------------------------------------------
 // ModelEventStore — the seam `upsert_principal` (Task 7) is written against
@@ -255,6 +163,42 @@ pub(crate) trait ModelEventStore: Send + Sync {
     /// D8). Empty if no model event has ever been appended (no key minted).
     async fn list_signing_keys(&self, org_id: &str) -> Result<Vec<EventSigningKey>>;
 
+    /// Generate a new request-signing key, append `org.key_generated`
+    /// (public half only) + the org's new `signing_keys` list in one
+    /// transaction, and return the material (including the private half,
+    /// returned once and never persisted in the event payload). No HTTP
+    /// route calls this in Task 4 — wired in Task 5, hence `dead_code`, same
+    /// precedent as `put_promotion`.
+    #[allow(dead_code)]
+    async fn generate_org_key(&self, org_id: &str, actor: Actor) -> Result<GenerateKeyResult>;
+
+    /// Revoke a request-signing key and append `org.key_revoked` (narrowing)
+    /// + the org's new `signing_keys` list in one transaction. `None` is the
+    /// D6 no-op: `key_id` absent or already revoked — nothing is appended.
+    /// No HTTP route calls this in Task 4 — wired in Task 5, hence
+    /// `dead_code`, same precedent as `put_promotion`.
+    #[allow(dead_code)]
+    async fn revoke_org_key(
+        &self,
+        org_id: &str,
+        key_id: &str,
+        actor: Actor,
+    ) -> Result<Option<Revision>>;
+
+    /// Rotate a request-signing key (target moves to `Rotating` with a grace
+    /// window, a new `Active` entry is appended) and append `org.key_rotated`
+    /// + the org's new `signing_keys` list in one transaction. Errors
+    /// (`NotFound`/`Conflict`) propagate without appending. No HTTP route
+    /// calls this in Task 4 — wired in Task 5, hence `dead_code`, same
+    /// precedent as `put_promotion`.
+    #[allow(dead_code)]
+    async fn rotate_org_key(
+        &self,
+        org_id: &str,
+        key_id: &str,
+        actor: Actor,
+    ) -> Result<GenerateKeyResult>;
+
     /// Append an `org.created` event + the org's initial state item in one
     /// transaction. `Err(Error::Conflict)` if the org already exists (#113 V1).
     async fn create_org(&self, record: OrgRecord, actor: Actor) -> Result<Revision>;
@@ -320,85 +264,6 @@ pub(crate) trait ModelEventStore: Send + Sync {
 
         fold_events(&events, target).map_err(|e| Error::Store(e.to_string()))
     }
-}
-
-/// A published event-signing public key: `key_id` + SPKI public PEM.
-/// The private half never leaves the store.
-pub(crate) struct EventSigningKey {
-    pub(crate) key_id: String,
-    pub(crate) public_key_pem: String,
-}
-
-/// Derive the SPKI public PEM from a stored PKCS#8 private PEM. Pure.
-///
-/// The `EVENT_SIGNING_KEY` item persists only the private half; the public
-/// half is derived at read time so no schema change or backfill is needed.
-fn public_pem_from_private(private_pem: &str) -> Result<String> {
-    let key = ed25519_dalek::SigningKey::from_pkcs8_pem(private_pem)
-        .map_err(|e| Error::Store(format!("stored event signing key invalid: {e}")))?;
-    encode_verifying_key_pem(&key.verifying_key())
-}
-
-/// Encode an Ed25519 verifying key as an SPKI public PEM. Pure.
-fn encode_verifying_key_pem(key: &ed25519_dalek::VerifyingKey) -> Result<String> {
-    key.to_public_key_pem(LineEnding::LF)
-        .map_err(|e| Error::Store(format!("failed to encode public key: {e}")))
-}
-
-/// Parameters for [`build_model_event`].
-///
-/// `native_id` isn't threaded into the signed bytes — the event envelope
-/// carries no subject field of its own, since the subject's identity is
-/// already implicit in the `StatePut`/`StateDelete` key it lands alongside —
-/// so this struct carries no `native_id` field at all.
-struct BuildModelEventParams<'a> {
-    org_id: &'a str,
-    kind: EventKind,
-    actor: Actor,
-    payload: serde_json::Value,
-    signing_key: &'a SigningKey,
-    key_id: &'a str,
-    occurred_at: &'a str,
-    revision: Revision,
-}
-
-/// Build the signed `EventEnvelope` + canonical payload bytes for a model
-/// event (principal upsert, resource promotion, resource tombstone, ...) at
-/// `revision`, given an already-loaded signing key.
-fn build_model_event(
-    params: BuildModelEventParams<'_>,
-) -> (forgeguard_authz_core::EventEnvelope, Vec<u8>) {
-    let BuildModelEventParams {
-        org_id,
-        kind,
-        actor,
-        payload,
-        signing_key,
-        key_id,
-        occurred_at,
-        revision,
-    } = params;
-
-    let event_id = EventId::try_new(ulid::Ulid::new().to_string())
-        .unwrap_or_else(|_| unreachable!("ulid string is always non-empty"));
-    let draft = EventDraft::new(EventDraftParams {
-        event_id,
-        seq: revision,
-        kind,
-        occurred_at: occurred_at.to_string(),
-        actor,
-        payload: payload.clone(),
-    });
-    let payload_bytes = serde_json::to_vec(&payload).unwrap_or_default();
-    let canonical_bytes = canonical_event_bytes(&draft, org_id);
-    let signature = sign_bytes(signing_key, &canonical_bytes);
-    let signature_b64 = base64::Engine::encode(
-        &base64::engine::general_purpose::STANDARD,
-        signature.to_bytes(),
-    );
-    let envelope =
-        forgeguard_authz_core::EventEnvelope::from_signed(draft, key_id.to_string(), signature_b64);
-    (envelope, payload_bytes)
 }
 
 // ---------------------------------------------------------------------------
@@ -554,6 +419,92 @@ impl DynamoModelEventStore {
         };
 
         log.append(expected_revision, build, state).await
+    }
+
+    /// Shared body for `generate_org_key`/`revoke_org_key`/`rotate_org_key`:
+    /// read the org's current `signing_keys`, run the pure `transition`, and
+    /// append `kind` + the new `signing_keys` list in one transaction.
+    ///
+    /// `transition` returns `Ok(None)` for a semantic no-op (nothing to
+    /// append, D6), `Ok(Some((affected_key_id, new_keys)))` to append, or
+    /// `Err(_)` to fail without appending.
+    ///
+    /// No HTTP route calls this in Task 4 — wired in Task 5, hence
+    /// `dead_code`, same precedent as `put_promotion`.
+    ///
+    /// Unlike `append_org_state`, callers here never supply an
+    /// `expected_revision` precondition of their own — the log's revision is
+    /// an internal concurrency-control detail, not part of the key-mutation
+    /// contract — so this loops on `Error::RevisionMismatch` internally
+    /// (up to `MAX_KEY_APPEND_ATTEMPTS`) instead of surfacing the race to
+    /// the caller.
+    #[allow(dead_code)]
+    async fn append_org_keys(
+        &self,
+        org_id: &str,
+        kind: EventKind,
+        actor: Actor,
+        transition: impl Fn(Vec<SigningKeyEntry>) -> Result<Option<(String, Vec<SigningKeyEntry>)>>,
+    ) -> Result<Option<Revision>> {
+        for _ in 0..MAX_KEY_APPEND_ATTEMPTS {
+            let item = get_raw_org_item(&self.client, &self.table_name, org_id)
+                .await?
+                .ok_or_else(|| Error::NotFound(format!("organization '{org_id}' not found")))?;
+            let record = from_item(&item)?;
+            let existing_keys = signing_keys_from_item(&item)?;
+
+            let Some((affected_key_id, new_keys)) = transition(existing_keys)? else {
+                return Ok(None);
+            };
+
+            let (signing_key, key_id) = self.ensure_signing_key(org_id).await?;
+            let occurred_at = chrono::Utc::now().to_rfc3339();
+            let log = DynamoEventLog::new(self.client.clone(), self.table_name.clone(), org_id);
+
+            let payload = key_event_payload(
+                &affected_key_id,
+                &serde_json::to_value(&new_keys)
+                    .map_err(|e| Error::Store(format!("serialize signing_keys: {e}")))?,
+            );
+
+            let mut attributes = to_item(record.org(), record.configured(), &new_keys)?;
+            attributes.remove(pk());
+            attributes.remove(sk());
+            let state = StatePut {
+                pk: format!("{ORG_PREFIX}{org_id}"),
+                sk: SK_META.to_string(),
+                attributes,
+                guard: StateGuard::None,
+            };
+
+            let org_id_owned = org_id.to_string();
+            let payload_for_event = payload.clone();
+            let actor_for_event = actor.clone();
+            let build = move |revision: Revision| {
+                build_model_event(BuildModelEventParams {
+                    org_id: &org_id_owned,
+                    kind,
+                    actor: actor_for_event.clone(),
+                    payload: payload_for_event.clone(),
+                    signing_key: &signing_key,
+                    key_id: &key_id,
+                    occurred_at: &occurred_at,
+                    revision,
+                })
+            };
+
+            let expected = EventLog::latest_revision(&log)
+                .await
+                .map_err(|e| Error::Store(e.to_string()))?;
+            match log.append(Some(expected), build, state).await {
+                Ok(revision) => return Ok(Some(revision)),
+                Err(Error::RevisionMismatch { .. }) => continue,
+                Err(e) => return Err(e),
+            }
+        }
+        Err(Error::Store(format!(
+            "org '{org_id}' key mutation did not converge after {MAX_KEY_APPEND_ATTEMPTS} attempts"
+        )))
     }
 }
 
@@ -828,6 +779,63 @@ impl ModelEventStore for DynamoModelEventStore {
         self.append_org_state(record, kind, actor, Some(expected_revision))
             .await
     }
+
+    async fn generate_org_key(&self, org_id: &str, actor: Actor) -> Result<GenerateKeyResult> {
+        // `ThreadRng` is not `Send` — generate before any `.await`.
+        let result = generate_key_material()?;
+        let new_entry = result.to_entry()?;
+        let key_id = result.key_id().to_string();
+
+        let outcome = self
+            .append_org_keys(
+                org_id,
+                EventKind::OrgKeyGenerated,
+                actor,
+                generate_key_transition(new_entry, key_id),
+            )
+            .await?;
+        debug_assert!(outcome.is_some(), "generate_org_key never no-ops");
+
+        Ok(result)
+    }
+
+    async fn revoke_org_key(
+        &self,
+        org_id: &str,
+        key_id: &str,
+        actor: Actor,
+    ) -> Result<Option<Revision>> {
+        self.append_org_keys(
+            org_id,
+            EventKind::OrgKeyRevoked,
+            actor,
+            revoke_key_transition(key_id.to_string()),
+        )
+        .await
+    }
+
+    async fn rotate_org_key(
+        &self,
+        org_id: &str,
+        key_id: &str,
+        actor: Actor,
+    ) -> Result<GenerateKeyResult> {
+        // `ThreadRng` is not `Send` — generate before any `.await`.
+        let result = generate_key_material()?;
+        let new_entry = result.to_entry()?;
+        let now = chrono::Utc::now();
+        let grace = chrono::Duration::hours(crate::signing_key::ROTATION_GRACE_HOURS);
+
+        self.append_org_keys(
+            org_id,
+            EventKind::OrgKeyRotated,
+            actor,
+            rotate_key_transition(key_id.to_string(), new_entry, now, grace),
+        )
+        .await?;
+
+        Ok(result)
+    }
 }
 
 mod in_memory;
@@ -839,29 +847,3 @@ mod in_memory_tests;
 #[cfg(test)]
 #[cfg(feature = "dynamodb-tests")]
 mod dynamo_tests;
-
-#[cfg(test)]
-mod tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used)]
-
-    use super::{public_pem_from_private, LineEnding};
-    use ed25519_dalek::pkcs8::spki::DecodePublicKey as _;
-    use ed25519_dalek::pkcs8::EncodePrivateKey as _;
-
-    #[test]
-    fn public_pem_from_private_rejects_garbage() {
-        let result = public_pem_from_private("garbage");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn public_pem_from_private_round_trips_known_good_key() {
-        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
-        let private_pem = signing_key.to_pkcs8_pem(LineEnding::LF).unwrap();
-
-        let public_pem = public_pem_from_private(&private_pem).unwrap();
-
-        let derived = ed25519_dalek::VerifyingKey::from_public_key_pem(&public_pem).unwrap();
-        assert_eq!(derived, signing_key.verifying_key());
-    }
-}

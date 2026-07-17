@@ -209,7 +209,7 @@ pub(crate) fn to_item(
 ///
 /// `config` and `etag` are read as a pair: both present (Configured) or both
 /// absent (Draft). Asymmetric presence is an integrity error.
-fn from_item(item: &HashMap<String, AttributeValue>) -> Result<OrgRecord> {
+pub(crate) fn from_item(item: &HashMap<String, AttributeValue>) -> Result<OrgRecord> {
     let pk = get_s(item, pk())?;
     let org_id_str = pk
         .strip_prefix(ORG_PREFIX)

@@ -446,3 +446,133 @@ async fn suspend_event_is_narrowing() {
     assert_eq!(last.kind().as_str(), "org.suspended");
     assert!(last.kind().narrowing());
 }
+
+#[tokio::test]
+async fn generate_org_key_appends_event_with_public_half_only() {
+    let store = InMemoryModelEventStore::new();
+    store
+        .create_org(org_record("acme", "Acme Inc"), Actor::System)
+        .await
+        .unwrap();
+
+    let result = store.generate_org_key("acme", Actor::System).await.unwrap();
+
+    let events = store
+        .events_after("acme", Revision::new(0), 10)
+        .await
+        .unwrap();
+    let last = events.last().unwrap();
+    assert_eq!(last.kind().as_str(), "org.key_generated");
+    assert_eq!(last.payload()["key_id"], result.key_id());
+    let keys = last.payload()["keys"].as_array().unwrap();
+    assert_eq!(keys.len(), 1);
+    assert_eq!(keys[0]["key_id"], result.key_id());
+    assert_eq!(keys[0]["public_key_pem"], result.public_key_pem());
+    assert!(keys[0].get("private_key_pem").is_none());
+}
+
+#[tokio::test]
+async fn revoke_org_key_is_narrowing_and_updates_list() {
+    let store = InMemoryModelEventStore::new();
+    store
+        .create_org(org_record("acme", "Acme Inc"), Actor::System)
+        .await
+        .unwrap();
+    let generated = store.generate_org_key("acme", Actor::System).await.unwrap();
+
+    let revision = store
+        .revoke_org_key("acme", generated.key_id(), Actor::System)
+        .await
+        .unwrap();
+    assert_eq!(revision, Some(Revision::new(3)));
+
+    let events = store
+        .events_after("acme", Revision::new(0), 10)
+        .await
+        .unwrap();
+    let last = events.last().unwrap();
+    assert_eq!(last.kind().as_str(), "org.key_revoked");
+    assert!(last.kind().narrowing());
+    let keys = last.payload()["keys"].as_array().unwrap();
+    assert_eq!(keys.len(), 1);
+    assert_eq!(keys[0]["status"]["status"], "Revoked");
+}
+
+#[tokio::test]
+async fn revoke_absent_key_is_noop_no_event() {
+    let store = InMemoryModelEventStore::new();
+    store
+        .create_org(org_record("acme", "Acme Inc"), Actor::System)
+        .await
+        .unwrap();
+
+    let revision = store
+        .revoke_org_key("acme", "key-nonexistent", Actor::System)
+        .await
+        .unwrap();
+    assert_eq!(revision, None);
+    assert_eq!(
+        store.latest_revision("acme").await.unwrap(),
+        Revision::new(1)
+    );
+}
+
+#[tokio::test]
+async fn rotate_org_key_appends_event_and_grace_window() {
+    let store = InMemoryModelEventStore::new();
+    store
+        .create_org(org_record("acme", "Acme Inc"), Actor::System)
+        .await
+        .unwrap();
+    let generated = store.generate_org_key("acme", Actor::System).await.unwrap();
+
+    let rotated = store
+        .rotate_org_key("acme", generated.key_id(), Actor::System)
+        .await
+        .unwrap();
+    assert_ne!(rotated.key_id(), generated.key_id());
+
+    let events = store
+        .events_after("acme", Revision::new(0), 10)
+        .await
+        .unwrap();
+    let last = events.last().unwrap();
+    assert_eq!(last.kind().as_str(), "org.key_rotated");
+    let keys = last.payload()["keys"].as_array().unwrap();
+    assert_eq!(keys.len(), 2);
+    let old = keys
+        .iter()
+        .find(|k| k["key_id"] == generated.key_id())
+        .unwrap();
+    assert_eq!(old["status"]["status"], "Rotating");
+    assert!(old["status"]["expires_at"].is_string());
+    let fresh = keys
+        .iter()
+        .find(|k| k["key_id"] == rotated.key_id())
+        .unwrap();
+    assert_eq!(fresh["status"]["status"], "Active");
+}
+
+#[tokio::test]
+async fn rotate_revoked_key_conflicts_no_event() {
+    let store = InMemoryModelEventStore::new();
+    store
+        .create_org(org_record("acme", "Acme Inc"), Actor::System)
+        .await
+        .unwrap();
+    let generated = store.generate_org_key("acme", Actor::System).await.unwrap();
+    store
+        .revoke_org_key("acme", generated.key_id(), Actor::System)
+        .await
+        .unwrap();
+
+    let err = store
+        .rotate_org_key("acme", generated.key_id(), Actor::System)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::Conflict(_)));
+    assert_eq!(
+        store.latest_revision("acme").await.unwrap(),
+        Revision::new(3)
+    );
+}
