@@ -67,6 +67,23 @@ pub(crate) trait OrgStore: Send + Sync {
     ) {
     }
 
+    /// Write-through hook for `InMemoryModelEventStore::{put_group, delete_group}`
+    /// (#113 V4, Task 4).
+    ///
+    /// In production, `DynamoOrgStore` and `DynamoModelEventStore` share one
+    /// DynamoDB table, so a group appended to the log is already visible via
+    /// `get_group`/`list_groups` — no write-through needed, hence the default
+    /// no-op body. `InMemoryOrgStore` overrides this to keep its separate
+    /// in-memory group read-model mirrored with the event log (dev-mode
+    /// `--store=memory` and handler tests). Unconditionally upserts: the
+    /// log's own revision check already gated the mutation before this hook
+    /// runs, same rationale as `write_through_org`.
+    async fn write_through_group(&self, _org_id: &OrganizationId, _entry: EtagedGroup) {}
+
+    /// Write-through hook for `InMemoryModelEventStore::delete_group`
+    /// (#113 V4, Task 4) — see `write_through_group` for rationale.
+    async fn write_through_group_delete(&self, _org_id: &OrganizationId, _name: &str) {}
+
     async fn list_keys(&self, org_id: &OrganizationId) -> Result<Vec<SigningKeyEntry>>;
 
     // -----------------------------------------------------------------------
@@ -329,6 +346,16 @@ impl OrgStore for InMemoryOrgStore {
     async fn list_keys(&self, org_id: &OrganizationId) -> Result<Vec<SigningKeyEntry>> {
         let guard = self.signing_keys.read().await;
         Ok(guard.get(org_id).cloned().unwrap_or_default())
+    }
+
+    async fn write_through_group(&self, org_id: &OrganizationId, entry: EtagedGroup) {
+        let mut g = self.groups.write().await;
+        g.insert((org_id.clone(), entry.entry().name.clone()), entry);
+    }
+
+    async fn write_through_group_delete(&self, org_id: &OrganizationId, name: &str) {
+        let mut g = self.groups.write().await;
+        g.remove(&(org_id.clone(), name.to_string()));
     }
 
     // -----------------------------------------------------------------------

@@ -197,7 +197,12 @@ pub(crate) fn compile_for_active(
     })
 }
 
-fn compile_one(
+/// Compile a single `RbacEntry` into its named Cedar permit.
+///
+/// Exposed at `pub(super)` so `active.rs` can recompile an individual prior
+/// entry's statement for VP compensation (#113 V4) without pulling in the
+/// dependent-walking machinery of `compile_for_active`.
+pub(super) fn compile_one(
     entry: &RbacEntry,
     vp_ctx: &VpContext,
 ) -> std::result::Result<NamedPermit, GroupValidationError> {

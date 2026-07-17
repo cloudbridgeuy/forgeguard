@@ -603,8 +603,39 @@ impl ModelEventStore for InMemoryModelEventStore {
                     .mint_and_push(org_id, EventKind::GroupPut, actor, payload)
                     .await?;
 
-                let mut guard = self.groups.lock().map_err(|e| lock_poisoned("group", e))?;
-                guard.insert(key, entry);
+                {
+                    let mut guard = self.groups.lock().map_err(|e| lock_poisoned("group", e))?;
+                    guard.insert(key, entry.clone());
+                }
+
+                // Mirror into the org read-model, same rationale as
+                // `append_org_state`'s `write_through_org` call — production
+                // shares one DynamoDB table for both stores, this double
+                // does not.
+                if let Some(org_store) = &self.org_store {
+                    if let Ok(typed_org_id) = OrganizationId::new(org_id) {
+                        match crate::store::groups::EtagedGroup::compute(entry) {
+                            Ok(etaged) => {
+                                org_store.write_through_group(&typed_org_id, etaged).await
+                            }
+                            Err(e) => {
+                                // Unreachable in practice — `entry` was
+                                // already accepted by `decide_upsert` above —
+                                // but a silent skip here would leave the
+                                // in-memory read-model stale with no signal,
+                                // same discipline as the append-path etag
+                                // failures in `handlers/groups/active.rs`.
+                                tracing::error!(
+                                    org_id = %org_id,
+                                    group = %name,
+                                    error = %e,
+                                    "put_group: etag compute failed; read-model write-through skipped",
+                                );
+                            }
+                        }
+                    }
+                }
+
                 Ok(GroupWriteOutcome::Applied { revision })
             }
         }
@@ -636,8 +667,19 @@ impl ModelEventStore for InMemoryModelEventStore {
             .mint_and_push(org_id, EventKind::GroupDeleted, actor, payload)
             .await?;
 
-        let mut guard = self.groups.lock().map_err(|e| lock_poisoned("group", e))?;
-        guard.remove(&key);
+        {
+            let mut guard = self.groups.lock().map_err(|e| lock_poisoned("group", e))?;
+            guard.remove(&key);
+        }
+
+        if let Some(org_store) = &self.org_store {
+            if let Ok(typed_org_id) = OrganizationId::new(org_id) {
+                org_store
+                    .write_through_group_delete(&typed_org_id, name)
+                    .await;
+            }
+        }
+
         Ok(GroupWriteOutcome::Applied { revision })
     }
 }

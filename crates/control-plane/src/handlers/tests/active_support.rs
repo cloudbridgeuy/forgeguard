@@ -1,15 +1,18 @@
-//! Test fixtures for the V3 Active-org write path.
+//! Test fixtures for the V4 Active-org write path (push-then-append).
 //!
 //! - `active_org_store` — seeds an `InMemoryOrgStore` with one Active org
 //!   carrying a populated `vp_store_id`. Used by every Active-branch test.
-//! - `FailingStore` — delegating wrapper over [`Arc<dyn OrgStore>`] with
-//!   one-shot failure injection on `delete_group` / `put_group`. Used by the
-//!   F3' tests to drive the rollback into `Err(rollback_err)`.
+//! - `FailingModelEventStore` — delegating wrapper over
+//!   [`Arc<dyn ModelEventStore>`] with one-shot failure injection on
+//!   `put_group`/`delete_group` (the event-sourced *append*, which now runs
+//!   AFTER the VP push — #113 V4 Task 4). Used by the F-append tests to drive
+//!   the post-push compensation path.
 //! - `test_app_for_store` — counterpart to
 //!   [`super::super::test_support::test_app_with_stub`]; accepts an arbitrary
-//!   `Arc<dyn OrgStore>` so the failure-mode tests can plug in [`FailingStore`].
+//!   `Arc<dyn OrgStore>` plus `Arc<dyn ModelEventStore>` so the failure-mode
+//!   tests can plug in [`FailingModelEventStore`].
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
@@ -21,11 +24,9 @@ use axum::http::{Request, StatusCode};
 use axum::Router;
 use forgeguard_authn_core::static_api_key::{ApiKeyEntry, StaticApiKeyResolver};
 use forgeguard_authn_core::IdentityChain;
-use forgeguard_authz_core::{PolicyDecision, PolicyEngine, StaticPolicyEngine, ValidatedRbacEntry};
+use forgeguard_authz_core::{Actor, PolicyDecision, PolicyEngine, RbacEntry, StaticPolicyEngine};
 use forgeguard_axum::{forgeguard_layer, ForgeGuard};
-use forgeguard_core::{
-    FlagConfig, GroupName, Organization, OrganizationId, ProjectId, TenantId, UserId,
-};
+use forgeguard_core::{FlagConfig, GroupName, NativeId, ProjectId, Segment, TenantId, UserId};
 use forgeguard_http::{
     DefaultPolicy, PublicAuthMode, PublicRoute, PublicRouteMatcher, RouteMatcher,
 };
@@ -33,20 +34,20 @@ use forgeguard_proxy_core::{PipelineConfig, PipelineConfigParams};
 
 use tower::ServiceExt;
 
-use forgeguard_authn_core::UserSchema;
-
-use crate::config::OrgConfig;
 use crate::error::{Error, Result};
-use crate::etag::Etag;
 use crate::handlers::test_support::TEST_API_KEY;
 use crate::handlers::AppState;
-use crate::signing_key::SigningKeyEntry;
+use crate::model_event_store::{
+    EventSigningKey, GroupWriteOutcome, InMemoryModelEventStore, ModelEventStore,
+};
+use crate::promotion_store::PromotionEntry;
+use crate::signing_key::GenerateKeyResult;
 use crate::store::{
-    build_org_store, EtagedGroup, EtagedUserSchema, InMemorySagaTicketStore, OrgRecord, OrgStore,
-    PutMembershipRowParams, SagaTicketStore,
+    build_org_store, InMemorySagaTicketStore, OrgRecord, OrgStore, SagaTicketStore,
 };
 use crate::user_pool::{InMemoryUserPoolClient, UserPoolClient};
 use crate::vp_client::stub::StubVpClient;
+use forgeguard_authz_core::{EventEnvelope, EventKind, FoldedState, Revision};
 
 /// Process-wide async lock for tests that read/assert against the global
 /// `GROUP_ROLLBACK_FAILED_TOTAL` counter. Cargo runs tests in parallel, and
@@ -82,123 +83,220 @@ pub(super) fn active_org_store(org_id: &str, vp_store_id: &str) -> Arc<dyn OrgSt
     Arc::new(build_org_store(&json).unwrap())
 }
 
-/// One-shot failure-injection wrapper over any [`OrgStore`].
+/// One-shot failure-injection wrapper over any [`ModelEventStore`].
 ///
-/// Used to drive the F3' rollback-fails branch: arm `fail_next_delete_group`
-/// (for CREATE rollback) or `fail_next_put_group` (for UPDATE/DELETE rollback)
-/// before the request, and the *first* matching call returns `Error::Store`.
-pub(super) struct FailingStore {
-    inner: Arc<dyn OrgStore>,
-    fail_delete_group_once: AtomicBool,
+/// #113 V4 Task 4 inverted the active-org write order to VP-first-then-append,
+/// so the seam that can fail *after* a successful VP push is now
+/// `ModelEventStore::{put_group, delete_group}` (the event-sourced append),
+/// not `OrgStore`'s old etag-gated writes. Used to drive the F-append
+/// compensation branch: arm `fail_next_put_group` (CREATE/UPDATE) or
+/// `fail_next_delete_group` (DELETE) before the request, and the *first*
+/// matching call returns `Error::Store`. All other methods delegate straight
+/// through to `inner`.
+pub(super) struct FailingModelEventStore {
+    inner: Arc<dyn ModelEventStore>,
     fail_put_group_once: AtomicBool,
+    fail_delete_group_once: AtomicBool,
 }
 
-impl FailingStore {
-    pub(super) fn new(inner: Arc<dyn OrgStore>) -> Self {
+impl FailingModelEventStore {
+    pub(super) fn new(inner: Arc<dyn ModelEventStore>) -> Self {
         Self {
             inner,
-            fail_delete_group_once: AtomicBool::new(false),
             fail_put_group_once: AtomicBool::new(false),
+            fail_delete_group_once: AtomicBool::new(false),
         }
-    }
-
-    pub(super) fn fail_next_delete_group(&self) {
-        self.fail_delete_group_once.store(true, Ordering::SeqCst);
     }
 
     pub(super) fn fail_next_put_group(&self) {
         self.fail_put_group_once.store(true, Ordering::SeqCst);
     }
+
+    pub(super) fn fail_next_delete_group(&self) {
+        self.fail_delete_group_once.store(true, Ordering::SeqCst);
+    }
 }
 
 #[async_trait]
-impl OrgStore for FailingStore {
-    async fn get(&self, org_id: &OrganizationId) -> Result<Option<OrgRecord>> {
-        self.inner.get(org_id).await
-    }
-    async fn list(&self, offset: usize, limit: usize) -> Result<Vec<OrgRecord>> {
-        self.inner.list(offset, limit).await
-    }
-    async fn write_through_org(&self, org: Organization, config: Option<OrgConfig>) {
-        self.inner.write_through_org(org, config).await;
-    }
-    async fn write_through_signing_keys(
+impl ModelEventStore for FailingModelEventStore {
+    async fn get_principal(
         &self,
-        org_id: &OrganizationId,
-        keys: Vec<SigningKeyEntry>,
-    ) {
-        self.inner.write_through_signing_keys(org_id, keys).await;
+        org_id: &str,
+        native_id: &NativeId,
+    ) -> Result<Option<serde_json::Value>> {
+        self.inner.get_principal(org_id, native_id).await
     }
-    async fn list_keys(&self, org_id: &OrganizationId) -> Result<Vec<SigningKeyEntry>> {
-        self.inner.list_keys(org_id).await
+    async fn latest_revision(&self, org_id: &str) -> Result<Revision> {
+        self.inner.latest_revision(org_id).await
     }
-    async fn get_group(&self, org_id: &OrganizationId, name: &str) -> Result<Option<EtagedGroup>> {
-        self.inner.get_group(org_id, name).await
+    async fn upsert_changed(
+        &self,
+        org_id: &str,
+        native_id: &NativeId,
+        actor: Actor,
+        payload: serde_json::Value,
+    ) -> Result<Revision> {
+        self.inner
+            .upsert_changed(org_id, native_id, actor, payload)
+            .await
+    }
+    async fn events_after(
+        &self,
+        org_id: &str,
+        after: Revision,
+        limit: usize,
+    ) -> Result<Vec<EventEnvelope>> {
+        self.inner.events_after(org_id, after, limit).await
+    }
+    async fn get_promotion(
+        &self,
+        org_id: &str,
+        resource_type: &Segment,
+        native_id: &NativeId,
+    ) -> Result<Option<String>> {
+        self.inner
+            .get_promotion(org_id, resource_type, native_id)
+            .await
+    }
+    async fn put_promotion(
+        &self,
+        org_id: &str,
+        resource_type: &Segment,
+        native_id: &NativeId,
+        actor: Actor,
+    ) -> Result<Revision> {
+        self.inner
+            .put_promotion(org_id, resource_type, native_id, actor)
+            .await
+    }
+    async fn tombstone_promotion(
+        &self,
+        org_id: &str,
+        resource_type: &Segment,
+        native_id: &NativeId,
+        actor: Actor,
+    ) -> Result<Option<Revision>> {
+        self.inner
+            .tombstone_promotion(org_id, resource_type, native_id, actor)
+            .await
+    }
+    async fn list_promotions(
+        &self,
+        org_id: &str,
+        resource_type: &Segment,
+        after: Option<&NativeId>,
+        limit: usize,
+    ) -> Result<Vec<PromotionEntry>> {
+        self.inner
+            .list_promotions(org_id, resource_type, after, limit)
+            .await
+    }
+    async fn list_signing_keys(&self, org_id: &str) -> Result<Vec<EventSigningKey>> {
+        self.inner.list_signing_keys(org_id).await
+    }
+    async fn generate_org_key(
+        &self,
+        org_id: &str,
+        actor: Actor,
+    ) -> Result<(GenerateKeyResult, Revision)> {
+        self.inner.generate_org_key(org_id, actor).await
+    }
+    async fn revoke_org_key(
+        &self,
+        org_id: &str,
+        key_id: &str,
+        actor: Actor,
+    ) -> Result<Option<Revision>> {
+        self.inner.revoke_org_key(org_id, key_id, actor).await
+    }
+    async fn rotate_org_key(
+        &self,
+        org_id: &str,
+        key_id: &str,
+        actor: Actor,
+    ) -> Result<(GenerateKeyResult, Revision)> {
+        self.inner.rotate_org_key(org_id, key_id, actor).await
+    }
+    async fn create_org(&self, record: OrgRecord, actor: Actor) -> Result<Revision> {
+        self.inner.create_org(record, actor).await
+    }
+    async fn update_org(
+        &self,
+        record: OrgRecord,
+        actor: Actor,
+        expected_revision: Option<Revision>,
+    ) -> Result<Revision> {
+        self.inner
+            .update_org(record, actor, expected_revision)
+            .await
+    }
+    async fn transition_org(
+        &self,
+        record: OrgRecord,
+        kind: EventKind,
+        actor: Actor,
+        expected_revision: Revision,
+    ) -> Result<Revision> {
+        self.inner
+            .transition_org(record, kind, actor, expected_revision)
+            .await
     }
     async fn put_group(
         &self,
-        org_id: &OrganizationId,
-        entry: ValidatedRbacEntry,
-        expected_etag: Option<&str>,
-    ) -> Result<EtagedGroup> {
+        org_id: &str,
+        entry: RbacEntry,
+        actor: Actor,
+        expected_revision: Option<Revision>,
+    ) -> Result<GroupWriteOutcome> {
         if self.fail_put_group_once.swap(false, Ordering::SeqCst) {
             return Err(Error::Store("forced put_group failure".to_owned()));
         }
-        self.inner.put_group(org_id, entry, expected_etag).await
-    }
-    async fn list_groups(&self, org_id: &OrganizationId) -> Result<Vec<EtagedGroup>> {
-        self.inner.list_groups(org_id).await
+        self.inner
+            .put_group(org_id, entry, actor, expected_revision)
+            .await
     }
     async fn delete_group(
         &self,
-        org_id: &OrganizationId,
+        org_id: &str,
         name: &str,
-        expected_etag: &str,
-    ) -> Result<()> {
+        actor: Actor,
+        expected_revision: Option<Revision>,
+    ) -> Result<GroupWriteOutcome> {
         if self.fail_delete_group_once.swap(false, Ordering::SeqCst) {
             return Err(Error::Store("forced delete_group failure".to_owned()));
         }
-        self.inner.delete_group(org_id, name, expected_etag).await
-    }
-    async fn list_inheritors(&self, org_id: &OrganizationId, name: &str) -> Result<Vec<String>> {
-        self.inner.list_inheritors(org_id, name).await
-    }
-    async fn count_memberships_for_group(
-        &self,
-        org_id: &OrganizationId,
-        name: &str,
-    ) -> Result<BTreeMap<String, u32>> {
-        self.inner.count_memberships_for_group(org_id, name).await
-    }
-    async fn is_declared_group(&self, org_id: &OrganizationId, name: &str) -> Result<bool> {
-        self.inner.is_declared_group(org_id, name).await
-    }
-    async fn get_user_schema(&self, org_id: &OrganizationId) -> Result<Option<EtagedUserSchema>> {
-        self.inner.get_user_schema(org_id).await
-    }
-    async fn put_user_schema(
-        &self,
-        org_id: &OrganizationId,
-        schema: UserSchema,
-        expected_etag: Option<&Etag>,
-    ) -> Result<EtagedUserSchema> {
         self.inner
-            .put_user_schema(org_id, schema, expected_etag)
+            .delete_group(org_id, name, actor, expected_revision)
             .await
     }
-    async fn put_membership_row(&self, params: PutMembershipRowParams<'_>) -> Result<()> {
-        self.inner.put_membership_row(params).await
+    async fn fold_at(&self, org_id: &str, at: Option<Revision>) -> Result<FoldedState> {
+        self.inner.fold_at(org_id, at).await
     }
 }
 
+/// Build an `InMemoryModelEventStore` write-through-wired to `store` — the
+/// same wiring `test_app_with_stub` uses internally, exposed here so
+/// `test_app_for_store` callers that don't need failure injection can share
+/// the read-model with the `Arc<dyn OrgStore>` they pass alongside it.
+pub(super) fn model_events_for(store: &Arc<dyn OrgStore>) -> Arc<dyn ModelEventStore> {
+    Arc::new(InMemoryModelEventStore::new_with_org_store(Arc::clone(
+        store,
+    )))
+}
+
 /// Test app builder — same wiring as
-/// [`super::super::test_support::test_app_with_stub`] but accepts any
-/// `Arc<dyn OrgStore>` so failure-mode tests can plug in [`FailingStore`].
+/// [`super::super::test_support::test_app_with_stub`] but accepts an
+/// arbitrary `Arc<dyn ModelEventStore>` so failure-mode tests can plug in
+/// [`FailingModelEventStore`].
 ///
 /// Only the group routes are mounted (the only routes the Active-branch tests
 /// need). Health, org, key, metrics, and proxy-config routes are intentionally
 /// absent.
-pub(super) fn test_app_for_store(store: Arc<dyn OrgStore>, vp: Arc<StubVpClient>) -> Router {
+pub(super) fn test_app_for_store(
+    store: Arc<dyn OrgStore>,
+    vp: Arc<StubVpClient>,
+    model_events: Arc<dyn ModelEventStore>,
+) -> Router {
     let route_matcher = RouteMatcher::new(&[]).unwrap();
     let public_routes = vec![
         PublicRoute::new(
@@ -240,8 +338,6 @@ pub(super) fn test_app_for_store(store: Arc<dyn OrgStore>, vp: Arc<StubVpClient>
 
     let user_pool: Arc<dyn UserPoolClient> = Arc::new(InMemoryUserPoolClient::new());
     let saga_tickets: Arc<dyn SagaTicketStore> = Arc::new(InMemorySagaTicketStore::new());
-    let model_events: Arc<dyn crate::model_event_store::ModelEventStore> =
-        Arc::new(crate::model_event_store::InMemoryModelEventStore::new());
     let state = AppState {
         store,
         vp,

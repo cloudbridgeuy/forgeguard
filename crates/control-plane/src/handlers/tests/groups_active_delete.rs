@@ -1,7 +1,10 @@
-//! V3 integration tests: DELETE /groups/{name} on an Active org.
+//! V4 integration tests: DELETE /groups/{name} on an Active org —
+//! push-then-append.
 //!
-//! Covers happy delete, idempotent treatment of VP `NotFound`, F3 (VP delete
-//! fails, rollback succeeds), and F3' (rollback put_back fails).
+//! Covers happy delete, idempotent treatment of VP `NotFound`, F-VP (VP
+//! delete fails, clean abort — the group is untouched), and F-append (VP
+//! delete succeeds but the append fails, so the prior permit is re-pushed)
+//! plus F-append-prime (that re-push itself fails).
 
 use std::sync::Arc;
 
@@ -11,7 +14,8 @@ use http_body_util::BodyExt;
 use tower::ServiceExt;
 
 use super::active_support::{
-    active_org_store, create_group, metric_lock, test_app_for_store, FailingStore,
+    active_org_store, create_group, metric_lock, model_events_for, test_app_for_store,
+    FailingModelEventStore,
 };
 use crate::handlers::test_support::{test_app_with_stub, TEST_API_KEY};
 use crate::metrics::GROUP_ROLLBACK_FAILED_TOTAL;
@@ -45,12 +49,16 @@ async fn delete_on_active_org_deletes_vp_policy() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
 
-    // Stub log: one create (during setup), one delete (during DELETE).
+    // Stub log: delete-then-create (during setup CREATE), then a delete
+    // (during DELETE).
     let calls = stub.calls();
-    assert_eq!(calls.len(), 2);
-    assert!(matches!(calls[0], StubCall::CreatePolicy { ref name, .. } if name == "cp-rbac-admin"));
+    assert_eq!(calls.len(), 3, "{calls:?}");
     assert!(
-        matches!(calls[1], StubCall::DeletePolicyByName { ref name, .. } if name == "cp-rbac-admin"),
+        matches!(calls[0], StubCall::DeletePolicyByName { ref name, .. } if name == "cp-rbac-admin")
+    );
+    assert!(matches!(calls[1], StubCall::CreatePolicy { ref name, .. } if name == "cp-rbac-admin"));
+    assert!(
+        matches!(calls[2], StubCall::DeletePolicyByName { ref name, .. } if name == "cp-rbac-admin"),
     );
 }
 
@@ -90,14 +98,18 @@ async fn delete_treats_vp_not_found_as_idempotent_success() {
     );
 }
 
+/// F-VP: the VP delete fails before any append is attempted. The request
+/// aborts cleanly with 503 — the group row is untouched (this supersedes the
+/// V3 F3 rollback test, which deleted DDB first and then rolled the deletion
+/// back on a VP failure).
 #[tokio::test]
-async fn delete_f3_vp_fails_rollback_succeeds_returns_503() {
+async fn delete_vp_fails_aborts_clean_503_group_still_present() {
     let _guard = metric_lock().await;
-    let store = active_org_store("org-active-d-f3", "ps-del-f3");
+    let store = active_org_store("org-active-d-f-vp", "ps-del-f-vp");
     let setup_stub = happy_stub();
     let etag = create_group(
         test_app_with_stub(Arc::clone(&store), Arc::clone(&setup_stub)),
-        "org-active-d-f3",
+        "org-active-d-f-vp",
         "admin",
         &["cp:org:read"],
         &[],
@@ -116,7 +128,7 @@ async fn delete_f3_vp_fails_rollback_succeeds_returns_503() {
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri("/api/v1/organizations/org-active-d-f3/groups/admin")
+                .uri("/api/v1/organizations/org-active-d-f-vp/groups/admin")
                 .header("x-api-key", TEST_API_KEY)
                 .header("if-match", &etag)
                 .body(Body::empty())
@@ -132,12 +144,12 @@ async fn delete_f3_vp_fails_rollback_succeeds_returns_503() {
     assert_eq!(json["stage"], "parent");
     assert_eq!(json["failed"], "cp-rbac-admin");
 
-    // Rollback succeeded: GET should return 200 (the row was put back).
+    // Nothing was ever touched: GET must still return 200.
     let app = test_app_with_stub(Arc::clone(&store), happy_stub());
     let get_resp = app
         .oneshot(
             Request::builder()
-                .uri("/api/v1/organizations/org-active-d-f3/groups/admin")
+                .uri("/api/v1/organizations/org-active-d-f-vp/groups/admin")
                 .header("x-api-key", TEST_API_KEY)
                 .body(Body::empty())
                 .unwrap(),
@@ -147,7 +159,7 @@ async fn delete_f3_vp_fails_rollback_succeeds_returns_503() {
     assert_eq!(
         get_resp.status(),
         StatusCode::OK,
-        "rollback must restore the prior DDB row",
+        "a clean pre-append abort must never touch the group row",
     );
 
     let counter_after = GROUP_ROLLBACK_FAILED_TOTAL
@@ -156,36 +168,110 @@ async fn delete_f3_vp_fails_rollback_succeeds_returns_503() {
     assert_eq!(counter_after, counter_before);
 }
 
+/// F-append: the VP delete succeeds but the event-sourced append fails
+/// afterward. The orchestrator compensates by re-pushing the prior parent
+/// permit, and the request surfaces a generic 500 (not `inconsistent_state`
+/// — the compensation itself succeeded).
 #[tokio::test]
-async fn delete_f3_prime_rollback_fail_returns_500_and_increments_counter() {
-    let _guard = metric_lock().await;
-    let inner = active_org_store("org-active-d-f3p", "ps-del-f3p");
-    // Seed via the unwrapped store (rollback failure is for the *post-DDB-delete*
-    // put_group; setup CREATE must succeed, so we can't arm yet).
+async fn delete_append_fails_repushes_permit() {
+    let store = active_org_store("org-active-d-f-append", "ps-del-f-append");
     let setup_stub = happy_stub();
     let etag = create_group(
-        test_app_with_stub(Arc::clone(&inner), Arc::clone(&setup_stub)),
-        "org-active-d-f3p",
+        test_app_with_stub(Arc::clone(&store), Arc::clone(&setup_stub)),
+        "org-active-d-f-append",
         "admin",
         &["cp:org:read"],
         &[],
     )
     .await;
 
-    let store = Arc::new(FailingStore::new(Arc::clone(&inner)));
-    store.fail_next_put_group();
-    setup_stub.fail_on_delete("cp-rbac-admin");
+    let model_events = Arc::new(FailingModelEventStore::new(model_events_for(&store)));
+    model_events.fail_next_delete_group();
+
+    let app = test_app_for_store(Arc::clone(&store), Arc::clone(&setup_stub), model_events);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/v1/organizations/org-active-d-f-append/groups/admin")
+                .header("x-api-key", TEST_API_KEY)
+                .header("if-match", &etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["error"], "internal");
+
+    // Compensation re-pushed the prior permit: the calls tail is
+    // delete-then-create (the DELETE handler's own VP delete, then the
+    // re-push after the append failed).
+    let calls = setup_stub.calls();
+    assert!(
+        matches!(calls.last(), Some(StubCall::CreatePolicy { ref name, .. }) if name == "cp-rbac-admin"),
+        "compensation must re-create the deleted policy: {calls:?}",
+    );
+
+    // Compensation restored VP; the row was never removed from DDB either.
+    let app = test_app_with_stub(Arc::clone(&store), happy_stub());
+    let get_resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/organizations/org-active-d-f-append/groups/admin")
+                .header("x-api-key", TEST_API_KEY)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        get_resp.status(),
+        StatusCode::OK,
+        "the append never landed, so the row must still be present",
+    );
+}
+
+/// F-append-prime: the append fails AND re-pushing the prior permit also
+/// fails. Surfaces 500 `inconsistent_state` and bumps
+/// `forgeguard_cp_group_rollback_failed_total{stage="parent"}`.
+#[tokio::test]
+async fn delete_f_append_prime_rollback_fail_returns_500_and_increments_counter() {
+    let _guard = metric_lock().await;
+    let store = active_org_store("org-active-d-f-append-p", "ps-del-f-append-p");
+    let setup_stub = happy_stub();
+    let etag = create_group(
+        test_app_with_stub(Arc::clone(&store), Arc::clone(&setup_stub)),
+        "org-active-d-f-append-p",
+        "admin",
+        &["cp:org:read"],
+        &[],
+    )
+    .await;
+
+    let model_events = Arc::new(FailingModelEventStore::new(model_events_for(&store)));
+    model_events.fail_next_delete_group();
+    // The compensating re-push (`push_permit`) runs delete-then-create; force
+    // the delete half of it to fail. Delete call #1 already happened during
+    // setup's CREATE (push_permit's own leading delete-of-nonexistent-policy
+    // no-op); delete call #2 is the DELETE handler's own explicit delete;
+    // delete call #3 is the compensating re-push's delete — that's the one
+    // to target.
+    setup_stub.fail_after_n_deletes(2);
 
     let counter_before = GROUP_ROLLBACK_FAILED_TOTAL
         .with_label_values(&["parent"])
         .get();
 
-    let app = test_app_for_store(store.clone(), Arc::clone(&setup_stub));
+    let app = test_app_for_store(Arc::clone(&store), Arc::clone(&setup_stub), model_events);
     let resp = app
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri("/api/v1/organizations/org-active-d-f3p/groups/admin")
+                .uri("/api/v1/organizations/org-active-d-f-append-p/groups/admin")
                 .header("x-api-key", TEST_API_KEY)
                 .header("if-match", &etag)
                 .body(Body::empty())
@@ -198,7 +284,7 @@ async fn delete_f3_prime_rollback_fail_returns_500_and_increments_counter() {
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(json["error"], "inconsistent_state");
-    assert_eq!(json["ddb_committed"], true);
+    assert_eq!(json["ddb_committed"], false);
     assert_eq!(json["vp_committed"], false);
 
     let counter_after = GROUP_ROLLBACK_FAILED_TOTAL

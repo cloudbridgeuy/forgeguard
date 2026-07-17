@@ -25,7 +25,7 @@ use axum::extract::{Path, State};
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use axum::{http::StatusCode, Json};
-use forgeguard_authz_core::{validate_rbac_entry, RbacEntry};
+use forgeguard_authz_core::{validate_rbac_entry, Actor, RbacEntry};
 use forgeguard_core::OrganizationId;
 use serde::Deserialize;
 
@@ -35,6 +35,18 @@ use crate::handlers::AppState;
 use crate::metrics::PreconditionReason;
 use crate::store::{EtagedGroup, OrgStore};
 use crate::vp_client::VpClient;
+
+// ---------------------------------------------------------------------------
+// NOTE (#113 V4, Task 4 — rough edge for Task 5):
+//
+// Task 5 owns the real handler rewrite: parsing `X-Fg-If-Revision`, threading
+// `actor_for(...)` from the resolved identity, and mapping `GroupWriteOutcome`
+// into the `x-fg-revision` response header. Until then, every call site below
+// passes `Actor::System` (no identity extractor is wired into these handlers
+// yet) and `expected_revision: None` (the existing `If-Match`/etag precondition
+// machinery is untouched and still governs these paths), and discards the
+// `GroupWriteOutcome` half of `apply_create`/`apply_update`'s return tuple.
+// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // Helper: default for serde
@@ -251,7 +263,7 @@ pub(crate) async fn create_handler<V: VpClient + 'static>(
         Err(err) => return shape_active_state_error(&err, &raw_org_id, &proposed_name),
     };
 
-    let result = match write_ctx {
+    let result: Result<EtagedGroup, GroupHandlerError> = match write_ctx {
         OrgWriteContext::Draft => store
             .put_group(&org_id, validated, None)
             .await
@@ -270,15 +282,18 @@ pub(crate) async fn create_handler<V: VpClient + 'static>(
                 }
             };
             active::apply_create(active::CreateParams {
-                store: store.as_ref(),
+                model_events: state.model_events.as_ref(),
                 vp: vp.as_ref(),
                 vp_ctx: &vp_ctx,
                 org_id: &org_id,
                 raw_org_id: &raw_org_id,
                 validated,
                 compiled,
+                actor: Actor::System,
+                expected_revision: None,
             })
             .await
+            .map(|(eg, _outcome)| eg)
         }
     };
 
@@ -532,7 +547,7 @@ pub(crate) async fn update_handler<V: VpClient + 'static>(
         Err(err) => return shape_active_state_error(&err, &raw_org_id, &proposed_name),
     };
 
-    let result = match write_ctx {
+    let result: Result<EtagedGroup, GroupHandlerError> = match write_ctx {
         OrgWriteContext::Draft => store
             .put_group(&org_id, validated, Some(&expected_etag))
             .await
@@ -576,7 +591,7 @@ pub(crate) async fn update_handler<V: VpClient + 'static>(
                 }
             };
             active::apply_update(active::UpdateParams {
-                store: store.as_ref(),
+                model_events: state.model_events.as_ref(),
                 vp: vp.as_ref(),
                 vp_ctx: &vp_ctx,
                 org_id: &org_id,
@@ -584,9 +599,12 @@ pub(crate) async fn update_handler<V: VpClient + 'static>(
                 validated,
                 compiled,
                 prior_for_rollback,
-                expected_etag,
+                prior_all: existing_entries.clone(),
+                actor: Actor::System,
+                expected_revision: None,
             })
             .await
+            .map(|(eg, _outcome)| eg)
         }
     };
 
@@ -766,15 +784,18 @@ pub(crate) async fn delete_handler<V: VpClient + 'static>(
                 };
             active::apply_delete(active::DeleteParams {
                 store: store.as_ref(),
+                model_events: state.model_events.as_ref(),
                 vp: vp.as_ref(),
                 vp_ctx: &vp_ctx,
                 org_id: &org_id,
                 raw_org_id: &raw_org_id,
                 name: name.clone(),
-                expected_etag,
                 prior_for_rollback,
+                actor: Actor::System,
+                expected_revision: None,
             })
             .await
+            .map(|_outcome| ())
         }
     };
 

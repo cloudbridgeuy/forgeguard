@@ -43,7 +43,9 @@ struct StubState {
     fail_on_create: Option<String>,
     fail_on_delete: Option<String>,
     fail_after_n_creates: Option<u64>,
+    fail_after_n_deletes: Option<u64>,
     creates_so_far: u64,
+    deletes_so_far: u64,
     calls: Vec<StubCall>,
 }
 
@@ -80,6 +82,17 @@ impl StubVpClient {
     pub(crate) fn fail_after_n_creates(&self, n: u64) {
         let mut s = self.state.lock().expect("StubVpClient mutex poisoned");
         s.fail_after_n_creates = Some(n);
+    }
+
+    /// Cause the next `delete_policy_by_name` call to fail once `n` calls to
+    /// `delete_policy_by_name` (successful or `NotFound`) have already
+    /// occurred. Used to target a *specific* delete within a request (e.g. the
+    /// VP-compensation delete that follows an already-succeeded push, as
+    /// opposed to `push_permit`'s own delete-then-create first step). One-shot
+    /// — cleared after firing.
+    pub(crate) fn fail_after_n_deletes(&self, n: u64) {
+        let mut s = self.state.lock().expect("StubVpClient mutex poisoned");
+        s.fail_after_n_deletes = Some(n);
     }
 
     /// Snapshot the call log in invocation order.
@@ -139,6 +152,16 @@ impl super::VpClient for StubVpClient {
             s.fail_on_delete = None;
             return Err(Error::Other(format!("stub forced fail on delete '{name}'")));
         }
+
+        if let Some(threshold) = s.fail_after_n_deletes {
+            if s.deletes_so_far >= threshold {
+                s.fail_after_n_deletes = None;
+                return Err(Error::Other(format!(
+                    "stub forced fail after {threshold} deletes"
+                )));
+            }
+        }
+        s.deletes_so_far += 1;
 
         s.policies
             .remove(&(store_id.to_owned(), name.to_owned()))

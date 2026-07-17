@@ -1,4 +1,4 @@
-//! V3 integration tests: F4 mid-fanout failure on UPDATE plus the
+//! V4 integration tests: F-VP-mid mid-fanout failure on UPDATE plus the
 //! Active-without-`vp_store_id` boundary case.
 
 use std::sync::Arc;
@@ -18,10 +18,16 @@ use crate::vp_client::VpClient;
 /// Seed `member` + three inheritors `admin`, `editor`, `owner`. Update
 /// `member` with a stub primed to fail after exactly two successful creates.
 /// Sequence: parent re-create (1st) → `admin` (2nd) → `editor` would be 3rd
-/// but fails → returns 503 `{stage="fanout", completed=[admin], failed=editor,
-/// remaining=[owner]}`.
+/// but fails → the orchestrator restores the completed prior (`admin`) and
+/// returns 503 `{stage="fanout", completed=[admin], failed=editor,
+/// remaining=[owner]}`. Because VP is now pushed *before* the append (#113
+/// V4), a mid-fanout failure means the append is never attempted at all: the
+/// parent DDB row must keep its pre-UPDATE value, not the new one — this
+/// supersedes the V3 `update_f4_mid_fanout_returns_503_with_progress` test,
+/// which asserted the parent row DID reflect the update (append-before-VP
+/// ordering).
 #[tokio::test]
-async fn update_f4_mid_fanout_returns_503_with_progress() {
+async fn update_mid_fanout_failure_restores_completed_priors_503() {
     let _guard = metric_lock().await;
     let store = active_org_store("org-active-f4", "ps-f4");
 
@@ -85,7 +91,8 @@ async fn update_f4_mid_fanout_returns_503_with_progress() {
     assert_eq!(json["failed"], "cp-rbac-editor");
     assert_eq!(json["remaining"], serde_json::json!(["cp-rbac-owner"]));
 
-    // Parent DDB row reflects the UPDATE (no rollback in F4).
+    // Push-then-append: a mid-fanout VP failure means the append is never
+    // attempted, so the parent DDB row must still hold its pre-UPDATE value.
     let app = test_app_with_stub(Arc::clone(&store), happy_stub());
     let get_resp = app
         .oneshot(
@@ -102,11 +109,13 @@ async fn update_f4_mid_fanout_returns_503_with_progress() {
     let parent_json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(
         parent_json["allow"],
-        serde_json::json!(["cp:x:read", "cp:x:write"]),
-        "parent row must reflect the UPDATE",
+        serde_json::json!(["cp:x:read"]),
+        "a mid-fanout failure aborts before the append; the parent row must be untouched",
     );
 
-    // Fanout label is never bumped today (V3 does not rollback fanout failures).
+    // The completed prior (`admin`) was successfully restored — no
+    // compensation failure, so the fanout rollback-failed counter must not
+    // move.
     let counter_after_fanout = GROUP_ROLLBACK_FAILED_TOTAL
         .with_label_values(&["fanout"])
         .get();
