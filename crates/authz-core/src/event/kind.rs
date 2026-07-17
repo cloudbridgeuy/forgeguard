@@ -29,6 +29,12 @@ pub enum EventKind {
     DenyCreated,
     /// A deny was removed.
     DenyRemoved,
+    /// An organization was activated.
+    OrgActivated,
+    /// An organization was suspended.
+    OrgSuspended,
+    /// An organization was restored from suspension.
+    OrgRestored,
 }
 
 impl EventKind {
@@ -46,6 +52,9 @@ impl EventKind {
             Self::ResourceTombstoned => "resource.tombstoned",
             Self::DenyCreated => "deny.created",
             Self::DenyRemoved => "deny.removed",
+            Self::OrgActivated => "org.activated",
+            Self::OrgSuspended => "org.suspended",
+            Self::OrgRestored => "org.restored",
         }
     }
 
@@ -56,7 +65,7 @@ impl EventKind {
     pub fn narrowing(&self) -> bool {
         matches!(
             self,
-            Self::GrantRemoved | Self::ResourceTombstoned | Self::DenyCreated
+            Self::GrantRemoved | Self::ResourceTombstoned | Self::DenyCreated | Self::OrgSuspended
         )
     }
 }
@@ -83,6 +92,9 @@ impl FromStr for EventKind {
             "resource.tombstoned" => Ok(Self::ResourceTombstoned),
             "deny.created" => Ok(Self::DenyCreated),
             "deny.removed" => Ok(Self::DenyRemoved),
+            "org.activated" => Ok(Self::OrgActivated),
+            "org.suspended" => Ok(Self::OrgSuspended),
+            "org.restored" => Ok(Self::OrgRestored),
             other => Err(Error::UnknownEventKind {
                 kind: other.to_string(),
             }),
@@ -95,7 +107,7 @@ impl FromStr for EventKind {
 mod tests {
     use super::*;
 
-    const ALL_KINDS: [EventKind; 11] = [
+    const ALL_KINDS: [EventKind; 14] = [
         EventKind::OrgCreated,
         EventKind::OrgUpdated,
         EventKind::OrgUnitPut,
@@ -107,6 +119,9 @@ mod tests {
         EventKind::ResourceTombstoned,
         EventKind::DenyCreated,
         EventKind::DenyRemoved,
+        EventKind::OrgActivated,
+        EventKind::OrgSuspended,
+        EventKind::OrgRestored,
     ];
 
     #[test]
@@ -131,6 +146,9 @@ mod tests {
         assert!(EventKind::ResourceTombstoned.narrowing());
         assert!(EventKind::DenyCreated.narrowing());
         assert!(!EventKind::DenyRemoved.narrowing());
+        assert!(!EventKind::OrgActivated.narrowing());
+        assert!(EventKind::OrgSuspended.narrowing());
+        assert!(!EventKind::OrgRestored.narrowing());
     }
 
     #[test]

@@ -189,7 +189,11 @@ fn apply_event(event: &EventEnvelope, state: &mut FoldedState) -> Result<()> {
                 .promotions
                 .remove(&(payload_str("resource_type")?, payload_str("native_id")?));
         }
-        EventKind::OrgCreated | EventKind::OrgUpdated => {
+        EventKind::OrgCreated
+        | EventKind::OrgUpdated
+        | EventKind::OrgActivated
+        | EventKind::OrgSuspended
+        | EventKind::OrgRestored => {
             if !event.payload()["organization"].is_object() {
                 return Err(unfoldable(format!(
                     "{} payload missing object field organization",
@@ -395,6 +399,39 @@ mod tests {
 
         let at_two = fold_events(&events, Revision::new(2)).unwrap();
         assert_eq!(at_two.org(), Some(&updated));
+    }
+
+    #[test]
+    fn org_lifecycle_folds_status_over_revisions() {
+        let created = org_event_payload(
+            &serde_json::json!({ "name": "Acme", "status": "draft" }),
+            None,
+        );
+        let activated = org_event_payload(
+            &serde_json::json!({ "name": "Acme", "status": "active" }),
+            None,
+        );
+        let suspended = org_event_payload(
+            &serde_json::json!({ "name": "Acme", "status": "suspended" }),
+            None,
+        );
+        let events = vec![
+            envelope(1, EventKind::OrgCreated, created),
+            envelope(2, EventKind::OrgActivated, activated),
+            envelope(3, EventKind::OrgSuspended, suspended),
+        ];
+
+        let at_two = fold_events(&events, Revision::new(2)).unwrap();
+        assert_eq!(
+            at_two.org().unwrap()["organization"]["status"],
+            serde_json::json!("active")
+        );
+
+        let at_three = fold_events(&events, Revision::new(3)).unwrap();
+        assert_eq!(
+            at_three.org().unwrap()["organization"]["status"],
+            serde_json::json!("suspended")
+        );
     }
 
     #[test]
