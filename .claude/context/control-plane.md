@@ -72,7 +72,7 @@ This makes "config without etag" and "etag without config" unrepresentable — s
 
 ### Lifecycle
 
-An org is created `Draft` (no config) and stays `Draft` until the onboarding saga (#55) provisions Cognito / VP / signing keys and flips it to `Active`. Status is **independent** of whether config is attached:
+An org is created `Draft` (no config) and stays `Draft` until the onboarding saga (#55) provisions Cognito / VP / signing keys and flips it to `Active`, or an operator calls `POST .../activate` directly (see "Lifecycle Verbs (#113 V2)" below for the full `Draft`→`Active`⇄`Suspended`→`Deleting`→`Deleted` state machine and its three verb endpoints). Status is **independent** of whether config is attached:
 
 | Created via | Status on creation | Config |
 |-------------|-------------------|--------|
@@ -125,6 +125,42 @@ supported on the log yet, so the route falls through to Axum's default `405`.
 Groups and user-schema `PUT`/`DELETE` are unaffected — they still use
 `ETag`/`If-Match` (see [optimistic-locking.md](./optimistic-locking.md),
 superseded for org mutations only).
+
+## Lifecycle Verbs (#113 V2)
+
+`OrgStatus` was pruned to the real lifecycle it needed to express: `Draft` → `Active` ⇄ `Suspended` → `Deleting` → `Deleted` (the speculative `PendingProvisioning`/`Provisioning`/`Failed` variants from V1 never had a caller and were removed). Three verb endpoints drive the transitions through the event log, mirroring the `create_org`/`update_org` event-sourced pattern:
+
+| Endpoint | From | To | Event kind |
+|----------|------|----|------------|
+| `POST /api/v1/organizations/{org_id}/activate` | `Draft` (or `Suspended`, as a restore) | `Active` | `org.activated` |
+| `POST /api/v1/organizations/{org_id}/suspend` | `Active` | `Suspended` | `org.suspended` (narrowing) |
+| `POST /api/v1/organizations/{org_id}/restore` | `Suspended` | `Active` | `org.restored` |
+
+Each handler (`handlers/lifecycle.rs`): parses `org_id` (404 on malformed), 404s on unknown/`Deleted` org, then:
+
+- **No-op rule**: if the org is already at the verb's target status, responds `200` with the current revision and appends nothing (e.g. `activate` on an already-`Active` org).
+- **Invalid transition**: any other `from` status responds `409 {"error": "invalid_transition"}` (e.g. `suspend` on a `Draft` org) — no event appended.
+- **Valid transition**: appends the verb's event kind via `ModelEventStore::transition_org`, conditioned on the handler's observed revision as `expected_revision`; a losing race surfaces as `409 transition_conflict` (RFC 7232-style, revision-tokened like org `PUT`/#113 V1, not `If-Match`/`ETag`).
+- On success, `200` with the updated org and `X-Fg-Revision` header, same shape as `PUT /organizations/{org_id}`.
+
+Authorization: `cp-organization-activate`/`-suspend`/`-restore` are `admin`-tier RBAC actions (`forgeguard.toml`), auto-collected into the Cedar schema.
+
+With `activate` live, the V1 prod-QA workaround of hand-flipping an org's `status` attribute directly in DynamoDB is obsolete — use the endpoint instead.
+
+### D10: consumer reads relaxed to non-`Deleted`
+
+`GET .../events` and `GET .../signing-keys` originally gated on `OrgStatus::Active` (404 unknown/deleted, `409 org_state_conflict` otherwise). Since lifecycle verbs mean orgs now spend real time in `Draft`/`Suspended`/`Deleting`, and SDKs/external verifiers need to observe the event log and signing keys through those states (not just once `Active`), both gates were relaxed to: 404 for unknown/`Deleted`, `200` otherwise.
+
+| Status | `GET .../events`, `GET .../signing-keys` (read, D10) | Principal/promotion/user-schema writes (unchanged) |
+|--------|-------------------------------------------------------|-----------------------------------------------------|
+| `Draft` | `200` | `409` |
+| `Active` | `200` | `200`/`201` |
+| `Suspended` | `200` | `409` |
+| `Deleting` | `200` | `409` |
+| `Deleted` | `404` | `404` |
+| unknown | `404` | `404` |
+
+Write-side gates (principal upsert, promotion tombstone, groups, user-schema) are unchanged — still `Active`-only, `409 org_state_conflict` otherwise. D10 is read-only in scope.
 
 ## Config File Format
 
@@ -444,8 +480,8 @@ Cursor-based replay of the per-org event log, ordered by monotonic `seq`.
 - `wait=1` selects long-poll mode (V2, N8): if the initial query returns a non-empty page, it's returned immediately; on an empty page, the handler ticks the org's `SEQ` counter every 200ms (strongly consistent) for up to ~1s, re-running the cursor query and returning early once the revision advances past `after`, or returning the empty page at the deadline. Any `wait` value other than `1` (including empty `wait=`) is `400 {"error": "wait must be '1'"}`.
 - `X-Fg-Min-Revision: <u64>` request header (V2, N11): strongly-consistent-reads the log's current revision and compares against the header value *before* any wait. `current >= required` proceeds normally; `current < required` responds `412 Precondition Failed` with `{"error": "revision_behind", "current_revision": <u64>, "min_revision": <u64>}` and an `X-Fg-Revision` header carrying the current revision — this means a caller that is ahead of the server gets an immediate `412` even with `wait=1`, never a 1s hold. An unparseable header value is `400 {"error": "invalid X-Fg-Min-Revision header"}`. The guard's pure core (`parse_min_revision`, `check_min_revision`) lives in `crates/control-plane/src/handlers/min_revision.rs`, one level above `events/`, so later model-plane reads (e.g. V3 promotion lists) can reuse it.
 - Response: `{"events": [...], "next_after": <u64>, "revision": <u64>}` plus an `X-Fg-Revision` header. `next_after` is the last returned event's `seq`, or the unchanged `after` on an empty page (never regresses). An `after` cursor ahead of the log's head simply holds the full watch deadline and returns empty — `X-Fg-Min-Revision` is the mechanism for "the caller knows more than the server", not this loop.
-- Order of checks: parse `wait` → parse `X-Fg-Min-Revision` → org existence/Active check → min-revision guard → query (+ optional watch) → respond.
-- Org must exist and be `Active` (404 / 409, same gate as the principal-upsert handler).
+- Order of checks: parse `wait` → parse `X-Fg-Min-Revision` → org existence/non-`Deleted` check (D10, see Lifecycle Verbs below) → min-revision guard → query (+ optional watch) → respond.
+- Org must exist and be non-`Deleted` (404 otherwise) — D10 relaxed this from an `Active`-only gate so `Draft`/`Suspended`/`Deleting` orgs stay observable.
 
 ### Event signing key
 
@@ -497,7 +533,7 @@ External verification of the event log: any consumer can recompute an envelope's
 
 ### `GET /api/v1/organizations/{org_id}/signing-keys`
 
-Serves the org's event-signing public key(s), for external envelope verification. `200` with `{"keys": [{"key_id", "public_key"}]}` (empty list if no model event has ever been appended for that org); `404` unknown/deleted org; `409` non-`Active` org — same gate as every other org-scoped handler. No revision header — keys are not event-log state. This is distinct from `GET /organizations/{org_id}/keys` (`handlers/keys.rs`), which serves the org-plane's request-signing key list (verification-only, for incoming BYOC proxy requests); the signing-keys endpoint instead derives and serves the public half of the event-signing private key (`SK = EVENT_SIGNING_KEY`) described above. `PrincipalEventStore::list_signing_keys` (both the Dynamo and in-memory impls) derives the public PEM from the stored private key material — no separate public-key item is persisted.
+Serves the org's event-signing public key(s), for external envelope verification. `200` with `{"keys": [{"key_id", "public_key"}]}` (empty list if no model event has ever been appended for that org); `404` unknown/deleted org — D10 relaxed this from an `Active`-only gate, so `Draft`/`Suspended`/`Deleting` orgs are readable too. No revision header — keys are not event-log state. This is distinct from `GET /organizations/{org_id}/keys` (`handlers/keys.rs`), which serves the org-plane's request-signing key list (verification-only, for incoming BYOC proxy requests); the signing-keys endpoint instead derives and serves the public half of the event-signing private key (`SK = EVENT_SIGNING_KEY`) described above. `PrincipalEventStore::list_signing_keys` (both the Dynamo and in-memory impls) derives the public PEM from the stored private key material — no separate public-key item is persisted.
 
 `canonical_envelope_bytes(envelope, org_id)` (`forgeguard_authz_core::event`) reconstructs the exact same canonical byte string that `canonical_event_bytes(draft, org_id)` produces at append time, but from an `EventEnvelope` read back from storage or over HTTP — this byte-identity is what makes external, store-independent verification possible.
 
