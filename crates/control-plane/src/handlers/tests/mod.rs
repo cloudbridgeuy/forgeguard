@@ -11,7 +11,6 @@ mod groups_crud;
 mod groups_delete;
 mod groups_revision;
 mod groups_round_trip;
-mod groups_saga;
 mod groups_validation;
 mod lifecycle;
 mod metrics_endpoint;
