@@ -2,18 +2,14 @@ import * as path from "path";
 import * as cdk from "aws-cdk-lib";
 import {
   aws_lambda as lambda,
-  aws_sqs as sqs,
-  aws_cloudwatch as cloudwatch,
   aws_iam as iam,
   aws_dynamodb as dynamodb,
 } from "aws-cdk-lib";
-import { DynamoEventSource, SqsDlq } from "aws-cdk-lib/aws-lambda-event-sources";
 import { Construct } from "constructs";
 
 interface LambdaStackProps extends cdk.StackProps {
   environment: string;
   table: dynamodb.ITableV2;
-  sagasTable: dynamodb.ITableV2;
   userPoolId: string;
   appClientId: string;
   policyStoreId: string;
@@ -27,7 +23,6 @@ export class LambdaStack extends cdk.Stack {
     const {
       environment,
       table,
-      sagasTable,
       userPoolId,
       appClientId,
       policyStoreId,
@@ -53,7 +48,6 @@ export class LambdaStack extends cdk.Stack {
         FORGEGUARD_CP_ISSUER: `https://cognito-idp.${this.region}.amazonaws.com/${userPoolId}`,
         FORGEGUARD_CP_AUDIENCE: appClientId,
         FORGEGUARD_CP_POLICY_STORE_ID: policyStoreId,
-        FORGEGUARD_CP_SAGAS_TABLE: sagasTable.tableName,
         FORGEGUARD_CP_COGNITO_POOL_ID: userPoolId,
       },
     });
@@ -63,7 +57,6 @@ export class LambdaStack extends cdk.Stack {
     });
 
     table.grantReadWriteData(controlPlane);
-    sagasTable.grantReadWriteData(controlPlane);
 
     controlPlane.addToRolePolicy(
       new iam.PolicyStatement({
@@ -87,76 +80,6 @@ export class LambdaStack extends cdk.Stack {
       }),
     );
 
-    // V3 POST /users inline saga calls Cognito to admin-create the user. Pool
-    // ARNs are per-org runtime values, so the actions cannot be scoped at CDK
-    // time; V5+ will scope them per-org via Cedar.
-    controlPlane.addToRolePolicy(
-      new iam.PolicyStatement({
-        actions: [
-          "cognito-idp:AdminCreateUser",
-          "cognito-idp:AdminDeleteUser",
-          "cognito-idp:AdminGetUser",
-          "cognito-idp:AddCustomAttributes",
-        ],
-        resources: ["*"],
-      }),
-    );
-
-    // --- Dead-letter queue ---
-
-    const dlq = new sqs.Queue(this, "SagaTriggerDlq", {
-      queueName: `forgeguard-${environment}-saga-trigger-dlq`,
-      retentionPeriod: cdk.Duration.days(14),
-    });
-
-    // --- Saga-trigger function ---
-
-    const sagaTrigger = new lambda.Function(this, "SagaTrigger", {
-      functionName: `forgeguard-saga-trigger-${environment}`,
-      runtime: lambda.Runtime.PROVIDED_AL2023,
-      architecture: lambda.Architecture.ARM_64,
-      handler: "bootstrap",
-      code: placeholderCode,
-      memorySize: 128,
-      timeout: cdk.Duration.seconds(10),
-      environment: {
-        TABLE_NAME: table.tableName,
-        STATE_MACHINE_ARN: "", // Set by #46
-      },
-    });
-
-    // DynamoDB Streams event source
-    sagaTrigger.addEventSource(
-      new DynamoEventSource(table, {
-        startingPosition: lambda.StartingPosition.TRIM_HORIZON,
-        batchSize: 1,
-        retryAttempts: 3,
-        onFailure: new SqsDlq(dlq),
-      }),
-    );
-
-    // IAM: Streams read is granted by addEventSource. Add sfn:StartExecution.
-    sagaTrigger.addToRolePolicy(
-      new iam.PolicyStatement({
-        actions: ["states:StartExecution"],
-        resources: ["*"], // Scoped to specific state machine by #46
-      }),
-    );
-
-    // --- CloudWatch alarm on DLQ depth ---
-
-    new cloudwatch.Alarm(this, "DlqAlarm", {
-      alarmName: `forgeguard-${environment}-saga-trigger-dlq-depth`,
-      metric: dlq.metricApproximateNumberOfMessagesVisible({
-        period: cdk.Duration.minutes(1),
-      }),
-      threshold: 0,
-      comparisonOperator:
-        cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
-      evaluationPeriods: 1,
-      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
-    });
-
     // --- Tags ---
 
     cdk.Tags.of(this).add("project", "forgeguard");
@@ -170,18 +93,6 @@ export class LambdaStack extends cdk.Stack {
 
     new cdk.CfnOutput(this, "ControlPlaneFunctionUrl", {
       value: controlPlaneUrl.url,
-    });
-
-    new cdk.CfnOutput(this, "SagaTriggerFunctionArn", {
-      value: sagaTrigger.functionArn,
-    });
-
-    new cdk.CfnOutput(this, "DlqArn", {
-      value: dlq.queueArn,
-    });
-
-    new cdk.CfnOutput(this, "DlqUrl", {
-      value: dlq.queueUrl,
     });
   }
 }
