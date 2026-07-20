@@ -47,9 +47,9 @@ cargo xtask control-plane infra status  [--env <ENV>] [--op-account <ACCT>] [--r
 > **`infra deploy` ships stacks only, not code.** The Lambda stack uses a
 > placeholder asset (`lib/lambda-stack.ts`); after any `infra deploy` that
 > should ship new binaries, follow with
-> `cargo xtask control-plane lambda deploy control-plane` (and
-> `saga-trigger` if applicable) — otherwise the function keeps running the
-> previously pushed binary and new routes 403 with `no matching route`.
+> `cargo xtask control-plane lambda deploy control-plane` — otherwise the
+> function keeps running the previously pushed binary and new routes 403
+> with `no matching route`.
 
 | Flag | Env Var | Default | Description |
 |------|---------|---------|-------------|

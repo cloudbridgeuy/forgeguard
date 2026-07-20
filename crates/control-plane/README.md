@@ -23,8 +23,7 @@ Authentication and authorization are handled by the `forgeguard-axum` middleware
 | `POST` | `/api/v1/organizations` | Create organization (status: Draft) |
 | `GET` | `/api/v1/organizations` | List organizations (paginated: `?offset=&limit=`) |
 | `GET` | `/api/v1/organizations/{org_id}` | Get organization details (supports `If-None-Match` → `304 Not Modified`) |
-| `PUT` | `/api/v1/organizations/{org_id}` | Update organization name and/or config |
-| `DELETE` | `/api/v1/organizations/{org_id}` | Delete organization |
+| `PUT` | `/api/v1/organizations/{org_id}` | Update organization name and/or config — event-sourced, optional `X-Fg-If-Revision` |
 | `GET` | `/api/v1/organizations/{org_id}/proxy-config` | Per-org proxy config with ETag caching |
 | `POST` | `/api/v1/organizations/{org_id}/keys` | Generate Ed25519 signing key |
 | `GET` | `/api/v1/organizations/{org_id}/keys` | List signing keys for an org |
@@ -32,8 +31,10 @@ Authentication and authorization are handled by the `forgeguard-axum` middleware
 | `POST` | `/api/v1/organizations/{org_id}/groups` | Create a group (V2) |
 | `GET` | `/api/v1/organizations/{org_id}/groups` | List groups, sorted by name (V2) |
 | `GET` | `/api/v1/organizations/{org_id}/groups/{name}` | Get a group (V2) |
-| `PUT` | `/api/v1/organizations/{org_id}/groups/{name}` | Update a group — `If-Match` required (V2) |
-| `DELETE` | `/api/v1/organizations/{org_id}/groups/{name}` | Delete a group — `If-Match` required (V2) |
+| `PUT` | `/api/v1/organizations/{org_id}/groups/{name}` | Update a group — event-sourced, optional `X-Fg-If-Revision` (#113 V4) |
+| `DELETE` | `/api/v1/organizations/{org_id}/groups/{name}` | Delete a group — event-sourced, optional `X-Fg-If-Revision` (#113 V4) |
+
+There is no `DELETE /api/v1/organizations/{org_id}` — org deletion isn't supported on the event log yet; the route falls through to Axum's default `405`.
 
 ### Response Codes (proxy-config)
 
@@ -60,14 +61,16 @@ The V3 implementation plan lives at
 | 204 | Group deleted |
 | 404 | Group or org not found |
 | 409 | Conflict — group name already exists on create |
-| 412 | Precondition Failed — `If-Match` etag mismatch on PUT/DELETE |
+| 412 | Precondition Failed — stale `X-Fg-If-Revision` on PUT/DELETE (#113 V4) |
 | 422 | Unprocessable Entity — validation error (bad name, empty allow, bad action format, etc.) |
-| 500 | Inconsistent State — F3' (DDB committed, VP push failed, rollback also failed) |
-| 503 | VP Push Failed — F3 (parent push failed, DDB rolled back) or F4 (mid-fanout failure on UPDATE) |
+| 500 | Inconsistent State — F-append compensation failed (VP-revert failed after a failed event append) |
+| 503 | VP Push Failed — F-VP (parent push failed) or F-VP-mid (mid-fanout failure on UPDATE) |
 
 **Caveats:**
 
-- `PUT` and `DELETE` require an `If-Match` header; omitting it returns `412`.
+- `PUT` and `DELETE` accept an optional `X-Fg-If-Revision` header; a stale
+  value returns `412`, omitting it skips the check (see
+  [`.claude/context/groups-v3.md`](../../.claude/context/groups-v3.md)).
 - `DELETE` pre-checks for live memberships and inheriting groups; either
   blocks deletion with an appropriate error.
 
@@ -81,39 +84,6 @@ taxonomy (F3 / F3' / F4 with status codes and body shapes), the
 `forgeguard_cp_group_rollback_failed_total` metric, the `vp_client` module
 shape, and the test scaffolding are documented in
 [`.claude/context/groups-v3.md`](../../.claude/context/groups-v3.md).
-
-**`is_declared_group` predicate:** exposed as
-`OrgStore::is_declared_group(org_id, name) -> Result<bool>`. Consumed by
-`POST /api/v1/organizations/{org_id}/users` (issue #100) to validate that a
-group name referenced in a user membership request is an actual declared group.
-
-#### V4 — Saga handoff stub
-
-`crates/control-plane/src/handlers/groups/saga.rs` exposes
-`materialize_groups_to_vp(MaterializeParams)`: a single async function that
-walks every declared group for an org, compiles each via
-`forgeguard_authz_core::groups_to_permits`, and pushes each resulting
-`NamedPermit` into the org's VP store using the V3 `push_permit`
-delete-then-create primitive. Permits push **alphabetically by group name**
-for test reproducibility — Cedar permits are independent so order has no
-semantic effect.
-
-Failure modes (see `MaterializeError`):
-
-| Variant | Stage | When |
-|---|---|---|
-| `ListGroupsFailed(Error)` | pre-walk | `OrgStore::list_groups` failed |
-| `CompileFailed { compile }` | pure compile | `groups_to_permits` rejected an entry; `compile.name` identifies it |
-| `PushFailed { name, source }` | VP push | `push_permit` failed for `cp-rbac-{group}` |
-
-V4 deliberately ships **no rollback, no Prometheus counter, no resume
-state**: at the first push failure the function returns and earlier
-permits remain in VP. Retry semantics, observability, and partial-failure
-recovery are the responsibility of the future saga ticket that owns the
-Draft → Active transition. The stub exists now so that ticket can call
-into a stable orchestration boundary; correctness is covered by
-`handlers::tests::groups_saga` against the in-memory `OrgStore` and
-`StubVpClient`.
 
 #### Storage layout
 
@@ -237,52 +207,45 @@ cargo run -p forgeguard_control_plane -- --config orgs.json
 
 The `orgs.json` file is gitignored (contains AWS resource IDs).
 
-### 4. Optimistic locking (issue #56)
+### 4. Optimistic locking — revision tokens (#113 V1)
 
-`PUT /api/v1/organizations/{org_id}` supports RFC 7232 `If-Match` optimistic locking
-on the organization's proxy config:
+Org and group mutations are event-sourced. `PUT`/`DELETE` no longer accept
+`If-Match`/`ETag` for write-side concurrency control — that's replaced by an
+optional `X-Fg-If-Revision: <u64>` header:
 
-- `GET /api/v1/organizations/{org_id}/proxy-config` returns the current `ETag`.
+- `GET /api/v1/organizations/{org_id}/proxy-config` returns the current `ETag`
+  for **read-side** conditional GET only (no write semantics).
 - `GET /api/v1/organizations/{org_id}` supports `If-None-Match`: returns
   **304 Not Modified** when the stored etag matches (or org is Configured and
   `If-None-Match: *` is sent); returns **200** with full body otherwise.
-- `PUT /api/v1/organizations/{org_id}` with `If-Match: <etag>` writes only if
-  the stored etag still matches; otherwise it returns **412 Precondition Failed**
-  with the current etag and a `reason` field in the body (mirrors the
-  `forgeguard_control_plane_put_org_412_total{reason=...}` Prometheus label).
-- Pass `If-Match: *` to write against any current representation — matches
-  Configured orgs unconditionally, fails closed (412) on Draft orgs.
-- `PUT` without `If-Match` preserves today's last-write-wins behaviour so that
-  CLI and script callers are not broken.
-- Name-only `PUT` bodies (no `config` field) skip the etag check — names are
-  cosmetic and not covered by optimistic locking (wildcard included).
-- `POST /api/v1/organizations` with a `config` field returns the new org's
-  `ETag` header in the 201 response, so first-update callers can skip a
-  pre-flight GET.
-
-ForgeGuard-owned callers (`forgeguard_cli`, dashboard, xtask) should send
-`If-Match` on every PUT. Absence is tolerated only for ad-hoc external callers.
+- `PUT /api/v1/organizations/{org_id}` accepts an optional
+  `X-Fg-If-Revision: <u64>` header. When present, the write is conditioned on
+  it matching the org's current revision; a mismatch returns
+  **412 Precondition Failed** with
+  `{"error": "revision_mismatch", "current_revision", "expected_revision"}`
+  and an `X-Fg-Revision` header carrying the current revision. Omitting the
+  header skips the check.
+- A semantically-identical `PUT` (same payload, ignoring `updated_at`) is a
+  no-op: `200` with the current revision, no event appended, no revision
+  check performed.
+- On success, the response carries the new revision in both the
+  `X-Fg-Revision` header and the JSON body's `revision` field.
+- Group `PUT`/`DELETE` use the same `X-Fg-If-Revision` model (#113 V4) — see
+  [`.claude/context/groups-v3.md`](../../.claude/context/groups-v3.md).
+- There is no `DELETE /api/v1/organizations/{org_id}`.
 
 ```sh
-ETAG=$(curl -s -I -H 'x-api-key: test-key' \
-  http://localhost:3001/api/v1/organizations/org-acme/proxy-config \
-  | awk 'tolower($1) == "etag:" {print $2}' | tr -d '\r')
-
-curl -is -H 'x-api-key: test-key' -H "If-Match: $ETAG" \
+curl -is -H 'x-api-key: test-key' \
   -H 'content-type: application/json' \
   -X PUT http://localhost:3001/api/v1/organizations/org-acme \
   -d '{"config": { ... }}'
-# 200 OK on match, 412 Precondition Failed on mismatch.
-```
+# 200 OK, X-Fg-Revision: <new revision> header on the response.
 
-To write unconditionally against any configured org:
-
-```sh
-curl -is -H 'x-api-key: test-key' -H 'If-Match: *' \
+curl -is -H 'x-api-key: test-key' -H 'X-Fg-If-Revision: 3' \
   -H 'content-type: application/json' \
   -X PUT http://localhost:3001/api/v1/organizations/org-acme \
   -d '{"config": { ... }}'
-# 200 OK for Configured orgs, 412 for Draft orgs.
+# 200 OK on match, 412 Precondition Failed with a fresh X-Fg-Revision on mismatch.
 ```
 
 Conditional GET — skip re-downloading an unchanged org config:
@@ -300,25 +263,12 @@ curl -is \
 # -> HTTP/1.1 304 Not Modified
 ```
 
-Both backends (`--store=memory` and `--store=dynamodb`) enforce `If-Match`
-identically as of V3. Exercise the Dynamo path locally via
-`cargo xtask control-plane test`.
-
 ### 5. Metrics
 
 The control plane exposes Prometheus metrics on `GET /metrics` (anonymous, no
-auth). 412 responses are counted with a reason label:
-
-```sh
-curl -s http://localhost:3001/metrics | grep put_org_412_total
-# forgeguard_control_plane_put_org_412_total{reason="draft_fail_closed"} 0
-# forgeguard_control_plane_put_org_412_total{reason="stale_etag"} 0
-# forgeguard_control_plane_put_org_412_total{reason="wildcard_on_draft"} 0
-```
-
-The `update_org` tracing span also carries a `precondition_reason` attribute
-mirroring the `reason` label, enabling per-request attribution via structured
-logs without adding an `org_id` label to the counter (cardinality risk).
+auth), including `forgeguard_cp_group_rollback_failed_total{stage="parent"|"fanout"}`
+— bumped when a group write's VP-revert compensation fails after a failed
+event append (see [`.claude/context/groups-v3.md`](../../.claude/context/groups-v3.md)).
 
 ### CLI Options
 
@@ -379,7 +329,6 @@ Each route maps to a `namespace:entity:action` QualifiedAction in the `cp` names
 | `GET` | `/api/v1/organizations` | `cp:organization:read` |
 | `GET` | `/api/v1/organizations/{org_id}` | `cp:organization:read` |
 | `PUT` | `/api/v1/organizations/{org_id}` | `cp:organization:update` |
-| `DELETE` | `/api/v1/organizations/{org_id}` | `cp:organization:delete` |
 | `GET` | `/api/v1/organizations/{org_id}/proxy-config` | `cp:proxy-config:read` |
 | `POST` | `/api/v1/organizations/{org_id}/keys` | `cp:key:generate` |
 | `GET` | `/api/v1/organizations/{org_id}/keys` | `cp:key:read` |
@@ -443,17 +392,17 @@ The control plane uses the `Organization` entity from `forgeguard_core` to repre
 |------|----------|---------|
 | `Organization` | `forgeguard_core` | Domain entity with status lifecycle, timestamps |
 | `OrgConfig` | `config.rs` | Versioned proxy configuration (replaces old `OrgProxyConfig`) |
-| `Etag` | `etag.rs` | Typed ETag value (`pub(crate)` newtype over `String`). Constructed via `Etag::try_new(raw)` (rejects empty strings); `as_str()` exposes the raw value. Companions `IfMatch`, `ResolvedIfMatch`, `EtagCheck`, and `IfNoneMatchResult` cover the full RFC 7232 optimistic-locking state machine in pure code. |
+| `Etag` | `etag.rs` | Typed ETag value (`pub(crate)` newtype over `String`). Constructed via `Etag::try_new(raw)` (rejects empty strings); `as_str()` exposes the raw value. Read-side only — drives conditional GET. Companions `IfMatch` and `IfNoneMatchResult` cover the RFC 7232 conditional-GET state machine in pure code. |
 | `OrgRecord` | `store.rs` | Pairs `Organization` + `OrgConfig` + precomputed `Etag` |
 | `OrgStore` trait | `store.rs` | Object-safe async trait for org storage backends |
 | `InMemoryOrgStore` | `store.rs` | In-memory HashMap behind `tokio::sync::RwLock` |
 | `DynamoOrgStore` | `dynamo_store.rs` | DynamoDB-backed organization store for production |
 
-## ETag Caching
+## ETag Caching (read-side only)
 
-Every org config response includes an `ETag` header (xxHash64 of the canonical JSON). Proxies send `If-None-Match` on subsequent polls and receive `304 Not Modified` when nothing has changed, saving bandwidth.
+Every org config response includes an `ETag` header (xxHash64 of the canonical JSON). Proxies send `If-None-Match` on subsequent polls and receive `304 Not Modified` when nothing has changed, saving bandwidth. This is a **read-side** optimization only — org and group writes use revision tokens (`X-Fg-If-Revision`), not `ETag`/`If-Match`.
 
-ETag values are represented end-to-end as the typed `Etag` newtype (see `etag.rs`). This eliminates raw-string comparisons in handlers and store implementations — the companion pure functions (`parse_if_match`, `check_etag`, `check_if_none_match`) centralise all comparison logic and guard against accidental equality tests on unquoted strings.
+ETag values are represented end-to-end as the typed `Etag` newtype (see `etag.rs`). This eliminates raw-string comparisons in handlers and store implementations — the companion pure functions (`parse_if_match`, `check_if_none_match`) centralise all comparison logic and guard against accidental equality tests on unquoted strings.
 
 ## Dependencies
 

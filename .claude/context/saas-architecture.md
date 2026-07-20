@@ -79,14 +79,20 @@ Worker (scheduler, every 5 min):
   Scans for pending/stale/error conditions, invokes sub-workers
 ```
 
-## Worker Architecture (Saga Pattern)
+## Worker Architecture (Event Log + Cursor)
 
-Stateless scheduler + idempotent sub-workers. Per-job-type error handling.
+The go-forward side-effect substrate is the per-org event log, not a saga-ticket
+pattern. Org, key, and group mutations append events (`{create_org, update_org}`,
+`{generate_org_key, revoke_org_key, rotate_org_key}`, `{put_group, delete_group}`)
+onto a monotonically-sequenced, per-org event log (`X-Fg-Revision`, `seq`). Reads
+and downstream side effects are derived by replaying the log from a cursor
+(`after` u64, exclusive) rather than by a scheduler dispatching stateful saga
+tickets. See [control-plane.md § Org CRUD is event-sourced](./control-plane.md#org-crud-is-event-sourced-revision-tokens-113-v1)
+for the write path and the events-cursor-replay handler for the read path.
 
-- **Scheduler:** Scans DynamoDB for conditions, invokes sub-workers via async Lambda invoke. Writes nothing. Fails fast.
-- **Sub-workers:** Own their state. Double write: intermediate state before attempting work. Always end in a known terminal state.
-- **Retry policy:** s3-sync auto-retries (idempotent). email-send never auto-retries (notifies admin instead).
-- **Notification worker:** Collects diagnostics (source record, error details, CloudWatch logs) before alerting admin.
+The standalone `forgeguard_worker` Lambda binary (`crates/worker/`) currently
+runs one job, dispatched via `FORGEGUARD_WORKER_JOB`: `reconciler` (syncs
+pending DynamoDB records to S3).
 
 ## Organization Domain Model
 

@@ -72,7 +72,7 @@ This makes "config without etag" and "etag without config" unrepresentable — s
 
 ### Lifecycle
 
-An org is created `Draft` (no config) and stays `Draft` until the onboarding saga (#55) provisions Cognito / VP / signing keys and flips it to `Active`, or an operator calls `POST .../activate` directly (see "Lifecycle Verbs (#113 V2)" below for the full `Draft`→`Active`⇄`Suspended`→`Deleting`→`Deleted` state machine and its three verb endpoints). Status is **independent** of whether config is attached:
+An org is created `Draft` (no config) and stays `Draft` until an operator calls `POST .../activate` directly (see "Lifecycle Verbs (#113 V2)" below for the full `Draft`→`Active`⇄`Suspended`→`Deleting`→`Deleted` state machine and its three verb endpoints). Status is **independent** of whether config is attached:
 
 | Created via | Status on creation | Config |
 |-------------|-------------------|--------|
@@ -83,7 +83,7 @@ An org is created `Draft` (no config) and stays `Draft` until the onboarding sag
 
 The file loader respects the declared `status` field on `RawOrgEntry`, defaulting to `Draft` when omitted. The previous heuristic (`configured.is_some() → Active`) was dropped in V5 of issue #102 — the seed flow no longer pre-promotes orgs and a config-bearing entry no longer implies Active.
 
-`PUT /api/v1/organizations/{org_id}` with a `config` body attaches config to a Draft org but does **not** auto-promote to Active — that transition is the saga's responsibility.
+`PUT /api/v1/organizations/{org_id}` with a `config` body attaches config to a Draft org but does **not** auto-promote to Active — an operator calls `POST .../activate` for that transition (see "Lifecycle Verbs (#113 V2)" below).
 
 `GET /api/v1/organizations/{org_id}/proxy-config` returns **409 Conflict** when `record.configured()` is `None`, with body `{"error":"organization '<id>' has no proxy config"}`. This is the proxy's signal that the org exists but is not yet ready to serve traffic.
 
@@ -123,10 +123,9 @@ etag-conditioned:
 There is no `DELETE /api/v1/organizations/{org_id}`; org deletion isn't
 supported on the log yet, so the route falls through to Axum's default `405`.
 Group `PUT`/`DELETE` moved to the same revision-tokened model in #113 V4 (see
-[groups-v3.md](./groups-v3.md)); user-schema `PUT`/`DELETE` are unaffected —
-they still use `ETag`/`If-Match` (see
-[optimistic-locking.md](./optimistic-locking.md), superseded for org and
-group mutations only).
+[groups-v3.md](./groups-v3.md)). Write-side `If-Match`/`ETag` no longer exist
+anywhere in the control plane; conditional GET (`If-None-Match` / `304`)
+survives read-side on org config and group reads only.
 
 ## Lifecycle Verbs (#113 V2)
 
@@ -153,7 +152,7 @@ With `activate` live, the V1 prod-QA workaround of hand-flipping an org's `statu
 
 `GET .../events` and `GET .../signing-keys` originally gated on `OrgStatus::Active` (404 unknown/deleted, `409 org_state_conflict` otherwise). Since lifecycle verbs mean orgs now spend real time in `Draft`/`Suspended`/`Deleting`, and SDKs/external verifiers need to observe the event log and signing keys through those states (not just once `Active`), both gates were relaxed to: 404 for unknown/`Deleted`, `200` otherwise.
 
-| Status | `GET .../events`, `GET .../signing-keys` (read, D10) | Principal/promotion/user-schema writes (unchanged) |
+| Status | `GET .../events`, `GET .../signing-keys` (read, D10) | Principal/promotion/group writes (unchanged) |
 |--------|-------------------------------------------------------|-----------------------------------------------------|
 | `Draft` | `200` | `409` |
 | `Active` | `200` | `200`/`201` |
@@ -162,7 +161,7 @@ With `activate` live, the V1 prod-QA workaround of hand-flipping an org's `statu
 | `Deleted` | `404` | `404` |
 | unknown | `404` | `404` |
 
-Write-side gates (principal upsert, promotion tombstone, groups, user-schema) are unchanged — still `Active`-only, `409 org_state_conflict` otherwise. D10 is read-only in scope.
+Write-side gates (principal upsert, promotion tombstone, groups) are unchanged — still `Active`-only, `409 org_state_conflict` otherwise. D10 is read-only in scope.
 
 ## Config File Format
 
@@ -500,10 +499,7 @@ compiled Cedar policies to Verified Permissions **first**, then appends the
 event only once the VP push succeeds (push-then-append, D6) — see
 [groups-v3.md](./groups-v3.md) for the full write pipeline and the
 F-VP/F-VP-mid/F-append failure-mode taxonomy that supersedes the old
-F3/F3'/F4 model. The `is_declared_group(org_id, name)` predicate is exposed
-on `OrgStore` for issue #100's `POST /users` validator, which must confirm
-that a referenced group name is actually declared before accepting a
-membership assignment.
+F3/F3'/F4 model.
 
 ## Event Append Spine (V1)
 
@@ -531,7 +527,7 @@ Cursor-based replay of the per-org event log, ordered by monotonic `seq`.
 
 ### Event signing key
 
-A dedicated per-org Ed25519 keypair (`SK = EVENT_SIGNING_KEY`) signs event envelopes. This is distinct from `signing_key_store.rs`'s key list, which is verification-only (public keys for verifying externally-signed BYOC proxy requests) and never persists a private key. The event-signing private key is lazily minted on first use with a conditional-write (CAS) retry, since it is self-managed by the control plane rather than provisioned by the onboarding saga.
+A dedicated per-org Ed25519 keypair (`SK = EVENT_SIGNING_KEY`) signs event envelopes. This is distinct from `signing_key_store.rs`'s key list, which is verification-only (public keys for verifying externally-signed BYOC proxy requests) and never persists a private key. The event-signing private key is lazily minted on first use with a conditional-write (CAS) retry, since it is self-managed by the control plane rather than provisioned out-of-band.
 
 ### DynamoDB layout
 
@@ -601,4 +597,4 @@ Pre-V5 events (appended before the identity wrapper existed) are permanently unf
 
 ## V3 of #102 — Active-org VP materialization
 
-V3 replaces the V2 `todo!("V3")` Active branch with a real DDB + Verified Permissions write pipeline (pure pre-flight → DDB write → parent VP push → alphabetical fanout) under `crates/control-plane/src/{vp_client,handlers/groups}/`. Failure-mode taxonomy (F3 / F3' / F4), rollback metric, test scaffolding, and Risk #5 boundary live in [groups-v3.md](./groups-v3.md). The Active path runs end-to-end against `StubVpClient` today; no production org is Active until the saga (V4) ships.
+V3 replaces the V2 `todo!("V3")` Active branch with a real DDB + Verified Permissions write pipeline (pure pre-flight → DDB write → parent VP push → alphabetical fanout) under `crates/control-plane/src/{vp_client,handlers/groups}/`. Failure-mode taxonomy (F3 / F3' / F4), rollback metric, test scaffolding, and Risk #5 boundary live in [groups-v3.md](./groups-v3.md). The Active path runs end-to-end against `StubVpClient` today.

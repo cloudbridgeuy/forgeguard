@@ -47,7 +47,7 @@ The measured cedar-policy spike (seven conformance assertions S1–S5, toolchain
 | [Verified Permissions](./.claude/context/verified-permissions.md) | VP integration: action format, Cedar types, CLI, config, and infrastructure. |
 | [Container Builds](./.claude/context/container-builds.md) | Distroless images, multi-stage builds, SSL strategy, and health checks. |
 | [CORS](./.claude/context/cors.md) | CORS config, origin matching, request flow, and crate placement. |
-| [SaaS Architecture](./.claude/context/saas-architecture.md) | Control/data plane split, infra stack, worker saga, and org domain model. |
+| [SaaS Architecture](./.claude/context/saas-architecture.md) | Control/data plane split, infra stack, event-log-driven worker, and org domain model. |
 | [Authn Wiring](./.claude/context/authn-wiring.md) | JWT + API key config, resolver construction, PrincipalKind routing, and FCIS split. |
 | [CLI](./.claude/context/cli.md) | `check`, `routes`, `policies`, and `keygen` subcommands; FCIS architecture. |
 | [xtask CP Tools](./.claude/context/xtask-control-plane-tools.md) | `seed`, `token`, and `curl` subcommands for end-to-end manual QA. |
@@ -56,7 +56,6 @@ The measured cedar-policy spike (seven conformance assertions S1–S5, toolchain
 | [Demo App](./.claude/context/demo-app.md) | E2E demo: Python TODO app, native proxy, demo config, and running instructions. |
 | [Control Plane](./.claude/context/control-plane.md) | CP scaffold, proxy-config endpoint, OrgStore trait, auth, VP authorization, ETag, draft/configured lifecycle, event append spine, promotion lifecycle (tombstone + reconciliation), time-travel fold (revision-pinned historical reads), and testing. |
 | [Groups V3/V4](./.claude/context/groups-v3.md) | Active-org VP materialization: `vp_client` module, `OrgWriteContext`/`VpStage` ADTs, push-then-append write ordering (#113 V4), F-VP/F-VP-mid/F-append failure-mode taxonomy, rollback metric, and test scaffolding. |
-| [Optimistic Locking](./.claude/context/optimistic-locking.md) | `If-Match` / `412` semantics for user-schema mutations, ETags, conditional GETs, and metrics. Superseded for organization mutations (#113 V1) and group mutations (#113 V4) by revision tokens — see Control Plane. |
 | [Infra: Control Plane](./.claude/context/infra-control-plane.md) | CDK project, 1Password integration, DynamoDB Global Table, and xtask infra commands. |
 | [AWS ARN Formats](./.claude/context/aws-arn-formats.md) | Per-service ARN gotchas and the rule to prefer CDK CFN attribute getters. |
 | [Cluster Mode](./.claude/context/cluster.md) | TieredCache, Redis wiring, config, health stats, and future slices. |

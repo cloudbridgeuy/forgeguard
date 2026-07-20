@@ -37,7 +37,7 @@ Active path needs. `OrgWriteContext::from_record` is the only constructor:
 
 - `OrgStatus::Active` + `cfg.vp_store_id == Some(_)` → `Active(VpContext)`
 - `OrgStatus::Active` + `vp_store_id == None` → `ActiveStateError::ActiveWithoutVpStore`
-  (Risk #5 — saga-invariant violation; see _Boundary cases_ below)
+  (Risk #5 — an Active org must carry a `vp_store_id`; see _Boundary cases_ below)
 - Anything else → `Draft`
 
 The orchestrator never re-checks `Option<vp_store_id>` — make-impossible-states-impossible
@@ -157,7 +157,8 @@ error, since at that point VP and the event log genuinely disagree.
 ### Boundary cases
 
 - **Active-without-vp_store_id** (Risk #5, carried from V3). An Active org
-  with `vp_store_id == None` is a saga-invariant violation. The handler
+  with `vp_store_id == None` violates the invariant that Active orgs carry a
+  `vp_store_id`. The handler
   surfaces the same `503 vp_push_failed{stage="parent"}` shape as F-VP, with
   `failed` set to the canonical policy name the request would have written.
   Nothing is written, so no compensation is needed.
@@ -223,78 +224,8 @@ to fail on the 3rd handler-driven create must arm `fail_after_n_creates(4 + 2)`
 — 4 seed creates already burnt `creates_so_far` to 4, the parent push burns
 the 5th, the first dependent burns the 6th, and the 7th fails.
 
-## Saga Coupling (follow-up)
+## Follow-ups
 
-V3 made the Active write path real but **no real Active org existed yet at
-the time** — the saga that flips `Draft → Active` and seeds the per-org VP
-store with the project schema is a separate follow-up ticket from both V3 and
-#113 V4. V3/V4 are end-to-end exercised through the stub today; the
-production hot path stays Draft until that saga ships. Automated
-reconciliation for F-append's compensation-failure case is also a follow-up
-concern (the alert points operators at it; nothing automated runs yet).
-
-## Materialize-to-VP saga stub
-
-This (predates #113 V4; not to be confused with it) lands the orchestration
-boundary the saga ticket will call once it owns the Draft → Active
-transition. It does **not** ship a saga.
-
-**Pure inner** (`forgeguard_authz_core::rbac::permits`):
-
-| Symbol | Purpose |
-|---|---|
-| `NamedPermit { name, statement }` | Single Cedar permit with its `cp-rbac-{group}` policy name. |
-| `policy_name_for_group(name)` | Canonical group → policy name mapping. Shared with V3 Active write path and `xtask cedar sync`. |
-| `MaterializeCompileError { name, reason }` | Compile-stage error variant; `name` identifies the offending group. |
-| `groups_to_permits(entries, namespace, tenant)` | Compile-many: returns `Vec<NamedPermit>` sorted alphabetically by group name. Stops at the first compile failure. |
-
-**Imperative shell** (`crates/control-plane/src/handlers/groups/saga.rs`):
-
-```rust
-pub(crate) struct MaterializeParams<'a, S, V> {
-    pub(crate) store: &'a S,
-    pub(crate) vp: &'a V,
-    pub(crate) org_id: &'a OrganizationId,
-    pub(crate) raw_org_id: &'a str,
-    pub(crate) vp_store_id: &'a str,
-    pub(crate) namespace: &'a str,
-    pub(crate) tenant: &'a TenantConfig,
-}
-
-pub(crate) async fn materialize_groups_to_vp<S, V>(
-    p: MaterializeParams<'_, S, V>,
-) -> Result<(), MaterializeError>
-where S: OrgStore, V: VpClient;
-```
-
-The function `list_groups → groups_to_permits → push_permit` per entry, in
-alphabetical order. `push_permit` is the same V3 delete-then-create
-primitive used by Active create/update so V3 and V4 produce byte-identical
-VP traffic for the same group set.
-
-**`MaterializeError` variants:**
-
-| Variant | Stage | Meaning |
-|---|---|---|
-| `ListGroupsFailed(crate::error::Error)` | pre-walk | `OrgStore::list_groups` failed |
-| `CompileFailed { compile: MaterializeCompileError }` | pure compile | One entry rejected; `compile.name` identifies it |
-| `PushFailed { name: String, source: vp_client::Error }` | VP push | Push of `cp-rbac-{group}` failed mid-walk |
-
-**What V4 deliberately omits:**
-
-- No DDB rollback on push failure (permits before the failure stay in VP).
-- No `forgeguard_cp_*` Prometheus counter for saga progress.
-- No resume state, retry policy, or partial-failure handling.
-
-Those land with the saga ticket. The shape of `MaterializeParams` and
-`MaterializeError` is the contract that ticket consumes — keep it stable.
-
-**Test coverage** (`crates/control-plane/src/handlers/tests/groups_saga.rs`):
-
-- `empty_groups_no_vp_calls` — no groups → no VP traffic, `Ok(())`.
-- `three_groups_pushed_in_alphabetical_order` — 3 entries → 6 calls (delete + create per permit), names sorted `alpha`, `member`, `zeta`.
-- `push_failure_aborts_with_first_failed_name` — `fail_on_create("cp-rbac-member")` → `Err(PushFailed { name: "cp-rbac-member", .. })`, `zeta` never appears in stub calls.
-- `second_run_against_same_stub_repeats_delete_then_create` — idempotency: re-running pushes the same delete-then-create sequence regardless of prior stub state.
-
-All four tests use `InMemoryOrgStore` + `StubVpClient` — no DynamoDB, no
-AWS, no network.
+Automated reconciliation for F-append's compensation-failure case is a
+follow-up concern (the alert points operators at it; nothing automated runs
+yet).

@@ -113,7 +113,7 @@ The test for "is this newtype shaped correctly?" is: can a downstream consumer e
 | `Percentage` | `core` | `percentage` | `0..=100` (u8) | bare integer |
 | `ConfigVersion` | `core` | `config_version` | `chrono::NaiveDate`, formatted `YYYY-MM-DD` | string |
 | `SagaId` | `core` | `saga_id` | non-empty, no `#`; `from_pk` strips `SAGA#` | bare; PK form `SAGA#<id>` |
-| `Etag` | `control-plane` | `etag` | quoted strong etag, non-empty | identical (RFC 7232) |
+| `Etag` | `control-plane` | `etag` | quoted strong etag, non-empty; read-side only — drives conditional GET (`If-None-Match` / 304) on org config and group reads, not a write-side precondition | identical (RFC 7232) |
 | `Fgrn` | `core` | `fgrn` | Brief v1.4 stable identity: `fgrn:{organization}:{kind}:{id}`, closed `FgrnKind` (`orgunit`\|`principal`\|`principal-set`\|`resource`), no wildcards | identical |
 | `NativeId` | `core` | `native_id` | non-empty, visible ASCII (`0x21..=0x7E`), no `:` or `*` — `/`, `_`, uppercase allowed | identical |
 | `VpFgrn` | `core` | `vp_fgrn` | legacy six-positional `fgrn:<project>:<tenant>:<namespace>:<resource-type>:<resource-id>`, frozen for the VP-era path only — do not extend | identical |
@@ -132,7 +132,7 @@ The test for "is this newtype shaped correctly?" is: can a downstream consumer e
 
 Two extra points of consistency:
 
-- **`*_core` crates own newtype types**; I/O crates consume them. `Etag` lives in `control-plane` only because it has no use outside the optimistic-locking machinery — if a second consumer appears, it moves to `forgeguard_core`.
+- **`*_core` crates own newtype types**; I/O crates consume them. `Etag` lives in `control-plane` only because it has no use outside the conditional-GET machinery — if a second consumer appears, it moves to `forgeguard_core`.
 - **Error variants live in the owning crate's `Error`.** `Error::InvalidPercentage(u8)`, `Error::InvalidConfigVersion { raw: String }`, `Error::InvalidEtag { raw: String }`. Don't reuse a generic `Error::Validation(String)` — the typed variant lets callers match on the specific failure.
 
 ## How to Add a New Newtype
@@ -159,7 +159,7 @@ The eight-stream rollout that propagated `Percentage` / `ConfigVersion` / `SagaI
 
 - **Don't double-wrap errors.** When the inner `Error` variant already prefixes its message (e.g. `forgeguard_http::Error::Config` displays as `"config error: ..."`), the binary wrapper should add **context** (`failed to load config from '/path'`), not re-prefix. The doubled-prefix pattern showed up in `crates/cli/src/check.rs` before the fix and was caught only by the QA walkthrough — not by lint, not by tests. Use `wrap_err_with(|| format!("failed to <verb> <noun> from '<path>'"))` and let the inner error's `Display` carry its own framing. The canonical example is `crates/cli/src/policies/test.rs`.
 - **`Result` returns must have a real failure path.** During the Etag migration, `from_stored -> Result<Self>` and `compute_etag -> Result<Etag>` both ended up with no reachable error case after the inner type became infallible. Code review caught both. When migrating away from primitives, audit `Result` returns at every layer — if `?` is never reachable, drop the wrapper.
-- **`Option<T>` is a real signal, not a "maybe later" placeholder.** The Draft / Configured split in optimistic locking surfaced as `EtagCheck::Mismatch.current: Option<Etag>` — Draft orgs genuinely have no etag, and the `Option` encodes that. Resist the urge to invent a "null etag" sentinel value.
+- **`Option<T>` is a real signal, not a "maybe later" placeholder.** The Draft / Configured split in the (now read-side-only) etag machinery surfaced as `Option<Etag>` — Draft orgs genuinely have no etag, and the `Option` encodes that. Resist the urge to invent a "null etag" sentinel value.
 - **Tests behind a Cargo feature or external service won't run on `xtask lint`.** The DynamoDB integration tests in `crates/control-plane/src/dynamo_store/tests.rs` need `cargo xtask control-plane test` (which auto-starts dynamodb-local). When refactoring a type that's used in those tests, run that command before claiming the migration is complete.
 - **Wire-format DTO structs keep primitives.** `PreconditionFailedBody.current_etag: String` stays a `String` — it's a JSON shape, not a domain value. The conversion from `Option<Etag>` to wire `String` happens at the handler boundary (`match Option<Etag> -> String`). Don't push newtypes into the wire layer just because they exist in the domain.
 
@@ -167,7 +167,6 @@ The eight-stream rollout that propagated `Percentage` / `ConfigVersion` / `SagaI
 
 - [`visibility-conventions.md`](./visibility-conventions.md) — constructor + accessor shape, `pub(crate)` default, `testing` Cargo feature for cross-crate fixtures.
 - [`params-struct-rule.md`](./params-struct-rule.md) — when constructors grow past five args.
-- [`optimistic-locking.md`](./optimistic-locking.md) — `Etag` newtype in context, RFC 7232 wire semantics, V5 typed 412.
 - [`linting-and-clippy.md`](./linting-and-clippy.md) — workspace lints that back the pattern.
 - `~/.claude/patterns/parse-dont-validate.md` — the upstream principle.
 - `~/.claude/patterns/type-driven-development.md` — types as specification.
