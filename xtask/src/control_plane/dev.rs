@@ -36,14 +36,6 @@ pub(crate) struct DevArgs {
     )]
     table: String,
 
-    /// Sagas DynamoDB table name to create (V3 POST /users saga store).
-    #[arg(
-        long,
-        default_value = "forgeguard-sagas",
-        env = "FORGEGUARD_CP_SAGAS_TABLE"
-    )]
-    sagas_table: String,
-
     /// Listen address for the control plane.
     #[arg(long, default_value = "127.0.0.1:3001", env = "FORGEGUARD_CP_LISTEN")]
     listen: String,
@@ -145,91 +137,6 @@ async fn create_table(client: &Client, table: &str) -> Result<()> {
     Ok(())
 }
 
-/// Create the sagas DynamoDB table (PK/SK + `gsi_in_flight` sparse GSI).
-async fn create_sagas_table(client: &Client, table: &str) -> Result<()> {
-    use aws_sdk_dynamodb::types::{GlobalSecondaryIndex, Projection, ProjectionType};
-
-    println!("Creating sagas DynamoDB table '{table}'...");
-
-    client
-        .create_table()
-        .table_name(table)
-        .attribute_definitions(
-            AttributeDefinition::builder()
-                .attribute_name("PK")
-                .attribute_type(ScalarAttributeType::S)
-                .build()
-                .context("failed to build PK attribute definition")?,
-        )
-        .attribute_definitions(
-            AttributeDefinition::builder()
-                .attribute_name("SK")
-                .attribute_type(ScalarAttributeType::S)
-                .build()
-                .context("failed to build SK attribute definition")?,
-        )
-        .attribute_definitions(
-            AttributeDefinition::builder()
-                .attribute_name("gsi_pk")
-                .attribute_type(ScalarAttributeType::S)
-                .build()
-                .context("failed to build gsi_pk attribute definition")?,
-        )
-        .attribute_definitions(
-            AttributeDefinition::builder()
-                .attribute_name("gsi_sk")
-                .attribute_type(ScalarAttributeType::S)
-                .build()
-                .context("failed to build gsi_sk attribute definition")?,
-        )
-        .key_schema(
-            KeySchemaElement::builder()
-                .attribute_name("PK")
-                .key_type(KeyType::Hash)
-                .build()
-                .context("failed to build PK schema")?,
-        )
-        .key_schema(
-            KeySchemaElement::builder()
-                .attribute_name("SK")
-                .key_type(KeyType::Range)
-                .build()
-                .context("failed to build SK schema")?,
-        )
-        .global_secondary_indexes(
-            GlobalSecondaryIndex::builder()
-                .index_name("gsi_in_flight")
-                .key_schema(
-                    KeySchemaElement::builder()
-                        .attribute_name("gsi_pk")
-                        .key_type(KeyType::Hash)
-                        .build()
-                        .context("failed to build gsi_pk schema")?,
-                )
-                .key_schema(
-                    KeySchemaElement::builder()
-                        .attribute_name("gsi_sk")
-                        .key_type(KeyType::Range)
-                        .build()
-                        .context("failed to build gsi_sk schema")?,
-                )
-                .projection(
-                    Projection::builder()
-                        .projection_type(ProjectionType::All)
-                        .build(),
-                )
-                .build()
-                .context("failed to build gsi_in_flight index")?,
-        )
-        .billing_mode(BillingMode::PayPerRequest)
-        .send()
-        .await
-        .context("failed to create sagas DynamoDB table")?;
-
-    println!("Sagas table '{table}' created.");
-    Ok(())
-}
-
 /// Read the seed file and insert each organization into DynamoDB.
 async fn seed_organizations(client: &Client, table: &str, seed_path: &str) -> Result<()> {
     let schema = orgs_schema();
@@ -319,19 +226,13 @@ async fn seed_organizations(client: &Client, table: &str, seed_path: &str) -> Re
 /// The parent ignores SIGINT while the child runs so that Ctrl-C kills only the
 /// child.  The parent then resumes, allowing `ContainerGuard` to drop and stop
 /// the DynamoDB container.
-fn launch_control_plane(
-    table: &str,
-    sagas_table: &str,
-    listen: &str,
-    port: u16,
-    extra: &[String],
-) -> Result<()> {
+fn launch_control_plane(table: &str, listen: &str, port: u16, extra: &[String]) -> Result<()> {
     use std::os::unix::process::CommandExt;
     use std::process::Command;
 
     let endpoint = format!("http://127.0.0.1:{port}");
 
-    println!("Launching control plane (listen: {listen}, table: {table}, sagas_table: {sagas_table}, endpoint: {endpoint})...");
+    println!("Launching control plane (listen: {listen}, table: {table}, endpoint: {endpoint})...");
     println!("Note: Verified Permissions / Cognito calls hit real AWS. Ensure AWS_PROFILE is set and you are SSO-logged-in.");
     println!("Press Ctrl-C to stop.");
 
@@ -344,8 +245,6 @@ fn launch_control_plane(
         "dynamodb",
         "--dynamodb-table",
         table,
-        "--sagas-table",
-        sagas_table,
         "--listen",
         listen,
     ];
@@ -415,16 +314,9 @@ pub(crate) async fn run(args: &DevArgs) -> Result<()> {
     if let Some(e) = last_err {
         return Err(e);
     }
-    create_sagas_table(&client, &args.sagas_table).await?;
     seed_organizations(&client, &args.table, &args.seed).await?;
 
-    launch_control_plane(
-        &args.table,
-        &args.sagas_table,
-        &args.listen,
-        port,
-        &args.extra,
-    )?;
+    launch_control_plane(&args.table, &args.listen, port, &args.extra)?;
 
     Ok(())
 }

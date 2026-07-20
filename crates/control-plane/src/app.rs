@@ -28,13 +28,12 @@ use forgeguard_proxy_core::{MembershipResolver, PipelineConfig, PipelineConfigPa
 use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 
-use crate::dynamo_store::saga::DynamoSagaTicketStore;
 use crate::dynamo_store::DynamoOrgStore;
 use crate::handlers::AppState;
 use crate::membership_store::DynamoMembershipResolver;
 use crate::model_event_store::{DynamoModelEventStore, InMemoryModelEventStore, ModelEventStore};
 use crate::signing_key_store::DynamoSigningKeyStore;
-use crate::store::{self, InMemorySagaTicketStore, OrgStore, SagaTicketStore};
+use crate::store::{self, OrgStore};
 use crate::user_pool::{AwsCognitoUserPoolClient, InMemoryUserPoolClient, UserPoolClient};
 use crate::vp_client::aws::AwsVpClient;
 use crate::vp_client::VpClient;
@@ -83,7 +82,6 @@ impl AuthConfig {
 /// wires all routes. This is the entry point for Lambda deployments.
 pub async fn dynamodb_router(
     table_name: &str,
-    sagas_table_name: &str,
     auth: Option<&AuthConfig>,
 ) -> color_eyre::Result<Router> {
     let sdk_config = aws_config::defaults(aws_config::BehaviorVersion::latest())
@@ -104,10 +102,6 @@ pub async fn dynamodb_router(
     let vp = Arc::new(AwsVpClient::new(vp_sdk_client.clone()));
     let user_pool: Arc<dyn UserPoolClient> =
         Arc::new(AwsCognitoUserPoolClient::new(cognito_client));
-    let saga_tickets: Arc<dyn SagaTicketStore> = Arc::new(DynamoSagaTicketStore::new(
-        dynamo_client.clone(),
-        sagas_table_name.to_string(),
-    ));
     let model_events: Arc<dyn ModelEventStore> = Arc::new(DynamoModelEventStore::new(
         dynamo_client.clone(),
         table_name.to_string(),
@@ -137,7 +131,6 @@ pub async fn dynamodb_router(
             store: s,
             vp,
             user_pool,
-            saga_tickets,
             model_events,
         },
         fg,
@@ -164,9 +157,9 @@ pub async fn memory_router(
         &sdk_config,
     )));
     // Memory mode skips the AWS user-pool round trip — InMemoryUserPoolClient
-    // keeps `POST /users` exercisable end-to-end against a dev JSON config.
+    // keeps the user-schema Active-org Cognito sync path exercisable end-to-end
+    // against a dev JSON config.
     let user_pool: Arc<dyn UserPoolClient> = Arc::new(InMemoryUserPoolClient::new());
-    let saga_tickets: Arc<dyn SagaTicketStore> = Arc::new(InMemorySagaTicketStore::new());
     let model_events: Arc<dyn ModelEventStore> =
         Arc::new(InMemoryModelEventStore::new_with_org_store(Arc::clone(&s)));
     // Ed25519 resolver requires DynamoDB for key lookup; memory mode has no DynamoDB client.
@@ -177,7 +170,6 @@ pub async fn memory_router(
             store: s,
             vp,
             user_pool,
-            saga_tickets,
             model_events,
         },
         fg,
@@ -214,7 +206,6 @@ const API_ROUTES: &[(&str, &str)] = &[
     ("DELETE", "/api/v1/organizations/{org_id}/groups/{name}"),
     ("GET", "/api/v1/organizations/{org_id}/user-schema"),
     ("PUT", "/api/v1/organizations/{org_id}/user-schema"),
-    ("POST", "/api/v1/organizations/{org_id}/users"),
     (
         "PUT",
         "/api/v1/organizations/{org_id}/principals/{native_id}",
@@ -328,12 +319,6 @@ fn cp_route_actions() -> forgeguard_http::Result<Vec<RouteMapping>> {
             "PUT",
             "/api/v1/organizations/{org_id}/user-schema",
             "cp:user-schema:update",
-            Some("org_id"),
-        ),
-        (
-            "POST",
-            "/api/v1/organizations/{org_id}/users",
-            "cp:user:create",
             Some("org_id"),
         ),
         (
@@ -563,10 +548,6 @@ fn build_router<V: VpClient + 'static>(state: AppState<V>, fg: Arc<ForgeGuard>) 
                 .put(handlers::user_schema::put_user_schema_handler::<V>),
         )
         .route(
-            "/api/v1/organizations/{org_id}/users",
-            post(handlers::users::create_handler::<V>),
-        )
-        .route(
             "/api/v1/organizations/{org_id}/principals/{native_id}",
             axum::routing::put(handlers::principals::upsert_principal::<V>),
         )
@@ -617,8 +598,8 @@ mod tests {
         let mappings = cp_route_actions().expect("cp_route_actions must not fail");
         assert_eq!(
             mappings.len(),
-            25,
-            "expected 25 route mappings, got {}",
+            24,
+            "expected 24 route mappings, got {}",
             mappings.len()
         );
         // Confirm each action string round-trips correctly through QualifiedAction
@@ -639,7 +620,6 @@ mod tests {
             "cp:group:delete",
             "cp:user-schema:read",
             "cp:user-schema:update",
-            "cp:user:create",
             "cp:principal:upsert",
             "cp:events:read",
             "cp:resource:tombstone",
@@ -733,11 +713,6 @@ mod tests {
                 "PUT",
                 "/api/v1/organizations/org-123/user-schema",
                 "cp:user-schema:update",
-            ),
-            (
-                "POST",
-                "/api/v1/organizations/org-123/users",
-                "cp:user:create",
             ),
             (
                 "DELETE",

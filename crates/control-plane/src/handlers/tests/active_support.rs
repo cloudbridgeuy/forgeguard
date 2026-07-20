@@ -42,9 +42,7 @@ use crate::model_event_store::{
 };
 use crate::promotion_store::PromotionEntry;
 use crate::signing_key::GenerateKeyResult;
-use crate::store::{
-    build_org_store, InMemorySagaTicketStore, OrgRecord, OrgStore, SagaTicketStore,
-};
+use crate::store::{build_org_store, OrgRecord, OrgStore};
 use crate::user_pool::{InMemoryUserPoolClient, UserPoolClient};
 use crate::vp_client::stub::StubVpClient;
 use forgeguard_authz_core::{EventEnvelope, EventKind, FoldedState, Revision};
@@ -337,12 +335,10 @@ pub(super) fn test_app_for_store(
     let fg = Arc::new(ForgeGuard::new(config, chain, engine));
 
     let user_pool: Arc<dyn UserPoolClient> = Arc::new(InMemoryUserPoolClient::new());
-    let saga_tickets: Arc<dyn SagaTicketStore> = Arc::new(InMemorySagaTicketStore::new());
     let state = AppState {
         store,
         vp,
         user_pool,
-        saga_tickets,
         model_events,
     };
     Router::new()

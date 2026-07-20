@@ -81,7 +81,7 @@ pub(crate) enum GroupWriteOutcome {
 /// Bundling all three into one trait (rather than composing `EventLog` +
 /// `get_principal` + a signing helper at the call site) keeps the handler
 /// generic over `Arc<dyn ModelEventStore>` — the same object-safe seam
-/// `OrgStore`/`SagaTicketStore` already establish — so `InMemoryModelEventStore`
+/// `OrgStore` already establishes — so `InMemoryModelEventStore`
 /// can stand in for the DynamoDB implementation in handler tests.
 ///
 /// V3 (#110) additionally hangs the promotion lifecycle (`get_promotion`,

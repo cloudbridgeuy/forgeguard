@@ -1,11 +1,7 @@
 pub(crate) mod groups;
-pub(crate) mod in_memory_saga;
-pub(crate) mod saga;
 pub(crate) mod user_schema;
 
 pub(crate) use groups::EtagedGroup;
-pub(crate) use in_memory_saga::InMemorySagaTicketStore;
-pub(crate) use saga::{SagaStageUpdate, SagaTicketStore};
 pub(crate) use user_schema::EtagedUserSchema;
 
 use std::collections::{BTreeMap, HashMap};
@@ -16,8 +12,8 @@ use chrono::Utc;
 use ed25519_dalek::pkcs8::spki::der::pem::LineEnding;
 use ed25519_dalek::pkcs8::EncodePrivateKey as _;
 use ed25519_dalek::pkcs8::EncodePublicKey as _;
-use forgeguard_authn_core::{MembershipRow, UserSchema};
-use forgeguard_core::{OrgStatus, Organization, OrganizationId, UserId};
+use forgeguard_authn_core::UserSchema;
+use forgeguard_core::{OrgStatus, Organization, OrganizationId};
 use serde::Deserialize;
 
 use crate::config::OrgConfig;
@@ -105,11 +101,6 @@ pub(crate) trait OrgStore: Send + Sync {
         name: &str,
     ) -> Result<BTreeMap<String, u32>>;
 
-    /// Return `true` iff `name` is a declared (written) group for the org.
-    ///
-    /// Reserved for issue #100's POST /users membership validator.
-    async fn is_declared_group(&self, org_id: &OrganizationId, name: &str) -> Result<bool>;
-
     // -----------------------------------------------------------------------
     // User schema CRUD
     // -----------------------------------------------------------------------
@@ -137,30 +128,6 @@ pub(crate) trait OrgStore: Send + Sync {
         schema: UserSchema,
         expected_etag: Option<&Etag>,
     ) -> Result<EtagedUserSchema>;
-
-    // -----------------------------------------------------------------------
-    // Membership writes (V3 — POST /users saga, stage S3)
-    // -----------------------------------------------------------------------
-
-    /// Persist a membership row for `(org_id, user)`.
-    ///
-    /// Implementations MUST use `ConditionExpression: attribute_not_exists(SK)`
-    /// so a concurrent duplicate write (e.g. saga retry race) returns
-    /// [`Error::Conflict`] rather than silently overwriting an existing row.
-    /// The V3 saga driver handles a duplicate by treating it as "stage S3 done"
-    /// only after re-reading the row to confirm it matches the intended payload.
-    async fn put_membership_row(&self, params: PutMembershipRowParams<'_>) -> Result<()>;
-}
-
-/// Inputs for [`OrgStore::put_membership_row`].
-///
-/// Single-field params struct per the plan §12 spec — the wrapper exists for
-/// future extensibility (e.g. conditional-write tokens, optimistic-lock etags)
-/// without churning the trait signature. Borrows the row so the saga driver
-/// keeps ownership for downstream response building.
-#[derive(Debug, Clone)]
-pub(crate) struct PutMembershipRowParams<'a> {
-    pub(crate) row: &'a MembershipRow,
 }
 
 /// A configured (`OrgConfig` + matching etag) pair.
@@ -242,13 +209,6 @@ pub(crate) struct InMemoryOrgStore {
     /// InMemory tests. Production memberships live in DynamoDB only (Group E).
     memberships_to_groups: tokio::sync::RwLock<BTreeMap<(OrganizationId, String), Vec<String>>>,
     user_schemas: tokio::sync::RwLock<BTreeMap<OrganizationId, EtagedUserSchema>>,
-    /// `(org_id, user_sub)` → full V3 membership row.
-    ///
-    /// V3 introduces this for `put_membership_row`. The legacy
-    /// `memberships_to_groups` is kept for V2 delete-conflict tests; V3 writes
-    /// keep both maps in sync so existing tests are unaffected. Read by the
-    /// `get_membership_row` test probe and written by `put_membership_row`.
-    membership_rows: tokio::sync::RwLock<BTreeMap<(OrganizationId, UserId), MembershipRow>>,
 }
 
 impl InMemoryOrgStore {
@@ -259,7 +219,6 @@ impl InMemoryOrgStore {
             groups: tokio::sync::RwLock::new(BTreeMap::new()),
             memberships_to_groups: tokio::sync::RwLock::new(BTreeMap::new()),
             user_schemas: tokio::sync::RwLock::new(BTreeMap::new()),
-            membership_rows: tokio::sync::RwLock::new(BTreeMap::new()),
         }
     }
 
@@ -376,14 +335,6 @@ impl OrgStore for InMemoryOrgStore {
         Ok(counts)
     }
 
-    async fn is_declared_group(&self, org_id: &OrganizationId, name: &str) -> Result<bool> {
-        Ok(self
-            .groups
-            .read()
-            .await
-            .contains_key(&(org_id.clone(), name.to_string())))
-    }
-
     // -----------------------------------------------------------------------
     // User schema CRUD
     // -----------------------------------------------------------------------
@@ -420,46 +371,6 @@ impl OrgStore for InMemoryOrgStore {
         let next = EtagedUserSchema::compute(schema);
         g.insert(org_id.clone(), next.clone());
         Ok(next)
-    }
-
-    async fn put_membership_row(&self, params: PutMembershipRowParams<'_>) -> Result<()> {
-        let row = params.row;
-        let org_id = row.org_id().clone();
-        let sub = row.sub().clone();
-        let groups: Vec<String> = row
-            .groups()
-            .iter()
-            .map(std::string::ToString::to_string)
-            .collect();
-
-        let mut rows = self.membership_rows.write().await;
-        let key = (org_id.clone(), sub.clone());
-        if rows.contains_key(&key) {
-            return Err(Error::Conflict(format!(
-                "membership row for user '{sub}' in org '{org_id}' already exists"
-            )));
-        }
-        rows.insert(key, row.clone());
-
-        let mut legacy = self.memberships_to_groups.write().await;
-        legacy.insert((org_id, sub.as_str().to_owned()), groups);
-        Ok(())
-    }
-}
-
-impl InMemoryOrgStore {
-    /// Test/handler probe: borrow the materialised V3 membership row for
-    /// `(org_id, sub)`, or `None` if no row was written. Used by the
-    /// `POST /users` integration tests to assert S3's effect on the store
-    /// without paying the cost of a `Box<dyn Any>` downcast.
-    #[cfg(test)]
-    pub(crate) async fn get_membership_row(
-        &self,
-        org_id: &OrganizationId,
-        sub: &UserId,
-    ) -> Option<MembershipRow> {
-        let rows = self.membership_rows.read().await;
-        rows.get(&(org_id.clone(), sub.clone())).cloned()
     }
 }
 

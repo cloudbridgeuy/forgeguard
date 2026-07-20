@@ -8,7 +8,6 @@ pub(crate) mod principals;
 pub(crate) mod promotions;
 pub(crate) mod signing_keys;
 pub(crate) mod user_schema;
-pub(crate) mod users;
 
 use std::sync::Arc;
 
@@ -24,7 +23,7 @@ use serde::Deserialize;
 use crate::config::OrgConfig;
 use crate::etag::{self, Etag, IfNoneMatchResult};
 use crate::model_event_store::ModelEventStore;
-use crate::store::{OrgRecord, OrgStore, SagaTicketStore};
+use crate::store::{OrgRecord, OrgStore};
 use crate::user_pool::UserPoolClient;
 use crate::vp_client::VpClient;
 
@@ -79,9 +78,9 @@ pub(super) fn clamp_limit(requested: u16) -> usize {
 /// `State<Arc<dyn OrgStore>>` via the `FromRef` impl below; group handlers
 /// extract the full [`AppState<V>`].
 ///
-/// V3 adds `user_pool` and `saga_tickets` for the inline `POST /users` saga
-/// driver. The trait objects let production wire `AwsCognitoUserPoolClient` +
-/// `DynamoSagaTicketStore` while tests wire the in-memory equivalents.
+/// V3 adds `user_pool` for the user-schema Active-org Cognito sync path. The
+/// trait object lets production wire `AwsCognitoUserPoolClient` while tests
+/// wire the in-memory equivalent.
 ///
 /// V1-append-spine adds `model_events` — the [`ModelEventStore`] seam the
 /// `PUT /principals/{native_id}` handler upserts through, wiring
@@ -92,7 +91,6 @@ pub(crate) struct AppState<V> {
     pub(crate) store: Arc<dyn OrgStore>,
     pub(crate) vp: Arc<V>,
     pub(crate) user_pool: Arc<dyn UserPoolClient>,
-    pub(crate) saga_tickets: Arc<dyn SagaTicketStore>,
     pub(crate) model_events: Arc<dyn ModelEventStore>,
 }
 
@@ -102,7 +100,6 @@ impl<V> Clone for AppState<V> {
             store: Arc::clone(&self.store),
             vp: Arc::clone(&self.vp),
             user_pool: Arc::clone(&self.user_pool),
-            saga_tickets: Arc::clone(&self.saga_tickets),
             model_events: Arc::clone(&self.model_events),
         }
     }
@@ -117,12 +114,6 @@ impl<V> FromRef<AppState<V>> for Arc<dyn OrgStore> {
 impl<V> FromRef<AppState<V>> for Arc<dyn UserPoolClient> {
     fn from_ref(input: &AppState<V>) -> Arc<dyn UserPoolClient> {
         Arc::clone(&input.user_pool)
-    }
-}
-
-impl<V> FromRef<AppState<V>> for Arc<dyn SagaTicketStore> {
-    fn from_ref(input: &AppState<V>) -> Arc<dyn SagaTicketStore> {
-        Arc::clone(&input.saga_tickets)
     }
 }
 
@@ -570,45 +561,21 @@ pub(super) mod test_support {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use axum::extract::{Path, State};
-    use axum::http::StatusCode;
-    use axum::response::{IntoResponse, Response};
     use axum::Router;
     use forgeguard_authn_core::static_api_key::{ApiKeyEntry, StaticApiKeyResolver};
     use forgeguard_authn_core::IdentityChain;
     use forgeguard_authz_core::{PolicyDecision, PolicyEngine, StaticPolicyEngine};
     use forgeguard_axum::{forgeguard_layer, ForgeGuard};
-    use forgeguard_core::{FlagConfig, GroupName, OrganizationId, ProjectId, TenantId, UserId};
+    use forgeguard_core::{FlagConfig, GroupName, ProjectId, TenantId, UserId};
     use forgeguard_http::{
         DefaultPolicy, PublicAuthMode, PublicRoute, PublicRouteMatcher, RouteMatcher,
     };
     use forgeguard_proxy_core::{PipelineConfig, PipelineConfigParams};
 
     use crate::model_event_store::ModelEventStore;
-    use crate::store::{
-        build_org_store, InMemoryOrgStore, InMemorySagaTicketStore, OrgStore, SagaTicketStore,
-    };
+    use crate::store::{build_org_store, InMemoryOrgStore, OrgStore};
     use crate::user_pool::{InMemoryUserPoolClient, UserPoolClient};
     use crate::vp_client::stub::{happy_stub, StubVpClient};
-
-    /// Test-only handler that probes whether a group name is declared for an org.
-    ///
-    /// Mounted only by `test_app` at `GET /test/declared-group/{org_id}/{name}`.
-    /// This route is **never** compiled into production binaries — it is gated
-    /// by `#[cfg(test)]` and only wired inside `test_app`.
-    pub(crate) async fn declared_group_handler(
-        Path((org_id, name)): Path<(String, String)>,
-        State(store): State<Arc<dyn OrgStore>>,
-    ) -> Response {
-        let Ok(o) = OrganizationId::new(&org_id) else {
-            return StatusCode::NOT_FOUND.into_response();
-        };
-        match store.is_declared_group(&o, &name).await {
-            Ok(true) => StatusCode::OK.into_response(),
-            Ok(false) => StatusCode::NOT_FOUND.into_response(),
-            Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-        }
-    }
 
     pub const TEST_API_KEY: &str = "test-key";
 
@@ -689,7 +656,6 @@ pub(super) mod test_support {
         let fg = Arc::new(ForgeGuard::new(config, chain, engine));
 
         let user_pool: Arc<dyn UserPoolClient> = Arc::new(InMemoryUserPoolClient::new());
-        let saga_tickets: Arc<dyn SagaTicketStore> = Arc::new(InMemorySagaTicketStore::new());
         let model_events: Arc<dyn ModelEventStore> = Arc::new(
             crate::model_event_store::InMemoryModelEventStore::new_with_org_store(Arc::clone(
                 &store,
@@ -700,7 +666,6 @@ pub(super) mod test_support {
             store,
             vp,
             user_pool,
-            saga_tickets,
             model_events,
         };
         let router = Router::new()
@@ -746,10 +711,6 @@ pub(super) mod test_support {
                     .put(super::user_schema::put_user_schema_handler::<StubVpClient>),
             )
             .route(
-                "/api/v1/organizations/{org_id}/users",
-                axum::routing::post(super::users::create_handler::<StubVpClient>),
-            )
-            .route(
                 "/api/v1/organizations/{org_id}/principals/{native_id}",
                 axum::routing::put(super::principals::upsert_principal::<StubVpClient>),
             )
@@ -784,13 +745,6 @@ pub(super) mod test_support {
                 axum::routing::post(super::lifecycle::restore_handler::<StubVpClient>),
             )
             .route("/metrics", axum::routing::get(super::metrics_handler))
-            // Test-only probe route — never compiled into production binaries.
-            // Allows tests to check `is_declared_group` via HTTP without
-            // exposing the predicate through the real API surface.
-            .route(
-                "/test/declared-group/{org_id}/{name}",
-                axum::routing::get(declared_group_handler),
-            )
             .with_state(state)
             .layer(axum::middleware::from_fn_with_state(fg, forgeguard_layer));
         (router, model_events_handle)

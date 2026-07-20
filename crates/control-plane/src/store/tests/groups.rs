@@ -259,36 +259,3 @@ async fn count_memberships_for_group_mirrors_per_user_counts() {
     assert_eq!(admin_counts.len(), 1, "only bob is in admin");
     assert_eq!(admin_counts["user-bob"], 1);
 }
-
-// ---------------------------------------------------------------------------
-// C.4.9 — is_declared_group
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn is_declared_group_returns_true_for_written_group() {
-    let (org_store, events) = stores();
-    let oid = org("org-grp-declared");
-
-    events
-        .put_group(oid.as_str(), entry("member"), Actor::System, None)
-        .await
-        .unwrap();
-
-    assert!(org_store.is_declared_group(&oid, "member").await.unwrap());
-}
-
-#[tokio::test]
-async fn is_declared_group_returns_false_for_unknown_group() {
-    let (org_store, _events) = stores();
-    let oid = org("org-grp-undeclared");
-
-    assert!(!org_store.is_declared_group(&oid, "ghost").await.unwrap());
-}
-
-#[tokio::test]
-async fn is_declared_group_returns_false_for_unknown_org() {
-    let (org_store, _events) = stores();
-    let oid = org("org-grp-no-org");
-
-    assert!(!org_store.is_declared_group(&oid, "member").await.unwrap());
-}

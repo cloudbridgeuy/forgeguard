@@ -8,8 +8,6 @@
 //! of truth consumed by both CDK (TypeScript) and Rust.
 
 pub(crate) mod groups;
-pub(crate) mod membership;
-pub(crate) mod saga;
 pub(crate) mod user_schema;
 
 use std::collections::{BTreeMap, HashMap};
@@ -25,9 +23,7 @@ use crate::error::{Error, Result};
 use crate::etag::Etag;
 use crate::handlers::groups::codec::{group_pk, group_sk, SK_GROUP_PREFIX};
 use crate::signing_key::SigningKeyEntry;
-use crate::store::{
-    ConfiguredConfig, EtagedGroup, EtagedUserSchema, OrgRecord, OrgStore, PutMembershipRowParams,
-};
+use crate::store::{ConfiguredConfig, EtagedGroup, EtagedUserSchema, OrgRecord, OrgStore};
 
 // ---------------------------------------------------------------------------
 // Key schema — single source of truth from shared JSON
@@ -493,10 +489,6 @@ impl OrgStore for DynamoOrgStore {
         Ok(counts)
     }
 
-    async fn is_declared_group(&self, org_id: &OrganizationId, name: &str) -> Result<bool> {
-        Ok(self.get_group(org_id, name).await?.is_some())
-    }
-
     // -----------------------------------------------------------------------
     // User schema CRUD
     // -----------------------------------------------------------------------
@@ -558,10 +550,6 @@ impl OrgStore for DynamoOrgStore {
             },
             Err(sdk_err) => Err(map_sdk_error(sdk_err)),
         }
-    }
-
-    async fn put_membership_row(&self, params: PutMembershipRowParams<'_>) -> Result<()> {
-        membership::put_membership_row(self, params).await
     }
 }
 

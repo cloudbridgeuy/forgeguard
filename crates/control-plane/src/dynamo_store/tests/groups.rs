@@ -393,32 +393,3 @@ async fn dynamodb_count_memberships_for_group_returns_per_user_counts() {
         "user-c is not in admin and must not appear"
     );
 }
-
-/// `is_declared_group` returns `true` for an existing group and `false` for
-/// an unknown name.
-#[tokio::test]
-async fn dynamodb_is_declared_group_round_trip() {
-    let (org_store, events, org_id) = fresh_stores_with_draft_org("dg-is-declared").await;
-
-    // Not yet declared
-    let before = org_store.is_declared_group(&org_id, "admin").await.unwrap();
-    assert!(!before, "group must not exist before creation");
-
-    // Create it
-    let entry = make_entry("admin", &["cp:org:read"]);
-    events
-        .put_group(org_id.as_str(), entry, Actor::System, None)
-        .await
-        .unwrap();
-
-    // Now declared
-    let after = org_store.is_declared_group(&org_id, "admin").await.unwrap();
-    assert!(after, "group must exist after creation");
-
-    // Unknown name still false
-    let unknown = org_store
-        .is_declared_group(&org_id, "nonexistent")
-        .await
-        .unwrap();
-    assert!(!unknown, "nonexistent group must not be declared");
-}

@@ -76,16 +76,8 @@ async fn run(cli: Cli) -> color_eyre::Result<()> {
                 .ok_or_else(|| {
                     color_eyre::eyre::eyre!("--dynamodb-table is required when --store=dynamodb")
                 })?;
-            let sagas_table_name = cli.sagas_table.filter(|s| !s.is_empty()).ok_or_else(|| {
-                color_eyre::eyre::eyre!("--sagas-table is required when --store=dynamodb")
-            })?;
-            tracing::info!(%table_name, %sagas_table_name, "using DynamoDB store");
-            forgeguard_control_plane::app::dynamodb_router(
-                &table_name,
-                &sagas_table_name,
-                auth.as_ref(),
-            )
-            .await?
+            tracing::info!(%table_name, "using DynamoDB store");
+            forgeguard_control_plane::app::dynamodb_router(&table_name, auth.as_ref()).await?
         }
     };
 
