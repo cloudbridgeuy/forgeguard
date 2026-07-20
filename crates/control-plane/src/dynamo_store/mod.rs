@@ -8,14 +8,12 @@
 //! of truth consumed by both CDK (TypeScript) and Rust.
 
 pub(crate) mod groups;
-pub(crate) mod user_schema;
 
 use std::collections::{BTreeMap, HashMap};
 
 use async_trait::async_trait;
 use aws_sdk_dynamodb::types::AttributeValue;
 use chrono::{DateTime, Utc};
-use forgeguard_authn_core::UserSchema;
 use forgeguard_core::{OrgStatus, Organization, OrganizationId};
 
 use crate::config::OrgConfig;
@@ -23,7 +21,7 @@ use crate::error::{Error, Result};
 use crate::etag::Etag;
 use crate::handlers::groups::codec::{group_pk, group_sk, SK_GROUP_PREFIX};
 use crate::signing_key::SigningKeyEntry;
-use crate::store::{ConfiguredConfig, EtagedGroup, EtagedUserSchema, OrgRecord, OrgStore};
+use crate::store::{ConfiguredConfig, EtagedGroup, OrgRecord, OrgStore};
 
 // ---------------------------------------------------------------------------
 // Key schema — single source of truth from shared JSON
@@ -251,20 +249,6 @@ pub(crate) fn map_sdk_error<E: std::fmt::Display>(err: E) -> Error {
     Error::Store(err.to_string())
 }
 
-/// Returns `true` when a `PutItem` SDK error is a
-/// `ConditionalCheckFailedException` (CCFE).
-fn is_conditional_check_failed(
-    sdk_err: &aws_sdk_dynamodb::error::SdkError<
-        aws_sdk_dynamodb::operation::put_item::PutItemError,
-    >,
-) -> bool {
-    matches!(
-        sdk_err,
-        aws_sdk_dynamodb::error::SdkError::ServiceError(e)
-            if e.err().is_conditional_check_failed_exception()
-    )
-}
-
 // ---------------------------------------------------------------------------
 // Signing-key helpers
 // ---------------------------------------------------------------------------
@@ -487,69 +471,6 @@ impl OrgStore for DynamoOrgStore {
         }
 
         Ok(counts)
-    }
-
-    // -----------------------------------------------------------------------
-    // User schema CRUD
-    // -----------------------------------------------------------------------
-
-    async fn get_user_schema(&self, org_id: &OrganizationId) -> Result<Option<EtagedUserSchema>> {
-        let pk_value = user_schema::user_schema_pk(org_id);
-        let result = self
-            .client
-            .get_item()
-            .table_name(&self.table_name)
-            .key(pk(), AttributeValue::S(pk_value))
-            .key(
-                sk(),
-                AttributeValue::S(user_schema::SK_USER_SCHEMA.to_owned()),
-            )
-            .send()
-            .await
-            .map_err(map_sdk_error)?;
-        result
-            .item
-            .as_ref()
-            .map(user_schema::etaged_user_schema_from_item)
-            .transpose()
-    }
-
-    async fn put_user_schema(
-        &self,
-        org_id: &OrganizationId,
-        schema: UserSchema,
-        expected_etag: Option<&Etag>,
-    ) -> Result<EtagedUserSchema> {
-        let etaged = EtagedUserSchema::compute(schema);
-        let item = user_schema::to_user_schema_item(org_id, etaged.schema(), etaged.etag())?;
-        let parts = user_schema::build_user_schema_put_condition(expected_etag);
-
-        let mut req = self
-            .client
-            .put_item()
-            .table_name(&self.table_name)
-            .set_item(Some(item))
-            .condition_expression(parts.expression);
-        for (k, v) in parts.names {
-            req = req.expression_attribute_names(k, v);
-        }
-        for (k, v) in parts.values {
-            req = req.expression_attribute_values(k, v);
-        }
-
-        match req.send().await {
-            Ok(_) => Ok(etaged),
-            Err(sdk_err) if is_conditional_check_failed(&sdk_err) => match expected_etag {
-                None => Err(Error::Conflict(format!(
-                    "user schema for org '{org_id}' already exists"
-                ))),
-                Some(_) => {
-                    let current_etag = user_schema::recover_user_schema_etag(self, org_id).await?;
-                    Err(Error::PreconditionFailed { current_etag })
-                }
-            },
-            Err(sdk_err) => Err(map_sdk_error(sdk_err)),
-        }
     }
 }
 

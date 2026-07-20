@@ -1,8 +1,6 @@
 pub(crate) mod groups;
-pub(crate) mod user_schema;
 
 pub(crate) use groups::EtagedGroup;
-pub(crate) use user_schema::EtagedUserSchema;
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -12,7 +10,6 @@ use chrono::Utc;
 use ed25519_dalek::pkcs8::spki::der::pem::LineEnding;
 use ed25519_dalek::pkcs8::EncodePrivateKey as _;
 use ed25519_dalek::pkcs8::EncodePublicKey as _;
-use forgeguard_authn_core::UserSchema;
 use forgeguard_core::{OrgStatus, Organization, OrganizationId};
 use serde::Deserialize;
 
@@ -100,34 +97,6 @@ pub(crate) trait OrgStore: Send + Sync {
         org_id: &OrganizationId,
         name: &str,
     ) -> Result<BTreeMap<String, u32>>;
-
-    // -----------------------------------------------------------------------
-    // User schema CRUD
-    // -----------------------------------------------------------------------
-
-    /// Return the org's declared user attribute schema and its ETag, or
-    /// `None` if no schema row has been written yet.
-    async fn get_user_schema(&self, org_id: &OrganizationId) -> Result<Option<EtagedUserSchema>>;
-
-    /// Persist a new user attribute schema for the org with optimistic-locking
-    /// semantics.
-    ///
-    /// | `(existing, expected_etag)`                | Behaviour              |
-    /// |--------------------------------------------|------------------------|
-    /// | `(None, None)`                             | Create                 |
-    /// | `(Some(_), None)`                          | `Conflict`             |
-    /// | `(Some(e), Some(t))` where `e.etag() == t` | Update                 |
-    /// | `(Some(e), Some(t))` where `e.etag() != t` | `PreconditionFailed`   |
-    /// | `(None, Some(_))`                          | `PreconditionFailed { current_etag: None }` |
-    ///
-    /// On success returns the stored `EtagedUserSchema` with a freshly
-    /// computed etag.
-    async fn put_user_schema(
-        &self,
-        org_id: &OrganizationId,
-        schema: UserSchema,
-        expected_etag: Option<&Etag>,
-    ) -> Result<EtagedUserSchema>;
 }
 
 /// A configured (`OrgConfig` + matching etag) pair.
@@ -208,7 +177,6 @@ pub(crate) struct InMemoryOrgStore {
     /// Added in V2 to allow delete-conflict pre-checks to be exercised in
     /// InMemory tests. Production memberships live in DynamoDB only (Group E).
     memberships_to_groups: tokio::sync::RwLock<BTreeMap<(OrganizationId, String), Vec<String>>>,
-    user_schemas: tokio::sync::RwLock<BTreeMap<OrganizationId, EtagedUserSchema>>,
 }
 
 impl InMemoryOrgStore {
@@ -218,7 +186,6 @@ impl InMemoryOrgStore {
             signing_keys: tokio::sync::RwLock::new(BTreeMap::new()),
             groups: tokio::sync::RwLock::new(BTreeMap::new()),
             memberships_to_groups: tokio::sync::RwLock::new(BTreeMap::new()),
-            user_schemas: tokio::sync::RwLock::new(BTreeMap::new()),
         }
     }
 
@@ -333,44 +300,6 @@ impl OrgStore for InMemoryOrgStore {
             }
         }
         Ok(counts)
-    }
-
-    // -----------------------------------------------------------------------
-    // User schema CRUD
-    // -----------------------------------------------------------------------
-
-    async fn get_user_schema(&self, org_id: &OrganizationId) -> Result<Option<EtagedUserSchema>> {
-        let g = self.user_schemas.read().await;
-        Ok(g.get(org_id).cloned())
-    }
-
-    async fn put_user_schema(
-        &self,
-        org_id: &OrganizationId,
-        schema: UserSchema,
-        expected_etag: Option<&Etag>,
-    ) -> Result<EtagedUserSchema> {
-        let mut g = self.user_schemas.write().await;
-        match (g.get(org_id), expected_etag) {
-            (None, None) => {}
-            (Some(_), None) => {
-                return Err(Error::Conflict(format!(
-                    "user schema for org '{org_id}' already exists"
-                )));
-            }
-            (None, Some(_)) => {
-                return Err(Error::PreconditionFailed { current_etag: None });
-            }
-            (Some(existing), Some(t)) if existing.etag() != t => {
-                return Err(Error::PreconditionFailed {
-                    current_etag: Some(existing.etag().clone()),
-                });
-            }
-            (Some(_), Some(_)) => {}
-        }
-        let next = EtagedUserSchema::compute(schema);
-        g.insert(org_id.clone(), next.clone());
-        Ok(next)
     }
 }
 

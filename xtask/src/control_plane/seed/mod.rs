@@ -17,7 +17,6 @@
 mod groups;
 mod orgs;
 mod pure;
-mod schema;
 mod teardown;
 mod users;
 
@@ -37,7 +36,6 @@ use super::seed_core::{DynamoTarget, SeedConfig};
 use groups::write_groups;
 use orgs::write_orgs;
 use pure::SeededOrgScope;
-use schema::write_user_schemas;
 use teardown::{teardown_cp_vp_policies, teardown_users};
 use users::write_users;
 
@@ -224,7 +222,6 @@ pub(crate) async fn run(args: &SeedArgs) -> Result<()> {
 
     println!("== Re-seed phase ==");
     write_orgs(&ctx, ctx.config.organizations()).await?;
-    write_user_schemas(&ctx, ctx.config.organizations(), &schemas).await?;
     write_groups(&ctx, ctx.config.organizations()).await?;
     for (org, schema) in ctx.config.organizations().iter().zip(&schemas) {
         write_users(&ctx, org, ctx.user_pool_client, schema).await?;

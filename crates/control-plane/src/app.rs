@@ -34,7 +34,6 @@ use crate::membership_store::DynamoMembershipResolver;
 use crate::model_event_store::{DynamoModelEventStore, InMemoryModelEventStore, ModelEventStore};
 use crate::signing_key_store::DynamoSigningKeyStore;
 use crate::store::{self, OrgStore};
-use crate::user_pool::{AwsCognitoUserPoolClient, InMemoryUserPoolClient, UserPoolClient};
 use crate::vp_client::aws::AwsVpClient;
 use crate::vp_client::VpClient;
 
@@ -94,14 +93,11 @@ pub async fn dynamodb_router(
     );
     let dynamo_client = aws_sdk_dynamodb::Client::new(&sdk_config);
     let vp_sdk_client = aws_sdk_verifiedpermissions::Client::new(&sdk_config);
-    let cognito_client = aws_sdk_cognitoidentityprovider::Client::new(&sdk_config);
     let s: Arc<dyn OrgStore> = Arc::new(DynamoOrgStore::new(
         dynamo_client.clone(),
         table_name.to_string(),
     ));
     let vp = Arc::new(AwsVpClient::new(vp_sdk_client.clone()));
-    let user_pool: Arc<dyn UserPoolClient> =
-        Arc::new(AwsCognitoUserPoolClient::new(cognito_client));
     let model_events: Arc<dyn ModelEventStore> = Arc::new(DynamoModelEventStore::new(
         dynamo_client.clone(),
         table_name.to_string(),
@@ -130,7 +126,6 @@ pub async fn dynamodb_router(
         AppState {
             store: s,
             vp,
-            user_pool,
             model_events,
         },
         fg,
@@ -156,10 +151,6 @@ pub async fn memory_router(
     let vp = Arc::new(AwsVpClient::new(aws_sdk_verifiedpermissions::Client::new(
         &sdk_config,
     )));
-    // Memory mode skips the AWS user-pool round trip — InMemoryUserPoolClient
-    // keeps the user-schema Active-org Cognito sync path exercisable end-to-end
-    // against a dev JSON config.
-    let user_pool: Arc<dyn UserPoolClient> = Arc::new(InMemoryUserPoolClient::new());
     let model_events: Arc<dyn ModelEventStore> =
         Arc::new(InMemoryModelEventStore::new_with_org_store(Arc::clone(&s)));
     // Ed25519 resolver requires DynamoDB for key lookup; memory mode has no DynamoDB client.
@@ -169,7 +160,6 @@ pub async fn memory_router(
         AppState {
             store: s,
             vp,
-            user_pool,
             model_events,
         },
         fg,
@@ -204,8 +194,6 @@ const API_ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/v1/organizations/{org_id}/groups/{name}"),
     ("PUT", "/api/v1/organizations/{org_id}/groups/{name}"),
     ("DELETE", "/api/v1/organizations/{org_id}/groups/{name}"),
-    ("GET", "/api/v1/organizations/{org_id}/user-schema"),
-    ("PUT", "/api/v1/organizations/{org_id}/user-schema"),
     (
         "PUT",
         "/api/v1/organizations/{org_id}/principals/{native_id}",
@@ -307,18 +295,6 @@ fn cp_route_actions() -> forgeguard_http::Result<Vec<RouteMapping>> {
             "DELETE",
             "/api/v1/organizations/{org_id}/groups/{name}",
             "cp:group:delete",
-            Some("org_id"),
-        ),
-        (
-            "GET",
-            "/api/v1/organizations/{org_id}/user-schema",
-            "cp:user-schema:read",
-            Some("org_id"),
-        ),
-        (
-            "PUT",
-            "/api/v1/organizations/{org_id}/user-schema",
-            "cp:user-schema:update",
             Some("org_id"),
         ),
         (
@@ -543,11 +519,6 @@ fn build_router<V: VpClient + 'static>(state: AppState<V>, fg: Arc<ForgeGuard>) 
                 .delete(handlers::groups::delete_handler::<V>),
         )
         .route(
-            "/api/v1/organizations/{org_id}/user-schema",
-            get(handlers::user_schema::get_user_schema_handler)
-                .put(handlers::user_schema::put_user_schema_handler::<V>),
-        )
-        .route(
             "/api/v1/organizations/{org_id}/principals/{native_id}",
             axum::routing::put(handlers::principals::upsert_principal::<V>),
         )
@@ -598,8 +569,8 @@ mod tests {
         let mappings = cp_route_actions().expect("cp_route_actions must not fail");
         assert_eq!(
             mappings.len(),
-            24,
-            "expected 24 route mappings, got {}",
+            22,
+            "expected 22 route mappings, got {}",
             mappings.len()
         );
         // Confirm each action string round-trips correctly through QualifiedAction
@@ -618,8 +589,6 @@ mod tests {
             "cp:group:read",
             "cp:group:update",
             "cp:group:delete",
-            "cp:user-schema:read",
-            "cp:user-schema:update",
             "cp:principal:upsert",
             "cp:events:read",
             "cp:resource:tombstone",
@@ -705,16 +674,6 @@ mod tests {
                 "cp:group:delete",
             ),
             (
-                "GET",
-                "/api/v1/organizations/org-123/user-schema",
-                "cp:user-schema:read",
-            ),
-            (
-                "PUT",
-                "/api/v1/organizations/org-123/user-schema",
-                "cp:user-schema:update",
-            ),
-            (
                 "DELETE",
                 "/api/v1/organizations/org-123/promoted-resources/document/doc-1",
                 "cp:resource:tombstone",
@@ -762,7 +721,7 @@ mod tests {
         // owning org must be the resource's own id (closes the bypass).
         for path in [
             "/api/v1/organizations/org-acme/groups",
-            "/api/v1/organizations/org-acme/user-schema",
+            "/api/v1/organizations/org-acme/signing-keys",
         ] {
             let matched = matcher
                 .match_request("GET", path)

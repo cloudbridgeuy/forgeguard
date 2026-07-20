@@ -428,4 +428,3 @@ async fn list_keys_on_empty_org_returns_empty() {
 }
 
 mod groups;
-mod user_schema;

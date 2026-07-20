@@ -66,10 +66,6 @@ impl OrgConfig {
     pub(crate) fn vp_store_id(&self) -> Option<&str> {
         self.vp_store_id.as_deref()
     }
-
-    pub(crate) fn cognito_user_pool_id(&self) -> Option<&str> {
-        self.cognito_user_pool_id.as_deref()
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -153,7 +149,6 @@ mod tests {
         assert_eq!(config.tenant().principal_attribute, "tenant_id");
         assert_eq!(config.tenant().resource_attribute, "tenant_id");
         assert!(config.vp_store_id().is_none());
-        assert!(config.cognito_user_pool_id().is_none());
     }
 
     #[test]
@@ -165,8 +160,7 @@ mod tests {
             "default_policy": "deny",
             "namespace": "customer-app",
             "tenant": {"enabled": false, "principal_attribute": "org", "resource_attribute": "org"},
-            "vp_store_id": "ps-abc",
-            "cognito_user_pool_id": "us-east-2_xyz"
+            "vp_store_id": "ps-abc"
         }))
         .unwrap();
         let json = serde_json::to_string(&config).unwrap();
@@ -175,7 +169,6 @@ mod tests {
         assert!(!back.tenant().enabled);
         assert_eq!(back.tenant().principal_attribute, "org");
         assert_eq!(back.vp_store_id(), Some("ps-abc"));
-        assert_eq!(back.cognito_user_pool_id(), Some("us-east-2_xyz"));
     }
 
     #[test]
@@ -184,7 +177,6 @@ mod tests {
         assert_eq!(config.namespace(), "app");
         assert!(config.tenant().enabled);
         assert!(config.vp_store_id().is_none());
-        assert!(config.cognito_user_pool_id().is_none());
     }
 
     #[test]

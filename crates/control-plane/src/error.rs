@@ -1,7 +1,5 @@
 use std::collections::BTreeMap;
 
-use crate::etag::Etag;
-
 /// Control plane errors.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
@@ -14,12 +12,6 @@ pub(crate) enum Error {
     /// The requested resource was not found.
     #[error("not found: {0}")]
     NotFound(String),
-    /// The caller's `If-Match` value did not match the current stored etag.
-    ///
-    /// `current_etag` is the stored etag (`None` means the org is a
-    /// Draft with no config attached yet — any `If-Match` fails closed).
-    #[error("precondition failed (current etag: {current_etag:?})")]
-    PreconditionFailed { current_etag: Option<Etag> },
     /// The caller's `X-Fg-If-Revision` value did not match the current
     /// revision at append time.
     #[error("revision mismatch (current revision: {current})")]

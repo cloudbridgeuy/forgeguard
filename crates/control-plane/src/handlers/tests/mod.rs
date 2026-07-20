@@ -17,4 +17,3 @@ mod lifecycle;
 mod metrics_endpoint;
 mod proxy_config;
 mod revision_precondition;
-mod user_schema;

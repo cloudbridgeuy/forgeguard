@@ -7,7 +7,6 @@ pub(crate) mod min_revision;
 pub(crate) mod principals;
 pub(crate) mod promotions;
 pub(crate) mod signing_keys;
-pub(crate) mod user_schema;
 
 use std::sync::Arc;
 
@@ -24,7 +23,6 @@ use crate::config::OrgConfig;
 use crate::etag::{self, Etag, IfNoneMatchResult};
 use crate::model_event_store::ModelEventStore;
 use crate::store::{OrgRecord, OrgStore};
-use crate::user_pool::UserPoolClient;
 use crate::vp_client::VpClient;
 
 pub(super) const DEFAULT_LIMIT: u16 = 100;
@@ -78,10 +76,6 @@ pub(super) fn clamp_limit(requested: u16) -> usize {
 /// `State<Arc<dyn OrgStore>>` via the `FromRef` impl below; group handlers
 /// extract the full [`AppState<V>`].
 ///
-/// V3 adds `user_pool` for the user-schema Active-org Cognito sync path. The
-/// trait object lets production wire `AwsCognitoUserPoolClient` while tests
-/// wire the in-memory equivalent.
-///
 /// V1-append-spine adds `model_events` — the [`ModelEventStore`] seam the
 /// `PUT /principals/{native_id}` handler upserts through, wiring
 /// `DynamoModelEventStore` in production and
@@ -90,7 +84,6 @@ pub(super) fn clamp_limit(requested: u16) -> usize {
 pub(crate) struct AppState<V> {
     pub(crate) store: Arc<dyn OrgStore>,
     pub(crate) vp: Arc<V>,
-    pub(crate) user_pool: Arc<dyn UserPoolClient>,
     pub(crate) model_events: Arc<dyn ModelEventStore>,
 }
 
@@ -99,7 +92,6 @@ impl<V> Clone for AppState<V> {
         Self {
             store: Arc::clone(&self.store),
             vp: Arc::clone(&self.vp),
-            user_pool: Arc::clone(&self.user_pool),
             model_events: Arc::clone(&self.model_events),
         }
     }
@@ -108,12 +100,6 @@ impl<V> Clone for AppState<V> {
 impl<V> FromRef<AppState<V>> for Arc<dyn OrgStore> {
     fn from_ref(input: &AppState<V>) -> Arc<dyn OrgStore> {
         Arc::clone(&input.store)
-    }
-}
-
-impl<V> FromRef<AppState<V>> for Arc<dyn UserPoolClient> {
-    fn from_ref(input: &AppState<V>) -> Arc<dyn UserPoolClient> {
-        Arc::clone(&input.user_pool)
     }
 }
 
@@ -574,7 +560,6 @@ pub(super) mod test_support {
 
     use crate::model_event_store::ModelEventStore;
     use crate::store::{build_org_store, InMemoryOrgStore, OrgStore};
-    use crate::user_pool::{InMemoryUserPoolClient, UserPoolClient};
     use crate::vp_client::stub::{happy_stub, StubVpClient};
 
     pub const TEST_API_KEY: &str = "test-key";
@@ -655,7 +640,6 @@ pub(super) mod test_support {
             Arc::new(StaticPolicyEngine::new(PolicyDecision::Allow));
         let fg = Arc::new(ForgeGuard::new(config, chain, engine));
 
-        let user_pool: Arc<dyn UserPoolClient> = Arc::new(InMemoryUserPoolClient::new());
         let model_events: Arc<dyn ModelEventStore> = Arc::new(
             crate::model_event_store::InMemoryModelEventStore::new_with_org_store(Arc::clone(
                 &store,
@@ -665,7 +649,6 @@ pub(super) mod test_support {
         let state = super::AppState {
             store,
             vp,
-            user_pool,
             model_events,
         };
         let router = Router::new()
@@ -704,11 +687,6 @@ pub(super) mod test_support {
                 axum::routing::get(super::groups::get_handler)
                     .put(super::groups::update_handler::<StubVpClient>)
                     .delete(super::groups::delete_handler::<StubVpClient>),
-            )
-            .route(
-                "/api/v1/organizations/{org_id}/user-schema",
-                axum::routing::get(super::user_schema::get_user_schema_handler)
-                    .put(super::user_schema::put_user_schema_handler::<StubVpClient>),
             )
             .route(
                 "/api/v1/organizations/{org_id}/principals/{native_id}",

@@ -123,8 +123,7 @@ fn respond(status: StatusCode, principal: &serde_json::Value, revision: u64) -> 
 }
 
 /// 409 response for non-`Active`, non-`Deleted` org statuses (Draft,
-/// Suspended, Deleting). Mirrors `state_conflict` in the users/user_schema
-/// handlers but with a distinct error code so clients can branch on it.
+/// Suspended, Deleting). Distinct error code so clients can branch on it.
 fn state_conflict(status: OrgStatus) -> Response {
     use serde::Serialize;
     #[derive(Serialize)]

@@ -43,7 +43,6 @@ use crate::model_event_store::{
 use crate::promotion_store::PromotionEntry;
 use crate::signing_key::GenerateKeyResult;
 use crate::store::{build_org_store, OrgRecord, OrgStore};
-use crate::user_pool::{InMemoryUserPoolClient, UserPoolClient};
 use crate::vp_client::stub::StubVpClient;
 use forgeguard_authz_core::{EventEnvelope, EventKind, FoldedState, Revision};
 
@@ -334,11 +333,9 @@ pub(super) fn test_app_for_store(
     let engine: Arc<dyn PolicyEngine> = Arc::new(StaticPolicyEngine::new(PolicyDecision::Allow));
     let fg = Arc::new(ForgeGuard::new(config, chain, engine));
 
-    let user_pool: Arc<dyn UserPoolClient> = Arc::new(InMemoryUserPoolClient::new());
     let state = AppState {
         store,
         vp,
-        user_pool,
         model_events,
     };
     Router::new()

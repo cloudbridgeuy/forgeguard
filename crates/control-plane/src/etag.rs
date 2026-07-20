@@ -68,40 +68,6 @@ pub(crate) enum IfMatch {
     Strong(Etag),
 }
 
-/// Outcome of resolving an `IfMatch` header against the stored state.
-///
-/// Produced by [`resolve_if_match`]; consumed by the handler to decide
-/// whether to proceed with the write, skip the locking check, or fail.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ResolvedIfMatch {
-    /// No `If-Match` header present — skip the check.
-    Absent,
-    /// Strong comparison — forward the expected etag to [`check_etag`].
-    Strong(Etag),
-    /// Wildcard matched an existing representation — check passes, no
-    /// etag comparison needed.
-    WildcardMatched,
-    /// Wildcard on a Draft org (no stored representation) — fail closed.
-    WildcardOnDraft,
-}
-
-/// Outcome of comparing a caller-supplied `expected_etag` against the
-/// currently stored etag.
-///
-/// The explicit enum (rather than `Result<bool>` or `Option<String>`) forces
-/// each branch to be handled at the call site.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum EtagCheck {
-    /// Caller did not supply an expectation — write unconditionally.
-    Unchecked,
-    /// Stored etag matches the caller's expectation. Proceed with the write.
-    Match,
-    /// Stored etag does not match (or there is no stored etag and the
-    /// caller supplied one). `current` carries whatever is actually stored;
-    /// `None` means there is no stored etag (a Draft org has no config yet).
-    Mismatch { current: Option<Etag> },
-}
-
 /// Outcome of comparing an `If-None-Match` header against the stored etag.
 ///
 /// Maps directly to HTTP status: [`Matched`][IfNoneMatchResult::Matched] /
@@ -141,40 +107,6 @@ pub(crate) fn parse_if_match(raw: &str) -> Option<IfMatch> {
         Some(IfMatch::Wildcard)
     } else {
         Etag::try_new(trimmed).ok().map(IfMatch::Strong)
-    }
-}
-
-/// Resolve an [`IfMatch`] header against the currently stored etag.
-///
-/// | `header`           | `stored`  | result              |
-/// |--------------------|-----------|---------------------|
-/// | `None`             | any       | `Absent`            |
-/// | `Some(Strong(e))`  | any       | `Strong(e)`         |
-/// | `Some(Wildcard)`   | `Some(_)` | `WildcardMatched`   |
-/// | `Some(Wildcard)`   | `None`    | `WildcardOnDraft`   |
-pub(crate) fn resolve_if_match(header: Option<IfMatch>, stored: Option<&Etag>) -> ResolvedIfMatch {
-    match (header, stored) {
-        (None, _) => ResolvedIfMatch::Absent,
-        (Some(IfMatch::Strong(e)), _) => ResolvedIfMatch::Strong(e),
-        (Some(IfMatch::Wildcard), Some(_)) => ResolvedIfMatch::WildcardMatched,
-        (Some(IfMatch::Wildcard), None) => ResolvedIfMatch::WildcardOnDraft,
-    }
-}
-
-/// Compare stored vs expected etag and produce an explicit outcome.
-///
-/// - `expected == None`                                          → `Unchecked`
-/// - `expected == Some(e)` and `stored == Some(s)` and `s == e`  → `Match`
-/// - `expected == Some(e)` and `stored == Some(s)` and `s != e`  → `Mismatch { current: Some(s) }`
-/// - `expected == Some(e)` and `stored == None`                  → `Mismatch { current: None }`
-pub(crate) fn check_etag(stored: Option<&Etag>, expected: Option<&Etag>) -> EtagCheck {
-    match (expected, stored) {
-        (None, _) => EtagCheck::Unchecked,
-        (Some(e), Some(s)) if s == e => EtagCheck::Match,
-        (Some(_), Some(s)) => EtagCheck::Mismatch {
-            current: Some(s.clone()),
-        },
-        (Some(_), None) => EtagCheck::Mismatch { current: None },
     }
 }
 
@@ -274,99 +206,6 @@ mod tests {
     #[test]
     fn parse_if_match_whitespace_only_is_none() {
         assert_eq!(parse_if_match("   "), None);
-    }
-
-    // --- resolve_if_match ---------------------------------------------------
-
-    #[test]
-    fn resolve_absent_when_no_header() {
-        let stored = Etag::try_new("\"abc\"").unwrap();
-        assert_eq!(
-            resolve_if_match(None, Some(&stored)),
-            ResolvedIfMatch::Absent
-        );
-        assert_eq!(resolve_if_match(None, None), ResolvedIfMatch::Absent);
-    }
-
-    #[test]
-    fn resolve_strong_forwards_etag_regardless_of_stored() {
-        let e = Etag::try_new("\"e\"").unwrap();
-        let stored = Etag::try_new("\"abc\"").unwrap();
-        assert_eq!(
-            resolve_if_match(Some(IfMatch::Strong(e.clone())), Some(&stored)),
-            ResolvedIfMatch::Strong(e.clone())
-        );
-        assert_eq!(
-            resolve_if_match(Some(IfMatch::Strong(e.clone())), None),
-            ResolvedIfMatch::Strong(e)
-        );
-    }
-
-    #[test]
-    fn resolve_wildcard_matched_when_stored_exists() {
-        let stored = Etag::try_new("\"abc\"").unwrap();
-        assert_eq!(
-            resolve_if_match(Some(IfMatch::Wildcard), Some(&stored)),
-            ResolvedIfMatch::WildcardMatched
-        );
-    }
-
-    #[test]
-    fn resolve_wildcard_on_draft_when_no_stored() {
-        assert_eq!(
-            resolve_if_match(Some(IfMatch::Wildcard), None),
-            ResolvedIfMatch::WildcardOnDraft
-        );
-    }
-
-    // --- check_etag --------------------------------------------------------
-
-    #[test]
-    fn check_unchecked_when_expected_is_none() {
-        let stored = Etag::try_new("\"abc\"").unwrap();
-        assert_eq!(check_etag(Some(&stored), None), EtagCheck::Unchecked);
-        assert_eq!(check_etag(None, None), EtagCheck::Unchecked);
-    }
-
-    #[test]
-    fn check_match_when_stored_equals_expected() {
-        let stored = Etag::try_new("\"abc\"").unwrap();
-        let expected = Etag::try_new("\"abc\"").unwrap();
-        assert_eq!(check_etag(Some(&stored), Some(&expected)), EtagCheck::Match);
-    }
-
-    #[test]
-    fn check_mismatch_when_stored_differs_from_expected() {
-        let stored = Etag::try_new("\"current\"").unwrap();
-        let expected = Etag::try_new("\"stale\"").unwrap();
-        assert_eq!(
-            check_etag(Some(&stored), Some(&expected)),
-            EtagCheck::Mismatch {
-                current: Some(Etag::try_new("\"current\"").unwrap())
-            }
-        );
-    }
-
-    #[test]
-    fn check_mismatch_when_no_stored_etag_but_expected_supplied() {
-        let expected = Etag::try_new("\"anything\"").unwrap();
-        assert_eq!(
-            check_etag(None, Some(&expected)),
-            EtagCheck::Mismatch { current: None }
-        );
-    }
-
-    #[test]
-    fn check_etag_typed_mismatch() {
-        let stored = Etag::try_new("abc").unwrap();
-        let expected = Etag::try_new("xyz").unwrap();
-        let result = check_etag(Some(&stored), Some(&expected));
-        match result {
-            EtagCheck::Mismatch { current } => {
-                assert_eq!(current.unwrap().as_str(), "abc")
-            }
-            _ => panic!("expected Mismatch"),
-        }
     }
 
     // --- check_if_none_match ------------------------------------------------
