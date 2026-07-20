@@ -114,7 +114,7 @@ fn shape_active_state_error(err: &ActiveStateError, raw_org_id: &str, group: &st
         org_id = %raw_org_id,
         group = %group,
         error = ?err,
-        "active org has no vp_store_id; saga invariant violated",
+        "active org has no vp_store_id; group writes require a provisioned VP store (provision one or write groups before activation)",
     );
     shape_group_error_response(&GroupHandlerError::VpPushFailed {
         stage: VpStage::Parent,
