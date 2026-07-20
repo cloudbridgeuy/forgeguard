@@ -51,9 +51,6 @@ pub enum Error {
     /// `PoolId` failed its parse invariant.
     #[error("invalid pool ID {raw:?}: must be non-empty and must not contain '#'")]
     InvalidPoolId { raw: String },
-    /// `TicketId` failed its parse invariant (not a well-formed ULID).
-    #[error("invalid ticket ID {raw:?}: must be a valid ULID")]
-    InvalidTicketId { raw: String },
 }
 
 /// Convenience alias used throughout this crate.
