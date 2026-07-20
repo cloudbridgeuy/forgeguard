@@ -54,9 +54,9 @@ allow = [
 
 [[organization.group]]
 name = "owner"
-description = "Full org access including deletion and owner promotion"
+description = "Full org access including owner promotion"
 inherits = ["admin"]
-allow = ["cp-organization-delete", "cp-member-promote-owner"]
+allow = ["cp-member-promote-owner"]
 
 [[organization]]
 org_id = "org-globex"
@@ -97,6 +97,6 @@ allow = [
 
 [[organization.group]]
 name = "owner"
-description = "Full org access including deletion and owner promotion"
+description = "Full org access including owner promotion"
 inherits = ["admin"]
-allow = ["cp-organization-delete", "cp-member-promote-owner"]
+allow = ["cp-member-promote-owner"]

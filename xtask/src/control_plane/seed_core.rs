@@ -279,7 +279,7 @@ allow = ["cp-organization-update"]
 [[organization.group]]
 name = "owner"
 inherits = ["admin"]
-allow = ["cp-organization-delete"]
+allow = ["cp-member-promote-owner"]
 
 [[organization]]
 org_id = "org-globex"
