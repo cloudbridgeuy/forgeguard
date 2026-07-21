@@ -15,7 +15,6 @@ use serde::Serialize;
 
 use crate::error::{Error, Result};
 
-use super::active_pure::{InconsistentStateBody, VpPushFailedBody, VpStage};
 use super::{CreateGroupRequest, UpdateGroupRequest};
 
 // ---------------------------------------------------------------------------
@@ -187,23 +186,6 @@ pub(crate) enum GroupHandlerError {
         blocking_inheritors: Vec<String>,
         memberships_count: BTreeMap<String, u32>,
     },
-    /// VP push failed after the DDB write. `completed`/`failed`/`remaining`
-    /// describe how far through the parent + fanout sequence the orchestrator
-    /// got before the failure. Mapped to 503.
-    #[error("vp push failed (stage: {stage:?})")]
-    VpPushFailed {
-        stage: VpStage,
-        completed: Vec<String>,
-        failed: Option<String>,
-        remaining: Vec<String>,
-    },
-    /// DDB and VP have diverged: the DDB write committed but the rollback
-    /// after a VP failure could not be undone. Mapped to 500.
-    #[error("inconsistent state (ddb_committed: {ddb_committed}, vp_committed: {vp_committed})")]
-    InconsistentState {
-        ddb_committed: bool,
-        vp_committed: bool,
-    },
     /// Generic internal/store error that doesn't fit a more specific bucket.
     /// The actual error is logged via `tracing::error!` at the call site;
     /// this variant carries no payload and shapes as a bare 500.
@@ -238,8 +220,6 @@ fn validation_label(err: &GroupValidationError) -> (&'static str, &'static str) 
 /// | `AlreadyExists`        | 409    | `{"error": "already_exists"}`      |
 /// | `RevisionMismatch`     | 412    | `RevisionMismatchBody`              |
 /// | `DeleteConflict`       | 409    | `DeleteConflictBody`               |
-/// | `VpPushFailed`         | 503    | `VpPushFailedBody`                 |
-/// | `InconsistentState`    | 500    | `InconsistentStateBody`            |
 /// | `Internal`             | 500    | `{"error": "internal"}`            |
 pub(crate) fn shape_group_error_response(err: &GroupHandlerError) -> Response {
     match err {
@@ -291,35 +271,6 @@ pub(crate) fn shape_group_error_response(err: &GroupHandlerError) -> Response {
                 error: "delete_conflict",
                 blocking_inheritors,
                 memberships_count,
-            }),
-        )
-            .into_response(),
-        GroupHandlerError::VpPushFailed {
-            stage,
-            completed,
-            failed,
-            remaining,
-        } => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            [(axum::http::header::RETRY_AFTER, "5")],
-            Json(VpPushFailedBody {
-                error: "vp_push_failed",
-                stage: stage.as_label(),
-                completed,
-                failed: failed.as_deref(),
-                remaining,
-            }),
-        )
-            .into_response(),
-        GroupHandlerError::InconsistentState {
-            ddb_committed,
-            vp_committed,
-        } => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(InconsistentStateBody {
-                error: "inconsistent_state",
-                ddb_committed: *ddb_committed,
-                vp_committed: *vp_committed,
             }),
         )
             .into_response(),
@@ -588,63 +539,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn shape_error_vp_push_failed_yields_503() {
-        // Test with Some(failed)
-        let err = GroupHandlerError::VpPushFailed {
-            stage: VpStage::Fanout,
-            completed: vec!["a".to_owned()],
-            failed: Some("b".to_owned()),
-            remaining: vec!["c".to_owned()],
-        };
-        let resp = shape_group_error_response(&err);
-        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
-        // Verify Retry-After header
-        let retry_after = resp.headers().get(axum::http::header::RETRY_AFTER);
-        assert!(retry_after.is_some(), "expected Retry-After header");
-        assert_eq!(retry_after.unwrap(), "5");
-        let json = body_json(resp).await;
-        assert_eq!(json["error"], "vp_push_failed");
-        assert_eq!(json["stage"], "fanout");
-        assert_eq!(json["completed"], serde_json::json!(["a"]));
-        assert_eq!(json["failed"], serde_json::json!("b"));
-        assert_eq!(json["remaining"], serde_json::json!(["c"]));
-
-        // Test with None failed
-        let err_none = GroupHandlerError::VpPushFailed {
-            stage: VpStage::Parent,
-            completed: vec![],
-            failed: None,
-            remaining: vec!["x".to_owned()],
-        };
-        let resp_none = shape_group_error_response(&err_none);
-        assert_eq!(resp_none.status(), StatusCode::SERVICE_UNAVAILABLE);
-        let retry_after_none = resp_none.headers().get(axum::http::header::RETRY_AFTER);
-        assert_eq!(retry_after_none.unwrap(), "5");
-        let json_none = body_json(resp_none).await;
-        assert_eq!(json_none["stage"], "parent");
-        assert!(json_none["failed"].is_null());
-    }
-
-    #[tokio::test]
     async fn shape_error_internal_yields_500() {
         let resp = shape_group_error_response(&GroupHandlerError::Internal);
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
         let json = body_json(resp).await;
         assert_eq!(json["error"], "internal");
-    }
-
-    #[tokio::test]
-    async fn shape_error_inconsistent_state_yields_500() {
-        let err = GroupHandlerError::InconsistentState {
-            ddb_committed: true,
-            vp_committed: false,
-        };
-        let resp = shape_group_error_response(&err);
-        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
-        let json = body_json(resp).await;
-        assert_eq!(json["error"], "inconsistent_state");
-        assert_eq!(json["ddb_committed"], true);
-        assert_eq!(json["vp_committed"], false);
     }
 
     // -----------------------------------------------------------------------

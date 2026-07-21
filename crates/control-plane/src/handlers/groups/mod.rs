@@ -4,15 +4,13 @@
 //!
 //! - `pure` — functional core: DTOs, conversions, etag computation, error ADT,
 //!   error shaper. No I/O. Fully unit-tested.
-//! - `active_pure` — functional core for the V3 Active-org write path:
-//!   `OrgWriteContext` parsing, dependent walking, Cedar compilation, and the
-//!   wire-body types for the V3 error variants. No I/O.
 //! - `codec` — pure DynamoDB item encoder/decoder. No I/O.
 //! - `mod` (this file) — request DTOs, `pub(crate)` re-exports, and handler
 //!   bodies (imperative shell calling into `pure` and the `OrgStore` trait).
+//!
+//! All group writes are event-sourced appends via `ModelEventStore`
+//! regardless of org status (#117 V2).
 
-pub(crate) mod active;
-pub(crate) mod active_pure;
 pub(crate) mod codec;
 pub(crate) mod pure;
 
@@ -29,7 +27,6 @@ use forgeguard_axum::ForgeGuardIdentity;
 use forgeguard_core::OrganizationId;
 use serde::Deserialize;
 
-use self::active_pure::{compile_for_active, ActiveStateError, OrgWriteContext, VpStage};
 use crate::etag::{self, Etag};
 use crate::handlers::{actor_for, AppState};
 use crate::model_event_store::GroupWriteOutcome;
@@ -102,26 +99,6 @@ fn all_after_with_proposed(existing: &[RbacEntry], proposed: &RbacEntry) -> Vec<
         .collect();
     out.push(proposed.clone());
     out
-}
-
-/// Shape `OrgWriteContext::from_record` parse failures into the wire response.
-///
-/// Today the only failure mode is `ActiveWithoutVpStore`. Per Risk #5 in the
-/// implementation plan, this surfaces as 503 `vp_push_failed` with
-/// `stage="parent"` so operators page the same way they would for a real F3.
-fn shape_active_state_error(err: &ActiveStateError, raw_org_id: &str, group: &str) -> Response {
-    tracing::error!(
-        org_id = %raw_org_id,
-        group = %group,
-        error = ?err,
-        "active org has no vp_store_id; group writes require a provisioned VP store (provision one or write groups before activation)",
-    );
-    shape_group_error_response(&GroupHandlerError::VpPushFailed {
-        stage: VpStage::Parent,
-        completed: vec![],
-        failed: None,
-        remaining: vec![],
-    })
 }
 
 /// Build a [`HeaderMap`] containing a single strong `ETag` header.
@@ -267,11 +244,9 @@ pub(crate) struct UpdateGroupRequest {
 /// Create a new RBAC group for the organisation. Returns `201 Created` with
 /// `GroupResource` and an `ETag` header.
 ///
-/// Active-org behaviour (V3): the DDB write is paired with a VP `CreatePolicy`
-/// for `cp-rbac-{name}`. F3 (VP push fails after DDB commit) triggers a
-/// compensating DDB delete and surfaces 503 `vp_push_failed`. F3' (rollback
-/// also fails) increments `forgeguard_cp_group_rollback_failed_total{stage="parent"}`
-/// and surfaces 500 `inconsistent_state`.
+/// All org statuses share one write path: an event-sourced append via
+/// `ModelEventStore` (#117 V2). Revision preconditions (D5) and semantic
+/// no-ops (D6) are enforced by the store.
 ///
 /// Duplicate name returns `409 Conflict`.
 pub(crate) async fn create_handler<V: VpClient + 'static>(
@@ -285,7 +260,6 @@ pub(crate) async fn create_handler<V: VpClient + 'static>(
         return crate::handlers::not_found();
     };
     let store = &state.store;
-    let vp = &state.vp;
 
     let if_revision = match parse_if_revision_header(&headers) {
         Ok(r) => r,
@@ -293,7 +267,7 @@ pub(crate) async fn create_handler<V: VpClient + 'static>(
     };
     let actor = actor_for(&raw_org_id, identity.as_ref());
 
-    let record = match require_org(
+    if let Err(resp) = require_org(
         store.as_ref(),
         &org_id,
         &raw_org_id,
@@ -301,9 +275,8 @@ pub(crate) async fn create_handler<V: VpClient + 'static>(
     )
     .await
     {
-        Ok(r) => r,
-        Err(resp) => return resp,
-    };
+        return resp;
+    }
     let proposed = pure::rbac_from_create(body);
     let proposed_name = proposed.name.clone();
     let existing = match list_existing_entries(
@@ -331,49 +304,20 @@ pub(crate) async fn create_handler<V: VpClient + 'static>(
         Err(reason) => return shape_group_error_response(&GroupHandlerError::Validation(reason)),
     };
 
-    let write_ctx = match OrgWriteContext::from_record(&record) {
-        Ok(c) => c,
-        Err(err) => return shape_active_state_error(&err, &raw_org_id, &proposed_name),
-    };
-
-    let result: Result<(EtagedGroup, GroupWriteOutcome), GroupHandlerError> = match write_ctx {
-        OrgWriteContext::Draft => {
-            let entry = validated.into_inner();
-            let etaged = match EtagedGroup::compute(entry.clone()) {
-                Ok(e) => e,
-                Err(e) => {
-                    tracing::error!(org_id = %raw_org_id, group = %proposed_name, error = %e, "create group: etag compute failed");
-                    return shape_group_error_response(&GroupHandlerError::Internal);
-                }
-            };
-            state
-                .model_events
-                .put_group(org_id.as_str(), entry, actor, if_revision)
-                .await
-                .map(|outcome| (etaged, outcome))
-                .map_err(|e| map_group_write_error(e, if_revision, &raw_org_id, "create group"))
-        }
-        OrgWriteContext::Active(vp_ctx) => {
-            let compiled = match compile_for_active(validated.entry(), &all_after, &vp_ctx) {
-                Ok(c) => c,
-                Err(reason) => {
-                    return shape_group_error_response(&GroupHandlerError::Validation(reason));
-                }
-            };
-            active::apply_create(active::CreateParams {
-                model_events: state.model_events.as_ref(),
-                vp: vp.as_ref(),
-                vp_ctx: &vp_ctx,
-                org_id: &org_id,
-                raw_org_id: &raw_org_id,
-                validated,
-                compiled,
-                actor,
-                expected_revision: if_revision,
-            })
-            .await
+    let entry = validated.into_inner();
+    let etaged = match EtagedGroup::compute(entry.clone()) {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::error!(org_id = %raw_org_id, group = %proposed_name, error = %e, "create group: etag compute failed");
+            return shape_group_error_response(&GroupHandlerError::Internal);
         }
     };
+    let result: Result<(EtagedGroup, GroupWriteOutcome), GroupHandlerError> = state
+        .model_events
+        .put_group(org_id.as_str(), entry, actor, if_revision)
+        .await
+        .map(|outcome| (etaged, outcome))
+        .map_err(|e| map_group_write_error(e, if_revision, &raw_org_id, "create group"));
 
     match result {
         Ok((eg, outcome)) => {
@@ -534,14 +478,9 @@ pub(crate) async fn get_handler(
 /// `RbacEntry`, D6) is a no-op: it responds `200` with the current revision
 /// and appends no event.
 ///
-/// Active-org behaviour (V4): VP is pushed FIRST — delete-then-create of the
-/// parent permit, then the same pair fanned out across every transitive
-/// dependent in deterministic order — followed by the event-sourced append.
-/// A VP push failure aborts cleanly (nothing written). An append failure
-/// after a successful push compensates by restoring VP to its prior state;
-/// for a stale `X-Fg-If-Revision` this is silent and surfaces `412`, for any
-/// other append error it surfaces `500`. Compensation failure bumps
-/// `forgeguard_cp_group_rollback_failed_total` and surfaces `500`.
+/// All org statuses share one write path: an event-sourced append via
+/// `ModelEventStore` (#117 V2). Revision preconditions (D5) and semantic
+/// no-ops (D6) are enforced by the store.
 ///
 /// Returns `200 OK` with `{group, revision}` and an `x-fg-revision` header.
 pub(crate) async fn update_handler<V: VpClient + 'static>(
@@ -555,7 +494,6 @@ pub(crate) async fn update_handler<V: VpClient + 'static>(
         return crate::handlers::not_found();
     };
     let store = &state.store;
-    let vp = &state.vp;
 
     let if_revision = match parse_if_revision_header(&headers) {
         Ok(r) => r,
@@ -563,7 +501,7 @@ pub(crate) async fn update_handler<V: VpClient + 'static>(
     };
     let actor = actor_for(&raw_org_id, identity.as_ref());
 
-    let record = match require_org(
+    if let Err(resp) = require_org(
         store.as_ref(),
         &org_id,
         &raw_org_id,
@@ -571,13 +509,12 @@ pub(crate) async fn update_handler<V: VpClient + 'static>(
     )
     .await
     {
-        Ok(r) => r,
-        Err(resp) => return resp,
-    };
+        return resp;
+    }
 
     // Fetch the existing group (404 if absent — PUT does not upsert a
     // never-created name; only an already-declared group can be updated).
-    let existing = match require_group(
+    if let Err(resp) = require_group(
         store.as_ref(),
         &org_id,
         &name,
@@ -586,9 +523,8 @@ pub(crate) async fn update_handler<V: VpClient + 'static>(
     )
     .await
     {
-        Ok(g) => g,
-        Err(resp) => return resp,
-    };
+        return resp;
+    }
 
     // Pure conversion — validates name match between body and path
     let proposed = match pure::rbac_from_update(&name, body) {
@@ -615,67 +551,20 @@ pub(crate) async fn update_handler<V: VpClient + 'static>(
         Err(reason) => return shape_group_error_response(&GroupHandlerError::Validation(reason)),
     };
 
-    let write_ctx = match OrgWriteContext::from_record(&record) {
-        Ok(c) => c,
-        Err(err) => return shape_active_state_error(&err, &raw_org_id, &proposed_name),
-    };
-
-    let result: Result<(EtagedGroup, GroupWriteOutcome), GroupHandlerError> = match write_ctx {
-        OrgWriteContext::Draft => {
-            let entry = validated.into_inner();
-            let etaged = match EtagedGroup::compute(entry.clone()) {
-                Ok(e) => e,
-                Err(e) => {
-                    tracing::error!(org_id = %raw_org_id, group = %proposed_name, error = %e, "update group: etag compute failed");
-                    return shape_group_error_response(&GroupHandlerError::Internal);
-                }
-            };
-            state
-                .model_events
-                .put_group(org_id.as_str(), entry, actor, if_revision)
-                .await
-                .map(|outcome| (etaged, outcome))
-                .map_err(|e| map_group_write_error(e, if_revision, &raw_org_id, "update group"))
-        }
-        OrgWriteContext::Active(vp_ctx) => {
-            let prior_for_rollback =
-                match validate_rbac_entry(existing.entry().clone(), &existing_entries) {
-                    Ok(v) => v,
-                    Err(reason) => {
-                        // A concurrent delete on an inherited group invalidated
-                        // an entry that was already stored. This is a store-state
-                        // inconsistency, not a client error — surface 500 and log.
-                        tracing::error!(
-                            org_id = %raw_org_id,
-                            group = %proposed_name,
-                            error = %reason,
-                            "update group: prior entry failed re-validation; store is inconsistent",
-                        );
-                        return shape_group_error_response(&GroupHandlerError::Internal);
-                    }
-                };
-            let compiled = match compile_for_active(validated.entry(), &all_after, &vp_ctx) {
-                Ok(c) => c,
-                Err(reason) => {
-                    return shape_group_error_response(&GroupHandlerError::Validation(reason));
-                }
-            };
-            active::apply_update(active::UpdateParams {
-                model_events: state.model_events.as_ref(),
-                vp: vp.as_ref(),
-                vp_ctx: &vp_ctx,
-                org_id: &org_id,
-                raw_org_id: &raw_org_id,
-                validated,
-                compiled,
-                prior_for_rollback,
-                prior_all: existing_entries.clone(),
-                actor,
-                expected_revision: if_revision,
-            })
-            .await
+    let entry = validated.into_inner();
+    let etaged = match EtagedGroup::compute(entry.clone()) {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::error!(org_id = %raw_org_id, group = %proposed_name, error = %e, "update group: etag compute failed");
+            return shape_group_error_response(&GroupHandlerError::Internal);
         }
     };
+    let result: Result<(EtagedGroup, GroupWriteOutcome), GroupHandlerError> = state
+        .model_events
+        .put_group(org_id.as_str(), entry, actor, if_revision)
+        .await
+        .map(|outcome| (etaged, outcome))
+        .map_err(|e| map_group_write_error(e, if_revision, &raw_org_id, "update group"));
 
     match result {
         Ok((eg, outcome)) => {
@@ -718,12 +607,9 @@ pub(crate) async fn update_handler<V: VpClient + 'static>(
 /// between the concurrent pre-check reads and the conditional delete; this is
 /// acceptable for V2 (Draft-only orgs, low concurrency).
 ///
-/// Active-org behaviour (V4): VP `DeletePolicy` for the parent permit is
-/// pushed FIRST (a VP `NotFound` is treated as idempotent success), then the
-/// event-sourced delete is appended. An append failure after a successful VP
-/// delete restores the prior VP state; for a stale `X-Fg-If-Revision` this is
-/// silent and surfaces `412`, otherwise `500`. Compensation failure bumps
-/// `forgeguard_cp_group_rollback_failed_total{stage="parent"}` and surfaces `500`.
+/// All org statuses share one write path: an event-sourced append via
+/// `ModelEventStore` (#117 V2). Revision preconditions (D5) and semantic
+/// no-ops (D6) are enforced by the store.
 pub(crate) async fn delete_handler<V: VpClient + 'static>(
     ForgeGuardIdentity(identity): ForgeGuardIdentity,
     Path((raw_org_id, name)): Path<(String, String)>,
@@ -734,7 +620,6 @@ pub(crate) async fn delete_handler<V: VpClient + 'static>(
         return crate::handlers::not_found();
     };
     let store = &state.store;
-    let vp = &state.vp;
 
     let if_revision = match parse_if_revision_header(&headers) {
         Ok(r) => r,
@@ -742,7 +627,7 @@ pub(crate) async fn delete_handler<V: VpClient + 'static>(
     };
     let actor = actor_for(&raw_org_id, identity.as_ref());
 
-    let record = match require_org(
+    if let Err(resp) = require_org(
         store.as_ref(),
         &org_id,
         &raw_org_id,
@@ -750,13 +635,12 @@ pub(crate) async fn delete_handler<V: VpClient + 'static>(
     )
     .await
     {
-        Ok(r) => r,
-        Err(resp) => return resp,
-    };
+        return resp;
+    }
 
-    // D6 no-op: an absent group short-circuits before pre-checks/VP/append.
-    let existing = match store.get_group(&org_id, &name).await {
-        Ok(Some(g)) => g,
+    // D6 no-op: an absent group short-circuits before pre-checks/append.
+    match store.get_group(&org_id, &name).await {
+        Ok(Some(_)) => {}
         Ok(None) => {
             let current = match state.model_events.latest_revision(org_id.as_str()).await {
                 Ok(r) => r,
@@ -775,7 +659,7 @@ pub(crate) async fn delete_handler<V: VpClient + 'static>(
             tracing::error!(org_id = %raw_org_id, group = %name, error = %e, "delete group: get failed");
             return shape_group_error_response(&GroupHandlerError::Internal);
         }
-    };
+    }
 
     // Pre-checks: run BOTH and combine results
     let (memberships_result, inheritors_result) = tokio::join!(
@@ -804,60 +688,11 @@ pub(crate) async fn delete_handler<V: VpClient + 'static>(
         });
     }
 
-    let write_ctx = match OrgWriteContext::from_record(&record) {
-        Ok(c) => c,
-        Err(err) => return shape_active_state_error(&err, &raw_org_id, &name),
-    };
-
-    let result: Result<GroupWriteOutcome, GroupHandlerError> = match write_ctx {
-        OrgWriteContext::Draft => state
-            .model_events
-            .delete_group(org_id.as_str(), &name, actor, if_revision)
-            .await
-            .map_err(|e| map_group_write_error(e, if_revision, &raw_org_id, "delete group")),
-        OrgWriteContext::Active(vp_ctx) => {
-            let existing_entries = match list_existing_entries(
-                store.as_ref(),
-                &org_id,
-                &raw_org_id,
-                "delete group: list failed",
-            )
-            .await
-            {
-                Ok(v) => v,
-                Err(resp) => return resp,
-            };
-            let prior_for_rollback =
-                match validate_rbac_entry(existing.entry().clone(), &existing_entries) {
-                    Ok(v) => v,
-                    Err(reason) => {
-                        // A concurrent delete on an inherited group invalidated
-                        // an entry that was already stored. This is a store-state
-                        // inconsistency, not a client error — surface 500 and log.
-                        tracing::error!(
-                            org_id = %raw_org_id,
-                            group = %name,
-                            error = %reason,
-                            "delete group: prior entry failed re-validation; store is inconsistent",
-                        );
-                        return shape_group_error_response(&GroupHandlerError::Internal);
-                    }
-                };
-            active::apply_delete(active::DeleteParams {
-                store: store.as_ref(),
-                model_events: state.model_events.as_ref(),
-                vp: vp.as_ref(),
-                vp_ctx: &vp_ctx,
-                org_id: &org_id,
-                raw_org_id: &raw_org_id,
-                name: name.clone(),
-                prior_for_rollback,
-                actor,
-                expected_revision: if_revision,
-            })
-            .await
-        }
-    };
+    let result: Result<GroupWriteOutcome, GroupHandlerError> = state
+        .model_events
+        .delete_group(org_id.as_str(), &name, actor, if_revision)
+        .await
+        .map_err(|e| map_group_write_error(e, if_revision, &raw_org_id, "delete group"));
 
     match result {
         Ok(outcome) => (
