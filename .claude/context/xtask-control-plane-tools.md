@@ -17,7 +17,9 @@ cargo xtask control-plane seed
 cargo xtask control-plane seed --config path/to/custom-seed.toml
 ```
 
-`xtask/seed.toml` ships with two orgs (`org-acme`, `org-globex`), each declaring `member`, `admin`, and `owner` roles whose action lists match `forgeguard.toml` byte-for-byte.
+`xtask/seed.toml` ships with two orgs (`org-acme`, `org-globex`), each declaring `member`, `admin`, and `owner` roles whose action lists match `forgeguard.toml` byte-for-byte. Both orgs point `cognito_user_pool_id` at the prod dashboard pool (`us-east-2_Ge850AP5u`) — the per-org pool ids the file originally carried (`us-east-2_acme`/`us-east-2_globex`) were CDK-output placeholders for pools that were never deployed.
+
+**Known limitation — user provisioning fails against the dashboard pool.** The pool is configured for email alias, which forbids email-format usernames, but `admin_create_user` (`crates/authn/src/user_pool/aws.rs`) passes the user's email as the Cognito username → `InvalidParameterException: Username cannot be of email format`. Seed's org/group phases complete; the user phase aborts. Teardown already expects `org-{suffix}-*` usernames, so the aligned fix is deriving a non-email username in the create path. Until then, provision users by hand (or reuse the existing `acme-*`/`globex-*` users) and write their membership rows directly: `PK=USER#{sub}, SK=ORG#{org_id}` with a `groups` string-list attribute.
 
 ### Seed groups schema
 

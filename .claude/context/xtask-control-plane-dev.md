@@ -7,7 +7,7 @@
 Defined in `xtask/src/control_plane/dev.rs`.
 
 1. **Detects the container runtime** (`docker` or `podman`) and starts `amazon/dynamodb-local` on a randomly assigned host port. The port is printed so other terminals can target it.
-2. **Creates the DynamoDB table** (default `forgeguard-orgs-dev`) with `PK`/`SK` from the shared `orgs_schema()` in `infra/control-plane/schema/forgeguard-orgs.json`.
+2. **Creates the DynamoDB table** (default `forgeguard-orgs`, per `DevArgs` in `xtask/src/control_plane/dev.rs`) with `PK`/`SK` from the shared `orgs_schema()` in `infra/control-plane/schema/forgeguard-orgs.json`.
 3. **Seeds organizations** from `examples/control-plane/orgs.test.json` (org rows only — no Cognito users, no membership rows).
 4. **Launches the control plane** via `cargo run -p forgeguard_control_plane -- --store dynamodb --dynamodb-table <table> --listen <addr>` and waits on it.
 
@@ -33,7 +33,7 @@ Because credential inheritance is silent, the launch banner reminds the operator
 
 ## What `dev` seeds vs what it does not
 
-`dev` writes only organization rows to the local table. It does **not** provision Cognito users, membership rows, or 1Password secrets. Run `cargo xtask control-plane seed --dynamodb-endpoint http://127.0.0.1:<port> --dynamodb-table forgeguard-orgs-dev` in a second terminal to populate the rest of the fixture data. See [xtask-control-plane-tools.md](./xtask-control-plane-tools.md).
+`dev` writes only organization rows to the local table. It does **not** provision Cognito users, membership rows, or 1Password secrets. Run `cargo xtask control-plane seed --dynamodb-endpoint http://127.0.0.1:<port> --dynamodb-table forgeguard-orgs` in a second terminal to populate the rest of the fixture data (org/group rows only — the user-provisioning phase currently fails against the dashboard pool, see [xtask-control-plane-tools.md](./xtask-control-plane-tools.md)). See [xtask-control-plane-tools.md](./xtask-control-plane-tools.md).
 
 ## Seed status mapping
 
@@ -42,6 +42,22 @@ The dev pre-load step keeps the original V0 `config`-presence convention even th
 This is what makes the V2 Groups path testable locally: `org-seeded-draft` in `examples/control-plane/orgs.test.json` has no `config`, so it seeds as Draft and accepts V2 mutations; `org-acme` and `org-globex` carry a `config`, so they seed as Active and the V3 guard short-circuits Groups mutations with `501 Not Implemented`. Editing the seed JSON is the canonical way to flip an org between Draft and Active for local QA.
 
 The dedicated `cargo xtask control-plane seed` command (separate from `dev`) takes a different approach: it always writes Draft and never inspects `config`. Use it when validating the V5 seed flow against `dynamodb-local`. See [seed-qa.md](./seed-qa.md).
+
+## Exercising real `cp:*` authorization locally
+
+`dev` launches the CP **without** auth flags, so the child runs in dev mode: no JWT validation and a `StaticPolicyEngine` allow-all — every request passes authorization. To exercise the embedded `cp:*` engine (and membership resolution) locally, forward the auth flags through the trailing-args passthrough:
+
+```sh
+# Issuer = the Cognito iss claim of any dashboard-pool token.
+ISS=https://cognito-idp.us-east-2.amazonaws.com/<pool-id>
+
+cargo xtask control-plane dev -- \
+  --jwks-url "$ISS/.well-known/jwks.json" \
+  --issuer "$ISS" \
+  --policy-store-id ignored
+```
+
+`--policy-store-id` is required whenever `--jwks-url` is set but its value is ignored — since issue #117 V1 the `cp:*` decision runs on the embedded `CpCedarEngine`, not Verified Permissions (deleted entirely in V3). With auth on, requests also need a membership row (`PK=USER#{sub}, SK=ORG#{org_id}` with a `groups` list) in the local table or they fail closed with 403 `"Not a member of this organization"`.
 
 ## Ports and cleanup
 
@@ -63,12 +79,12 @@ aws sso login --profile admin
 # Terminal 1
 cargo xtask control-plane dev
 # → "Starting dynamodb-local on port 55005"
-# → "Launching control plane (listen: 127.0.0.1:3001, table: forgeguard-orgs-dev, endpoint: http://127.0.0.1:55005)..."
+# → "Launching control plane (listen: 127.0.0.1:3001, table: forgeguard-orgs, endpoint: http://127.0.0.1:55005)..."
 
-# Terminal 2 — populate Cognito users + membership rows
+# Terminal 2 — populate org/group rows (see seed limitation in xtask-control-plane-tools.md)
 cargo xtask control-plane seed \
   --dynamodb-endpoint http://127.0.0.1:55005 \
-  --dynamodb-table forgeguard-orgs-dev
+  --dynamodb-table forgeguard-orgs
 
 # Terminal 2 — exercise an authenticated flow
 TOKEN=$(cargo xtask control-plane token --user acme-admin)
@@ -81,7 +97,7 @@ curl -i -X POST http://127.0.0.1:3001/api/v1/organizations/org-acme/keys \
 
 | Flag | Env var | Default |
 |---|---|---|
-| `--table` | `FORGEGUARD_CP_DYNAMODB_TABLE` | `forgeguard-orgs-dev` |
+| `--table` | `FORGEGUARD_CP_DYNAMODB_TABLE` | `forgeguard-orgs` |
 | `--listen` | `FORGEGUARD_CP_LISTEN` | `127.0.0.1:3001` |
 | `--seed` | — | `examples/control-plane/orgs.test.json` |
 | trailing `--` args | — | forwarded verbatim to the CP binary |
