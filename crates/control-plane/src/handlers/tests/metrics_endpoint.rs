@@ -7,12 +7,6 @@ use super::super::test_support::{build_test_store, test_app};
 
 #[tokio::test]
 async fn metrics_endpoint_returns_200_with_text_plain_content_type() {
-    // Trigger the rollback-failed counter first so its `LazyLock` initialises
-    // and the metric is registered with the default prometheus registry.
-    // Without this bootstrap, `/metrics` output could omit the counter name
-    // entirely and the body assertion below would flake.
-    crate::metrics::record_group_rollback_failed("parent");
-
     let store = build_test_store();
     let app = test_app(store.clone());
 
@@ -43,8 +37,9 @@ async fn metrics_endpoint_returns_200_with_text_plain_content_type() {
 
     let bytes = res.into_body().collect().await.unwrap().to_bytes();
     let body_str = std::str::from_utf8(&bytes).unwrap();
+    // #117 V2: no VP push, nothing to roll back — the metric must stay gone.
     assert!(
-        body_str.contains("forgeguard_cp_group_rollback_failed_total"),
-        "metrics body must contain the rollback-failed counter metric name"
+        !body_str.contains("forgeguard_cp_group_rollback_failed_total"),
+        "retired rollback metric must not appear in /metrics output"
     );
 }

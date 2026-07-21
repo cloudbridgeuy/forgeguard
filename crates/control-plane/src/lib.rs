@@ -9,7 +9,6 @@ pub(crate) mod etag;
 mod event_log;
 mod handlers;
 mod membership_store;
-pub(crate) mod metrics;
 mod model_event_store;
 mod promotion_store;
 mod signing_key;
