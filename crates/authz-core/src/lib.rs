@@ -1,6 +1,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used)]
 
 pub mod context;
+pub mod cp_model;
 pub mod decision;
 pub mod engine;
 pub mod engine_cedar;
@@ -15,6 +16,7 @@ pub mod store;
 pub mod static_engine;
 
 pub use context::PolicyContext;
+pub use cp_model::compile_cp_model;
 pub use decision::{DenyReason, PolicyDecision};
 pub use engine::{CacheStats, PolicyEngine};
 pub use engine_cedar::{
