@@ -57,6 +57,9 @@ ulid = { workspace = true }
 url = { workspace = true }
 xxhash-rust = { workspace = true }
 
+[build-dependencies]
+forgeguard_authz_core = { workspace = true }
+
 [dev-dependencies]
 # `testing` feature exposes `InMemoryUserPoolClient::arm_*_once` for handler tests.
 forgeguard_authn = { workspace = true, features = ["testing"] }
