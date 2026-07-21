@@ -217,6 +217,7 @@ fn validation_label(err: &GroupValidationError) -> (&'static str, &'static str) 
     match err {
         GroupValidationError::BadNameRegex { .. } => ("bad_name_regex", "name"),
         GroupValidationError::BadActionFormat { .. } => ("bad_action_format", "allow"),
+        GroupValidationError::BadActionId { .. } => ("bad_action_id", "allow"),
         GroupValidationError::EmptyAllow => ("empty_allow", "allow"),
         GroupValidationError::InheritCycle(_) => ("inherit_cycle", "inherits"),
         GroupValidationError::UnknownInherit(_) => ("unknown_inherit", "inherits"),

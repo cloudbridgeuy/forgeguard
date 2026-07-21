@@ -26,6 +26,8 @@ impl ValidatedRbacEntry {
 pub enum GroupValidationError {
     #[error("name {name:?} must match [a-z][a-z0-9_-]*")]
     BadNameRegex { name: String },
+    #[error("action id {action:?} must match [a-z][a-z0-9_-]* (hyphenated form, e.g. cp-organization-read)")]
+    BadActionId { action: String },
     #[error("action {action:?} must match <namespace>:<entity>:<verb>")]
     BadActionFormat { action: String },
     #[error("allow list must not be empty")]
@@ -67,6 +69,18 @@ pub fn validate_group_name(name: &str) -> Result<(), GroupValidationError> {
 
 /// Validate that an action matches `<namespace>:<entity>:<verb>` — exactly
 /// three colon-separated segments, each matching `[a-z][a-z0-9_-]*`.
+/// Validate a hyphenated Cedar action id (`cp-organization-read`) — the form
+/// `forgeguard.toml`'s `allow` lists use. Reuses the group-name character set.
+pub fn validate_action_id(action: &str) -> Result<(), GroupValidationError> {
+    if GROUP_NAME_RE.is_match(action) {
+        Ok(())
+    } else {
+        Err(GroupValidationError::BadActionId {
+            action: action.to_owned(),
+        })
+    }
+}
+
 pub fn validate_action_format(action: &str) -> Result<(), GroupValidationError> {
     if ACTION_FORMAT_RE.is_match(action) {
         Ok(())

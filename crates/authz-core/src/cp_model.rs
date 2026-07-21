@@ -8,7 +8,10 @@
 
 use serde::Deserialize;
 
-use crate::rbac::{compile_rbac_to_cedar, resolve_inherits, RbacEntry, TenantConfig};
+use crate::rbac::{
+    compile_rbac_to_cedar, resolve_inherits, validate_action_id, validate_group_name, RbacEntry,
+    TenantConfig,
+};
 
 #[derive(Debug, Deserialize)]
 struct CpModelToml {
@@ -70,6 +73,17 @@ pub fn compile_cp_model(toml_text: &str) -> std::result::Result<String, String> 
             PolicySectionTagged::Cedar { .. } => None,
         })
         .collect();
+
+    // Semantic validation before compilation: Cedar accepts arbitrary strings
+    // as entity IDs, so a typo'd group name or action would otherwise compile
+    // clean and silently never match. Same guards the retired `cedar sync`
+    // path applied.
+    for entry in &rbac_entries {
+        validate_group_name(&entry.name).map_err(|e| format!("policy {:?}: {e}", entry.name))?;
+        for action in &entry.allow {
+            validate_action_id(action).map_err(|e| format!("policy {:?}: {e}", entry.name))?;
+        }
+    }
 
     let mut statements = Vec::with_capacity(model.policies.len());
     for policy in &model.policies {
@@ -197,6 +211,37 @@ name = "broken"
 body = "permit(principal action resource"
 "#;
         assert!(compile_cp_model(bad).is_err());
+    }
+
+    #[test]
+    fn malformed_action_id_is_an_error() {
+        // Cedar accepts arbitrary strings as entity IDs, so without semantic
+        // validation this would compile clean and silently never match
+        // (QA Scenario 4 regression, 2026-07-21).
+        let bad = r#"
+[schema]
+namespace = "forgeguard"
+
+[[policies]]
+name = "broken"
+allow = ["not a valid action ident !!"]
+"#;
+        let err = compile_cp_model(bad).unwrap_err();
+        assert!(err.contains("action id"), "got: {err}");
+    }
+
+    #[test]
+    fn malformed_group_name_is_an_error() {
+        let bad = r#"
+[schema]
+namespace = "forgeguard"
+
+[[policies]]
+name = "Not A Valid Name"
+allow = ["cp-organization-read"]
+"#;
+        let err = compile_cp_model(bad).unwrap_err();
+        assert!(err.contains("must match"), "got: {err}");
     }
 
     #[test]

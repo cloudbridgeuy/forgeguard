@@ -36,9 +36,9 @@ pub use event::{
 pub use query::PolicyQuery;
 pub use rbac::{
     compile_rbac_to_cedar, groups_to_permits, policy_name_for_group, resolve_inherits,
-    validate_action_format, validate_cedar_ident, validate_group_name, validate_rbac_entry,
-    GroupValidationError, MaterializeCompileError, NamedPermit, RbacEntry, TenantConfig,
-    ValidatedRbacEntry,
+    validate_action_format, validate_action_id, validate_cedar_ident, validate_group_name,
+    validate_rbac_entry, GroupValidationError, MaterializeCompileError, NamedPermit, RbacEntry,
+    TenantConfig, ValidatedRbacEntry,
 };
 pub use snapshot::{Snapshot, SnapshotVersion};
 pub use store::{
