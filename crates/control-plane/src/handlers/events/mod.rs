@@ -22,7 +22,6 @@ use crate::handlers::min_revision::{
 };
 use crate::handlers::{clamp_limit, AppState, DEFAULT_LIMIT, REVISION_HEADER};
 use crate::model_event_store::ModelEventStore;
-use crate::vp_client::VpClient;
 
 /// Query parameters accepted by `GET /organizations/{org_id}/events`.
 #[derive(Debug, Deserialize)]
@@ -100,11 +99,11 @@ async fn watch_for_events(
 /// 4. Clamp `limit`, read the page; empty page + `wait=1` -> watch loop.
 /// 5. Read latest revision, respond.
 #[tracing::instrument(name = "list_events", skip_all, fields(org_id = %raw_org_id))]
-pub(crate) async fn list_events_handler<V: VpClient + 'static>(
+pub(crate) async fn list_events_handler(
     Path(raw_org_id): Path<String>,
     Query(query): Query<EventsQuery>,
     request_headers: HeaderMap,
-    State(state): State<AppState<V>>,
+    State(state): State<AppState>,
 ) -> Response {
     let Ok(wait) = parse_wait(query.wait.as_deref()) else {
         return (

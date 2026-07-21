@@ -12,7 +12,6 @@ use http_body_util::BodyExt;
 use tower::ServiceExt;
 
 use crate::handlers::test_support::{build_test_store, test_app_with_principals, TEST_API_KEY};
-use crate::vp_client::stub::happy_stub;
 
 const ORG: &str = "org-acme";
 
@@ -103,7 +102,7 @@ fn revision_header(resp: &axum::response::Response) -> u64 {
 
 #[tokio::test]
 async fn tombstone_existing_promotion_returns_200_with_new_revision_and_event() {
-    let (app, principals) = test_app_with_principals(build_test_store(), happy_stub());
+    let (app, principals) = test_app_with_principals(build_test_store());
     principals
         .put_promotion(ORG, &doc_type(), &nid("doc_1"), Actor::System)
         .await
@@ -129,7 +128,7 @@ async fn tombstone_existing_promotion_returns_200_with_new_revision_and_event() 
 
 #[tokio::test]
 async fn repeat_tombstone_returns_204_with_current_revision_and_no_event() {
-    let (app, principals) = test_app_with_principals(build_test_store(), happy_stub());
+    let (app, principals) = test_app_with_principals(build_test_store());
     principals
         .put_promotion(ORG, &doc_type(), &nid("doc_1"), Actor::System)
         .await
@@ -149,7 +148,7 @@ async fn repeat_tombstone_returns_204_with_current_revision_and_no_event() {
 
 #[tokio::test]
 async fn tombstone_unknown_promotion_returns_204() {
-    let (app, _principals) = test_app_with_principals(build_test_store(), happy_stub());
+    let (app, _principals) = test_app_with_principals(build_test_store());
 
     let resp = tombstone(&app, "doc_missing").await;
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
@@ -158,7 +157,7 @@ async fn tombstone_unknown_promotion_returns_204() {
 
 #[tokio::test]
 async fn tombstone_invalid_native_id_returns_422() {
-    let (app, _principals) = test_app_with_principals(build_test_store(), happy_stub());
+    let (app, _principals) = test_app_with_principals(build_test_store());
 
     let resp = app
         .clone()
@@ -179,7 +178,7 @@ async fn tombstone_invalid_native_id_returns_422() {
 
 #[tokio::test]
 async fn list_missing_type_returns_400() {
-    let (app, _principals) = test_app_with_principals(build_test_store(), happy_stub());
+    let (app, _principals) = test_app_with_principals(build_test_store());
 
     let resp = list(&app, "").await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
@@ -189,7 +188,7 @@ async fn list_missing_type_returns_400() {
 
 #[tokio::test]
 async fn list_returns_fgrn_page_sorted_with_next_after() {
-    let (app, principals) = test_app_with_principals(build_test_store(), happy_stub());
+    let (app, principals) = test_app_with_principals(build_test_store());
     for id in ["doc_1", "doc_2", "doc_3"] {
         principals
             .put_promotion(ORG, &doc_type(), &nid(id), Actor::System)
@@ -224,7 +223,7 @@ async fn list_returns_fgrn_page_sorted_with_next_after() {
 
 #[tokio::test]
 async fn list_empty_type_returns_empty_page_with_null_next_after() {
-    let (app, _principals) = test_app_with_principals(build_test_store(), happy_stub());
+    let (app, _principals) = test_app_with_principals(build_test_store());
 
     let resp = list(&app, "type=document").await;
     assert_eq!(resp.status(), StatusCode::OK);
@@ -235,7 +234,7 @@ async fn list_empty_type_returns_empty_page_with_null_next_after() {
 
 #[tokio::test]
 async fn list_min_revision_behind_returns_412() {
-    let (app, principals) = test_app_with_principals(build_test_store(), happy_stub());
+    let (app, principals) = test_app_with_principals(build_test_store());
     principals
         .put_promotion(ORG, &doc_type(), &nid("doc_1"), Actor::System)
         .await
@@ -250,7 +249,7 @@ async fn list_min_revision_behind_returns_412() {
 
 #[tokio::test]
 async fn tombstoned_promotion_disappears_from_list() {
-    let (app, principals) = test_app_with_principals(build_test_store(), happy_stub());
+    let (app, principals) = test_app_with_principals(build_test_store());
     principals
         .put_promotion(ORG, &doc_type(), &nid("doc_1"), Actor::System)
         .await
@@ -275,7 +274,7 @@ async fn tombstoned_promotion_disappears_from_list() {
 
 #[tokio::test]
 async fn missing_org_returns_404() {
-    let (app, _principals) = test_app_with_principals(build_test_store(), happy_stub());
+    let (app, _principals) = test_app_with_principals(build_test_store());
 
     let resp = app
         .clone()

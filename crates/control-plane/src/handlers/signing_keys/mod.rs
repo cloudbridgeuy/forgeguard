@@ -16,7 +16,6 @@ use forgeguard_core::OrgStatus;
 use serde::Serialize;
 
 use crate::handlers::AppState;
-use crate::vp_client::VpClient;
 
 /// A single event-signing public key, as returned to callers.
 #[derive(Serialize)]
@@ -38,9 +37,9 @@ struct ListSigningKeysResponse {
 /// non-`Deleted` status is readable). No revision header — keys are not
 /// event-log state.
 #[tracing::instrument(name = "list_signing_keys", skip_all, fields(org_id = %raw_org_id))]
-pub(crate) async fn list_signing_keys_handler<V: VpClient + 'static>(
+pub(crate) async fn list_signing_keys_handler(
     Path(raw_org_id): Path<String>,
-    State(state): State<AppState<V>>,
+    State(state): State<AppState>,
 ) -> Response {
     if let Err(resp) = require_not_deleted_org(&state, &raw_org_id).await {
         return resp;
@@ -66,10 +65,7 @@ pub(crate) async fn list_signing_keys_handler<V: VpClient + 'static>(
 
 /// Org existence + non-`Deleted` gate (D10) — 404 unknown/deleted, 500 on
 /// store error. Draft/Active/Suspended/Deleting are all readable.
-async fn require_not_deleted_org<V: VpClient + 'static>(
-    state: &AppState<V>,
-    raw_org_id: &str,
-) -> Result<(), Response> {
+async fn require_not_deleted_org(state: &AppState, raw_org_id: &str) -> Result<(), Response> {
     let Ok(org_id) = forgeguard_core::OrganizationId::new(raw_org_id) else {
         return Err(crate::handlers::not_found());
     };

@@ -31,7 +31,6 @@ use crate::etag::{self, Etag};
 use crate::handlers::{actor_for, AppState};
 use crate::model_event_store::GroupWriteOutcome;
 use crate::store::{EtagedGroup, OrgStore};
-use crate::vp_client::VpClient;
 
 // ---------------------------------------------------------------------------
 // #113 V4, Task 5: group mutations trade `If-Match`/ETag preconditions for
@@ -249,10 +248,10 @@ pub(crate) struct UpdateGroupRequest {
 /// no-ops (D6) are enforced by the store.
 ///
 /// Duplicate name returns `409 Conflict`.
-pub(crate) async fn create_handler<V: VpClient + 'static>(
+pub(crate) async fn create_handler(
     ForgeGuardIdentity(identity): ForgeGuardIdentity,
     Path(raw_org_id): Path<String>,
-    State(state): State<AppState<V>>,
+    State(state): State<AppState>,
     headers: HeaderMap,
     Json(body): Json<CreateGroupRequest>,
 ) -> Response {
@@ -483,10 +482,10 @@ pub(crate) async fn get_handler(
 /// no-ops (D6) are enforced by the store.
 ///
 /// Returns `200 OK` with `{group, revision}` and an `x-fg-revision` header.
-pub(crate) async fn update_handler<V: VpClient + 'static>(
+pub(crate) async fn update_handler(
     ForgeGuardIdentity(identity): ForgeGuardIdentity,
     Path((raw_org_id, name)): Path<(String, String)>,
-    State(state): State<AppState<V>>,
+    State(state): State<AppState>,
     headers: HeaderMap,
     Json(body): Json<UpdateGroupRequest>,
 ) -> Response {
@@ -610,10 +609,10 @@ pub(crate) async fn update_handler<V: VpClient + 'static>(
 /// All org statuses share one write path: an event-sourced append via
 /// `ModelEventStore` (#117 V2). Revision preconditions (D5) and semantic
 /// no-ops (D6) are enforced by the store.
-pub(crate) async fn delete_handler<V: VpClient + 'static>(
+pub(crate) async fn delete_handler(
     ForgeGuardIdentity(identity): ForgeGuardIdentity,
     Path((raw_org_id, name)): Path<(String, String)>,
-    State(state): State<AppState<V>>,
+    State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Response {
     let Ok(org_id) = OrganizationId::new(&raw_org_id) else {

@@ -15,7 +15,6 @@ use crate::handlers::test_support::{
     test_app_with_principals, TEST_API_KEY,
 };
 use crate::store::OrgStore;
-use crate::vp_client::stub::happy_stub;
 
 async fn seed_org_with_status(
     store: &Arc<crate::store::InMemoryOrgStore>,
@@ -111,7 +110,7 @@ async fn signing_keys_readable_for_draft_org() {
 
 #[tokio::test]
 async fn signing_keys_readable_for_suspended_org() {
-    let (app, _model_events) = test_app_with_principals(empty_store(), happy_stub());
+    let (app, _model_events) = test_app_with_principals(empty_store());
     let response = create_draft_org(&app, "org-suspended-keys", "Suspended Keys").await;
     assert_eq!(response.status(), StatusCode::CREATED);
     assert_eq!(
@@ -146,7 +145,7 @@ async fn stored_envelope_verifies_with_published_key() {
     use forgeguard_authz_core::{canonical_envelope_bytes, EventEnvelope};
 
     let store = build_test_store();
-    let (app, _principals) = test_app_with_principals(store, happy_stub());
+    let (app, _principals) = test_app_with_principals(store);
 
     // Mutate: PUT a principal (appends event seq=1).
     let response = app

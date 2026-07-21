@@ -10,7 +10,6 @@ use tower::ServiceExt;
 
 use super::super::test_support::{create_draft_org, empty_store, test_app_with_principals};
 use crate::handlers::test_support::TEST_API_KEY;
-use crate::vp_client::stub::happy_stub;
 
 async fn body_json(resp: axum::response::Response) -> serde_json::Value {
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
@@ -38,7 +37,7 @@ async fn setup_org_with_group(
     Arc<dyn crate::model_event_store::ModelEventStore>,
 ) {
     let store = empty_store();
-    let (app, model_events) = test_app_with_principals(store, happy_stub());
+    let (app, model_events) = test_app_with_principals(store);
 
     let resp = create_draft_org(&app, org_id, "Revision Org").await;
     assert_eq!(resp.status(), StatusCode::CREATED);
@@ -573,7 +572,7 @@ async fn delete_group_with_garbage_if_revision_returns_400() {
 #[tokio::test]
 async fn delete_absent_group_204_current_revision_no_event() {
     let store = empty_store();
-    let (app, model_events) = test_app_with_principals(store, happy_stub());
+    let (app, model_events) = test_app_with_principals(store);
     let resp = create_draft_org(&app, "org-rev-d-absent-noop", "Absent Noop Org").await;
     assert_eq!(resp.status(), StatusCode::CREATED);
 

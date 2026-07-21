@@ -4,7 +4,6 @@ use http_body_util::BodyExt;
 use tower::ServiceExt;
 
 use super::super::test_support::{build_test_store, test_app, TEST_API_KEY};
-use crate::vp_client::stub::happy_stub;
 
 fn config_body(upstream_url: &str) -> Vec<u8> {
     serde_json::to_vec(&serde_json::json!({
@@ -24,8 +23,7 @@ fn config_body(upstream_url: &str) -> Vec<u8> {
 #[tokio::test]
 async fn update_with_matching_if_revision_returns_200_and_new_revision() {
     let store = build_test_store();
-    let (app, model_events) =
-        super::super::test_support::test_app_with_principals(store.clone(), happy_stub());
+    let (app, model_events) = super::super::test_support::test_app_with_principals(store.clone());
     let current = model_events.latest_revision("org-acme").await.unwrap();
 
     let res = app
@@ -61,8 +59,7 @@ async fn update_with_matching_if_revision_returns_200_and_new_revision() {
 #[tokio::test]
 async fn update_with_stale_if_revision_returns_412_with_current_revision() {
     let store = build_test_store();
-    let (app, model_events) =
-        super::super::test_support::test_app_with_principals(store.clone(), happy_stub());
+    let (app, model_events) = super::super::test_support::test_app_with_principals(store.clone());
     let current = model_events.latest_revision("org-acme").await.unwrap();
     let stale = current.value() + 41;
 
@@ -145,8 +142,7 @@ async fn update_with_garbage_if_revision_returns_400() {
 #[tokio::test]
 async fn identical_update_is_noop_same_revision_no_event() {
     let store = build_test_store();
-    let (app, model_events) =
-        super::super::test_support::test_app_with_principals(store.clone(), happy_stub());
+    let (app, model_events) = super::super::test_support::test_app_with_principals(store.clone());
     let before = model_events.latest_revision("org-acme").await.unwrap();
     let events_before = model_events
         .events_after("org-acme", forgeguard_authz_core::Revision::new(0), 100)

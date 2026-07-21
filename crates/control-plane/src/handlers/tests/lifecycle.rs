@@ -8,7 +8,6 @@ use forgeguard_authz_core::{EventKind, Revision};
 use super::super::test_support::{
     create_org_json, empty_store, test_app_with_principals, TEST_API_KEY,
 };
-use crate::vp_client::stub::happy_stub;
 
 async fn create_draft(app: &axum::Router, org_id: &str) {
     let body = serde_json::to_string(&create_org_json(org_id, "Test Org")).unwrap();
@@ -44,7 +43,7 @@ async fn post_verb(app: &axum::Router, org_id: &str, verb: &str) -> axum::respon
 
 #[tokio::test]
 async fn activate_draft_org_succeeds_and_emits_org_activated() {
-    let (app, model_events) = test_app_with_principals(empty_store(), happy_stub());
+    let (app, model_events) = test_app_with_principals(empty_store());
     create_draft(&app, "org-a").await;
 
     let response = post_verb(&app, "org-a", "activate").await;
@@ -70,7 +69,7 @@ async fn activate_draft_org_succeeds_and_emits_org_activated() {
 
 #[tokio::test]
 async fn suspend_active_org_emits_narrowing_event() {
-    let (app, model_events) = test_app_with_principals(empty_store(), happy_stub());
+    let (app, model_events) = test_app_with_principals(empty_store());
     create_draft(&app, "org-b").await;
     assert_eq!(
         post_verb(&app, "org-b", "activate").await.status(),
@@ -94,7 +93,7 @@ async fn suspend_active_org_emits_narrowing_event() {
 
 #[tokio::test]
 async fn restore_full_cycle_emits_kinds_in_order() {
-    let (app, model_events) = test_app_with_principals(empty_store(), happy_stub());
+    let (app, model_events) = test_app_with_principals(empty_store());
     create_draft(&app, "org-c").await;
     assert_eq!(
         post_verb(&app, "org-c", "activate").await.status(),
@@ -132,7 +131,7 @@ async fn restore_full_cycle_emits_kinds_in_order() {
 
 #[tokio::test]
 async fn suspend_draft_org_returns_409_invalid_transition() {
-    let (app, model_events) = test_app_with_principals(empty_store(), happy_stub());
+    let (app, model_events) = test_app_with_principals(empty_store());
     create_draft(&app, "org-d").await;
 
     let response = post_verb(&app, "org-d", "suspend").await;
@@ -150,7 +149,7 @@ async fn suspend_draft_org_returns_409_invalid_transition() {
 
 #[tokio::test]
 async fn restore_draft_org_returns_409_invalid_transition() {
-    let (app, model_events) = test_app_with_principals(empty_store(), happy_stub());
+    let (app, model_events) = test_app_with_principals(empty_store());
     create_draft(&app, "org-e").await;
 
     let response = post_verb(&app, "org-e", "restore").await;
@@ -168,7 +167,7 @@ async fn restore_draft_org_returns_409_invalid_transition() {
 
 #[tokio::test]
 async fn activate_active_org_is_a_no_op() {
-    let (app, model_events) = test_app_with_principals(empty_store(), happy_stub());
+    let (app, model_events) = test_app_with_principals(empty_store());
     create_draft(&app, "org-f").await;
     assert_eq!(
         post_verb(&app, "org-f", "activate").await.status(),
@@ -194,7 +193,7 @@ async fn activate_active_org_is_a_no_op() {
 
 #[tokio::test]
 async fn activate_unknown_org_returns_404() {
-    let (app, _model_events) = test_app_with_principals(empty_store(), happy_stub());
+    let (app, _model_events) = test_app_with_principals(empty_store());
 
     let response = post_verb(&app, "org-does-not-exist", "activate").await;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);

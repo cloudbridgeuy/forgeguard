@@ -23,7 +23,6 @@ use crate::config::OrgConfig;
 use crate::etag::{self, Etag, IfNoneMatchResult};
 use crate::model_event_store::ModelEventStore;
 use crate::store::{OrgRecord, OrgStore};
-use crate::vp_client::VpClient;
 
 pub(super) const DEFAULT_LIMIT: u16 = 100;
 pub(super) const MAX_LIMIT: u16 = 1000;
@@ -71,40 +70,29 @@ pub(super) fn clamp_limit(requested: u16) -> usize {
 
 /// Shared router state for the control-plane Axum app.
 ///
-/// Carries the object-safe [`OrgStore`] handle and the `VpClient` used by
-/// the V3 Active write path. Non-group handlers extract
+/// Carries the object-safe [`OrgStore`] handle. Non-group handlers extract
 /// `State<Arc<dyn OrgStore>>` via the `FromRef` impl below; group handlers
-/// extract the full [`AppState<V>`].
+/// extract the full [`AppState`].
 ///
 /// V1-append-spine adds `model_events` — the [`ModelEventStore`] seam the
 /// `PUT /principals/{native_id}` handler upserts through, wiring
 /// `DynamoModelEventStore` in production and
 /// `InMemoryModelEventStore` for `--store=memory` dev mode and handler
 /// tests.
-pub(crate) struct AppState<V> {
+#[derive(Clone)]
+pub(crate) struct AppState {
     pub(crate) store: Arc<dyn OrgStore>,
-    pub(crate) vp: Arc<V>,
     pub(crate) model_events: Arc<dyn ModelEventStore>,
 }
 
-impl<V> Clone for AppState<V> {
-    fn clone(&self) -> Self {
-        Self {
-            store: Arc::clone(&self.store),
-            vp: Arc::clone(&self.vp),
-            model_events: Arc::clone(&self.model_events),
-        }
-    }
-}
-
-impl<V> FromRef<AppState<V>> for Arc<dyn OrgStore> {
-    fn from_ref(input: &AppState<V>) -> Arc<dyn OrgStore> {
+impl FromRef<AppState> for Arc<dyn OrgStore> {
+    fn from_ref(input: &AppState) -> Arc<dyn OrgStore> {
         Arc::clone(&input.store)
     }
 }
 
-impl<V> FromRef<AppState<V>> for Arc<dyn ModelEventStore> {
-    fn from_ref(input: &AppState<V>) -> Arc<dyn ModelEventStore> {
+impl FromRef<AppState> for Arc<dyn ModelEventStore> {
+    fn from_ref(input: &AppState) -> Arc<dyn ModelEventStore> {
         Arc::clone(&input.model_events)
     }
 }
@@ -160,9 +148,9 @@ pub(crate) async fn metrics_handler() -> Response {
 /// `201` with the created organization and the revision the log advanced
 /// to. No `ETag` — org mutations are revision-tokened, not etag-conditioned
 /// (D5).
-pub(crate) async fn create_handler<V: VpClient + 'static>(
+pub(crate) async fn create_handler(
     ForgeGuardIdentity(identity): ForgeGuardIdentity,
-    State(state): State<AppState<V>>,
+    State(state): State<AppState>,
     Json(body): Json<CreateOrgRequest>,
 ) -> Response {
     let Ok(org_id) = OrganizationId::new(&body.org_id) else {
@@ -368,10 +356,10 @@ pub(crate) struct UpdateOrgRequest {
 /// `updated_at`) is a no-op: it responds `200` with the current revision and
 /// appends no event.
 #[tracing::instrument(name = "update_org", skip_all, fields(org_id = %raw_org_id))]
-pub(crate) async fn update_handler<V: VpClient + 'static>(
+pub(crate) async fn update_handler(
     ForgeGuardIdentity(identity): ForgeGuardIdentity,
     Path(raw_org_id): Path<String>,
-    State(state): State<AppState<V>>,
+    State(state): State<AppState>,
     headers: HeaderMap,
     Json(body): Json<UpdateOrgRequest>,
 ) -> Response {
@@ -560,7 +548,6 @@ pub(super) mod test_support {
 
     use crate::model_event_store::ModelEventStore;
     use crate::store::{build_org_store, InMemoryOrgStore, OrgStore};
-    use crate::vp_client::stub::{happy_stub, StubVpClient};
 
     pub const TEST_API_KEY: &str = "test-key";
 
@@ -586,19 +573,14 @@ pub(super) mod test_support {
     }
 
     pub fn test_app(store: Arc<dyn OrgStore>) -> Router {
-        test_app_with_stub(store, happy_stub())
+        test_app_with_principals(store).0
     }
 
-    pub fn test_app_with_stub(store: Arc<dyn OrgStore>, vp: Arc<StubVpClient>) -> Router {
-        test_app_with_principals(store, vp).0
-    }
-
-    /// Like [`test_app_with_stub`], but also exposes the in-memory
-    /// [`ModelEventStore`] handle so promotion tests can seed state
-    /// directly (there is no promotion-create HTTP API in this slice).
+    /// Also exposes the in-memory [`ModelEventStore`] handle so promotion
+    /// tests can seed state directly (there is no promotion-create HTTP API
+    /// in this slice).
     pub fn test_app_with_principals(
         store: Arc<dyn OrgStore>,
-        vp: Arc<StubVpClient>,
     ) -> (Router, Arc<dyn ModelEventStore>) {
         let route_matcher = RouteMatcher::new(&[]).unwrap();
         let public_routes = vec![
@@ -648,17 +630,16 @@ pub(super) mod test_support {
         let model_events_handle = Arc::clone(&model_events);
         let state = super::AppState {
             store,
-            vp,
             model_events,
         };
         let router = Router::new()
             .route(
                 "/api/v1/organizations",
-                axum::routing::post(super::create_handler::<StubVpClient>).get(super::list_handler),
+                axum::routing::post(super::create_handler).get(super::list_handler),
             )
             .route(
                 "/api/v1/organizations/{org_id}",
-                axum::routing::get(super::get_handler).put(super::update_handler::<StubVpClient>),
+                axum::routing::get(super::get_handler).put(super::update_handler),
             )
             .route(
                 "/api/v1/organizations/{org_id}/proxy-config",
@@ -666,61 +647,58 @@ pub(super) mod test_support {
             )
             .route(
                 "/api/v1/organizations/{org_id}/keys",
-                axum::routing::post(super::keys::generate_key_handler::<StubVpClient>)
+                axum::routing::post(super::keys::generate_key_handler)
                     .get(super::keys::list_keys_handler),
             )
             .route(
                 "/api/v1/organizations/{org_id}/keys/{key_id}",
-                axum::routing::delete(super::keys::revoke_key_handler::<StubVpClient>),
+                axum::routing::delete(super::keys::revoke_key_handler),
             )
             .route(
                 "/api/v1/organizations/{org_id}/keys/{key_id}/rotate",
-                axum::routing::post(super::keys::rotate_key_handler::<StubVpClient>),
+                axum::routing::post(super::keys::rotate_key_handler),
             )
             .route(
                 "/api/v1/organizations/{org_id}/groups",
-                axum::routing::post(super::groups::create_handler::<StubVpClient>)
-                    .get(super::groups::list_handler),
+                axum::routing::post(super::groups::create_handler).get(super::groups::list_handler),
             )
             .route(
                 "/api/v1/organizations/{org_id}/groups/{name}",
                 axum::routing::get(super::groups::get_handler)
-                    .put(super::groups::update_handler::<StubVpClient>)
-                    .delete(super::groups::delete_handler::<StubVpClient>),
+                    .put(super::groups::update_handler)
+                    .delete(super::groups::delete_handler),
             )
             .route(
                 "/api/v1/organizations/{org_id}/principals/{native_id}",
-                axum::routing::put(super::principals::upsert_principal::<StubVpClient>),
+                axum::routing::put(super::principals::upsert_principal),
             )
             .route(
                 "/api/v1/organizations/{org_id}/events",
-                axum::routing::get(super::events::list_events_handler::<StubVpClient>),
+                axum::routing::get(super::events::list_events_handler),
             )
             .route(
                 "/api/v1/organizations/{org_id}/promoted-resources/{resource_type}/{native_id}",
-                axum::routing::delete(
-                    super::promotions::tombstone_promotion_handler::<StubVpClient>,
-                ),
+                axum::routing::delete(super::promotions::tombstone_promotion_handler),
             )
             .route(
                 "/api/v1/organizations/{org_id}/promoted-resources",
-                axum::routing::get(super::promotions::list_promotions_handler::<StubVpClient>),
+                axum::routing::get(super::promotions::list_promotions_handler),
             )
             .route(
                 "/api/v1/organizations/{org_id}/signing-keys",
-                axum::routing::get(super::signing_keys::list_signing_keys_handler::<StubVpClient>),
+                axum::routing::get(super::signing_keys::list_signing_keys_handler),
             )
             .route(
                 "/api/v1/organizations/{org_id}/activate",
-                axum::routing::post(super::lifecycle::activate_handler::<StubVpClient>),
+                axum::routing::post(super::lifecycle::activate_handler),
             )
             .route(
                 "/api/v1/organizations/{org_id}/suspend",
-                axum::routing::post(super::lifecycle::suspend_handler::<StubVpClient>),
+                axum::routing::post(super::lifecycle::suspend_handler),
             )
             .route(
                 "/api/v1/organizations/{org_id}/restore",
-                axum::routing::post(super::lifecycle::restore_handler::<StubVpClient>),
+                axum::routing::post(super::lifecycle::restore_handler),
             )
             .route("/metrics", axum::routing::get(super::metrics_handler))
             .with_state(state)

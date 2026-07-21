@@ -21,7 +21,6 @@ path = "src/main.rs"
 [features]
 default = ["vp"]
 dynamodb-tests = []
-test-support = []
 vp = ["dep:forgeguard_authz"]
 
 [dependencies]
@@ -29,7 +28,6 @@ async-trait = { workspace = true }
 aws-config = { workspace = true }
 aws-sdk-cognitoidentityprovider = { workspace = true }
 aws-sdk-dynamodb = { workspace = true }
-aws-sdk-verifiedpermissions = { workspace = true }
 axum = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true }

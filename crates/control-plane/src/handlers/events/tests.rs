@@ -16,7 +16,6 @@ use crate::handlers::test_support::{
     test_app_with_principals, TEST_API_KEY,
 };
 use crate::store::OrgStore;
-use crate::vp_client::stub::happy_stub;
 
 async fn seed_org_with_status(
     store: &std::sync::Arc<crate::store::InMemoryOrgStore>,
@@ -372,7 +371,7 @@ async fn events_readable_for_draft_org() {
 
 #[tokio::test]
 async fn events_readable_for_suspended_org() {
-    let (app, _model_events) = test_app_with_principals(empty_store(), happy_stub());
+    let (app, _model_events) = test_app_with_principals(empty_store());
     let response = create_draft_org(&app, "org-suspended-events", "Suspended Events").await;
     assert_eq!(response.status(), StatusCode::CREATED);
     for verb in ["activate", "suspend"] {

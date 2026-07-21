@@ -10,14 +10,13 @@ use forgeguard_core::OrganizationId;
 use crate::handlers::{actor_for, revision_header_map, AppState};
 use crate::signing_key::{GenerateKeyResult, SigningKeyEntry};
 use crate::store::OrgStore;
-use crate::vp_client::VpClient;
 
 /// `POST /api/v1/organizations/{org_id}/keys` — mint a request-signing key
 /// on the event log (`org.key_generated`, #113 V3).
-pub(crate) async fn generate_key_handler<V: VpClient + 'static>(
+pub(crate) async fn generate_key_handler(
     ForgeGuardIdentity(identity): ForgeGuardIdentity,
     Path(raw_org_id): Path<String>,
-    State(state): State<AppState<V>>,
+    State(state): State<AppState>,
 ) -> Response {
     if OrganizationId::new(&raw_org_id).is_err() {
         return super::not_found();
@@ -49,10 +48,10 @@ pub(crate) async fn generate_key_handler<V: VpClient + 'static>(
 /// Unknown org -> `404`. Unknown/already-revoked key is the D6 no-op -> `204`
 /// with `x-fg-revision` set to the *current* revision (no event appended).
 /// Revoked key -> `204` with `x-fg-revision` set to the *new* revision.
-pub(crate) async fn revoke_key_handler<V: VpClient + 'static>(
+pub(crate) async fn revoke_key_handler(
     ForgeGuardIdentity(identity): ForgeGuardIdentity,
     Path((raw_org_id, key_id)): Path<(String, String)>,
-    State(state): State<AppState<V>>,
+    State(state): State<AppState>,
 ) -> Response {
     if OrganizationId::new(&raw_org_id).is_err() {
         return super::not_found();
@@ -95,10 +94,10 @@ pub(crate) async fn revoke_key_handler<V: VpClient + 'static>(
 
 /// `POST /api/v1/organizations/{org_id}/keys/{key_id}/rotate` — rotate a
 /// request-signing key on the event log (`org.key_rotated`).
-pub(crate) async fn rotate_key_handler<V: VpClient + 'static>(
+pub(crate) async fn rotate_key_handler(
     ForgeGuardIdentity(identity): ForgeGuardIdentity,
     Path((raw_org_id, key_id)): Path<(String, String)>,
-    State(state): State<AppState<V>>,
+    State(state): State<AppState>,
 ) -> Response {
     if OrganizationId::new(&raw_org_id).is_err() {
         return super::not_found();

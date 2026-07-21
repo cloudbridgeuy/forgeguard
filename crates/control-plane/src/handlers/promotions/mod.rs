@@ -16,7 +16,6 @@ use crate::handlers::min_revision::{
     check_min_revision, parse_min_revision, MinRevisionCheck, MIN_REVISION_HEADER,
 };
 use crate::handlers::{actor_for, clamp_limit, AppState, DEFAULT_LIMIT, REVISION_HEADER};
-use crate::vp_client::VpClient;
 
 /// `DELETE /api/v1/organizations/{org_id}/promoted-resources/{resource_type}/{native_id}`
 ///
@@ -29,10 +28,10 @@ use crate::vp_client::VpClient;
     skip_all,
     fields(org_id = %raw_org_id, resource_type = %raw_type, native_id = %raw_native_id),
 )]
-pub(crate) async fn tombstone_promotion_handler<V: VpClient + 'static>(
+pub(crate) async fn tombstone_promotion_handler(
     ForgeGuardIdentity(identity): ForgeGuardIdentity,
     Path((raw_org_id, raw_type, raw_native_id)): Path<(String, String, String)>,
-    State(state): State<AppState<V>>,
+    State(state): State<AppState>,
 ) -> Response {
     let Ok(resource_type) = Segment::try_new(&raw_type) else {
         return (
@@ -114,11 +113,11 @@ pub(crate) struct PromotionsQuery {
 /// (404/409) -> min-revision guard (412, D5) -> `begins_with(SK, PROMO#{t}#)`
 /// page -> `200` + FGRN page + `X-Fg-Revision`.
 #[tracing::instrument(name = "list_promotions", skip_all, fields(org_id = %raw_org_id))]
-pub(crate) async fn list_promotions_handler<V: VpClient + 'static>(
+pub(crate) async fn list_promotions_handler(
     Path(raw_org_id): Path<String>,
     Query(query): Query<PromotionsQuery>,
     request_headers: HeaderMap,
-    State(state): State<AppState<V>>,
+    State(state): State<AppState>,
 ) -> Response {
     let Some(raw_type) = query.resource_type.as_deref() else {
         return (
@@ -235,8 +234,8 @@ pub(crate) async fn list_promotions_handler<V: VpClient + 'static>(
 
 /// Org existence + `Active` gate shared by both handlers. `Err` carries the
 /// ready-to-return response (404 / 409 / 500).
-async fn require_active_org<V: VpClient + 'static>(
-    state: &AppState<V>,
+async fn require_active_org(
+    state: &AppState,
     raw_org_id: &str,
     handler: &'static str,
 ) -> Result<(), Response> {
@@ -258,10 +257,7 @@ async fn require_active_org<V: VpClient + 'static>(
 }
 
 /// `204 No Content` + `X-Fg-Revision: <current>` — the idempotent-no-op arm.
-async fn current_revision_no_content<V: VpClient + 'static>(
-    state: &AppState<V>,
-    raw_org_id: &str,
-) -> Response {
+async fn current_revision_no_content(state: &AppState, raw_org_id: &str) -> Response {
     let revision = match state.model_events.latest_revision(raw_org_id).await {
         Ok(r) => r.value(),
         Err(e) => {

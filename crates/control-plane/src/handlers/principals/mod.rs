@@ -17,7 +17,6 @@ use forgeguard_core::NativeId;
 use forgeguard_core::OrgStatus;
 
 use crate::handlers::{actor_for, AppState, REVISION_HEADER};
-use crate::vp_client::VpClient;
 
 /// `PUT /api/v1/organizations/{org_id}/principals/{native_id}`
 ///
@@ -33,10 +32,10 @@ use crate::vp_client::VpClient;
     skip_all,
     fields(org_id = %raw_org_id, native_id = %raw_native_id),
 )]
-pub(crate) async fn upsert_principal<V: VpClient + 'static>(
+pub(crate) async fn upsert_principal(
     ForgeGuardIdentity(identity): ForgeGuardIdentity,
     Path((raw_org_id, raw_native_id)): Path<(String, String)>,
-    State(state): State<AppState<V>>,
+    State(state): State<AppState>,
     Json(body): Json<serde_json::Value>,
 ) -> Response {
     let Ok(native_id) = NativeId::try_new(raw_native_id) else {

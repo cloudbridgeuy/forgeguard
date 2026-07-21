@@ -10,7 +10,6 @@ use forgeguard_authz_core::Revision;
 use super::super::test_support::{
     create_org_json, empty_store, test_app, test_app_with_principals, TEST_API_KEY,
 };
-use crate::vp_client::stub::happy_stub;
 
 // ── Create tests ────────────────────────────────────────────────
 
@@ -69,7 +68,7 @@ async fn create_emits_org_created_on_cursor() {
     // against the `ModelEventStore` handle (the same seam
     // `test_app_with_principals` exposes for promotion tests) rather than
     // round-tripping through the events HTTP route.
-    let (app, model_events) = test_app_with_principals(empty_store(), happy_stub());
+    let (app, model_events) = test_app_with_principals(empty_store());
 
     let body = serde_json::to_string(&create_org_json("org-new", "New Org")).unwrap();
     let request = Request::builder()

@@ -14,7 +14,6 @@ use forgeguard_core::{OrgStatus, OrganizationId};
 
 use crate::handlers::{actor_for, not_found, revision_header_map, AppState};
 use crate::store::OrgRecord;
-use crate::vp_client::VpClient;
 
 /// A lifecycle verb driving [`OrgStatus`] through the event log.
 #[derive(Debug, Clone, Copy)]
@@ -57,11 +56,11 @@ impl LifecycleVerb {
 /// -> `valid_from` gate (409 `invalid_transition`) -> append the lifecycle
 /// event via [`crate::model_event_store::ModelEventStore::transition_org`],
 /// mapping a lost revision race to 409 `transition_conflict`.
-async fn transition_handler<V: VpClient + 'static>(
+async fn transition_handler(
     verb: LifecycleVerb,
     identity: Option<forgeguard_authn_core::Identity>,
     raw_org_id: String,
-    state: AppState<V>,
+    state: AppState,
 ) -> Response {
     let Ok(org_id) = OrganizationId::new(&raw_org_id) else {
         return not_found();
@@ -168,8 +167,8 @@ async fn transition_handler<V: VpClient + 'static>(
 
 /// Fetch the event log's current revision for `raw_org_id`, mapping a store
 /// error to a `500` response for the caller to return directly.
-async fn current_revision<V: VpClient + 'static>(
-    state: &AppState<V>,
+async fn current_revision(
+    state: &AppState,
     raw_org_id: &str,
 ) -> Result<forgeguard_authz_core::Revision, Response> {
     state
@@ -184,30 +183,30 @@ async fn current_revision<V: VpClient + 'static>(
 
 /// `POST /api/v1/organizations/{org_id}/activate` — `Draft` -> `Active`.
 #[tracing::instrument(name = "activate_org", skip_all, fields(org_id = %raw_org_id))]
-pub(crate) async fn activate_handler<V: VpClient + 'static>(
+pub(crate) async fn activate_handler(
     ForgeGuardIdentity(identity): ForgeGuardIdentity,
     Path(raw_org_id): Path<String>,
-    State(state): State<AppState<V>>,
+    State(state): State<AppState>,
 ) -> Response {
     transition_handler(LifecycleVerb::Activate, identity, raw_org_id, state).await
 }
 
 /// `POST /api/v1/organizations/{org_id}/suspend` — `Active` -> `Suspended`.
 #[tracing::instrument(name = "suspend_org", skip_all, fields(org_id = %raw_org_id))]
-pub(crate) async fn suspend_handler<V: VpClient + 'static>(
+pub(crate) async fn suspend_handler(
     ForgeGuardIdentity(identity): ForgeGuardIdentity,
     Path(raw_org_id): Path<String>,
-    State(state): State<AppState<V>>,
+    State(state): State<AppState>,
 ) -> Response {
     transition_handler(LifecycleVerb::Suspend, identity, raw_org_id, state).await
 }
 
 /// `POST /api/v1/organizations/{org_id}/restore` — `Suspended` -> `Active`.
 #[tracing::instrument(name = "restore_org", skip_all, fields(org_id = %raw_org_id))]
-pub(crate) async fn restore_handler<V: VpClient + 'static>(
+pub(crate) async fn restore_handler(
     ForgeGuardIdentity(identity): ForgeGuardIdentity,
     Path(raw_org_id): Path<String>,
-    State(state): State<AppState<V>>,
+    State(state): State<AppState>,
 ) -> Response {
     transition_handler(LifecycleVerb::Restore, identity, raw_org_id, state).await
 }

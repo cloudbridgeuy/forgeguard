@@ -30,8 +30,6 @@ use crate::membership_store::DynamoMembershipResolver;
 use crate::model_event_store::{DynamoModelEventStore, InMemoryModelEventStore, ModelEventStore};
 use crate::signing_key_store::DynamoSigningKeyStore;
 use crate::store::{self, OrgStore};
-use crate::vp_client::aws::AwsVpClient;
-use crate::vp_client::VpClient;
 
 /// Authentication configuration for the control plane.
 ///
@@ -93,9 +91,6 @@ pub async fn dynamodb_router(
         dynamo_client.clone(),
         table_name.to_string(),
     ));
-    let vp = Arc::new(AwsVpClient::new(aws_sdk_verifiedpermissions::Client::new(
-        &sdk_config,
-    )));
     let model_events: Arc<dyn ModelEventStore> = Arc::new(DynamoModelEventStore::new(
         dynamo_client.clone(),
         table_name.to_string(),
@@ -118,7 +113,6 @@ pub async fn dynamodb_router(
     Ok(build_router(
         AppState {
             store: s,
-            vp,
             model_events,
         },
         fg,
@@ -128,22 +122,14 @@ pub async fn dynamodb_router(
 /// Build a control-plane `Router` backed by an in-memory JSON config file.
 ///
 /// Loads organizations from the JSON file at `config_path`. Used by the
-/// standalone binary with `--store=memory`. Async because the V3 Active-org
-/// path needs an `AwsVpClient`, whose SDK config load is async; in dev mode
-/// the client is built but only invoked when an org's status flips to
-/// `Active`, so missing AWS credentials don't crash the dev workflow.
+/// standalone binary with `--store=memory`. Kept `async` for signature
+/// stability with callers even though it currently awaits nothing.
 pub async fn memory_router(
     config_path: &Path,
     auth: Option<&AuthConfig>,
 ) -> color_eyre::Result<Router> {
     let inner = store::load_config_file(config_path)?;
     let s: Arc<dyn OrgStore> = Arc::new(inner);
-    let sdk_config = aws_config::defaults(aws_config::BehaviorVersion::latest())
-        .load()
-        .await;
-    let vp = Arc::new(AwsVpClient::new(aws_sdk_verifiedpermissions::Client::new(
-        &sdk_config,
-    )));
     let model_events: Arc<dyn ModelEventStore> =
         Arc::new(InMemoryModelEventStore::new_with_org_store(Arc::clone(&s)));
     // Ed25519 resolver requires DynamoDB for key lookup; memory mode has no DynamoDB client.
@@ -151,7 +137,6 @@ pub async fn memory_router(
     Ok(build_router(
         AppState {
             store: s,
-            vp,
             model_events,
         },
         fg,
@@ -455,7 +440,7 @@ fn build_forgeguard(
     Ok(Arc::new(ForgeGuard::new(pipeline_config, chain, engine)))
 }
 
-fn build_router<V: VpClient + 'static>(state: AppState<V>, fg: Arc<ForgeGuard>) -> Router {
+fn build_router(state: AppState, fg: Arc<ForgeGuard>) -> Router {
     use crate::handlers;
 
     Router::new()
@@ -463,11 +448,11 @@ fn build_router<V: VpClient + 'static>(state: AppState<V>, fg: Arc<ForgeGuard>) 
         .route("/metrics", get(handlers::metrics_handler))
         .route(
             "/api/v1/organizations",
-            post(handlers::create_handler::<V>).get(handlers::list_handler),
+            post(handlers::create_handler).get(handlers::list_handler),
         )
         .route(
             "/api/v1/organizations/{org_id}",
-            get(handlers::get_handler).put(handlers::update_handler::<V>),
+            get(handlers::get_handler).put(handlers::update_handler),
         )
         .route(
             "/api/v1/organizations/{org_id}/proxy-config",
@@ -475,57 +460,57 @@ fn build_router<V: VpClient + 'static>(state: AppState<V>, fg: Arc<ForgeGuard>) 
         )
         .route(
             "/api/v1/organizations/{org_id}/keys",
-            post(handlers::generate_key_handler::<V>).get(handlers::list_keys_handler),
+            post(handlers::generate_key_handler).get(handlers::list_keys_handler),
         )
         .route(
             "/api/v1/organizations/{org_id}/keys/{key_id}",
-            axum::routing::delete(handlers::revoke_key_handler::<V>),
+            axum::routing::delete(handlers::revoke_key_handler),
         )
         .route(
             "/api/v1/organizations/{org_id}/keys/{key_id}/rotate",
-            axum::routing::post(handlers::rotate_key_handler::<V>),
+            axum::routing::post(handlers::rotate_key_handler),
         )
         .route(
             "/api/v1/organizations/{org_id}/groups",
-            post(handlers::groups::create_handler::<V>).get(handlers::groups::list_handler),
+            post(handlers::groups::create_handler).get(handlers::groups::list_handler),
         )
         .route(
             "/api/v1/organizations/{org_id}/groups/{name}",
             get(handlers::groups::get_handler)
-                .put(handlers::groups::update_handler::<V>)
-                .delete(handlers::groups::delete_handler::<V>),
+                .put(handlers::groups::update_handler)
+                .delete(handlers::groups::delete_handler),
         )
         .route(
             "/api/v1/organizations/{org_id}/principals/{native_id}",
-            axum::routing::put(handlers::principals::upsert_principal::<V>),
+            axum::routing::put(handlers::principals::upsert_principal),
         )
         .route(
             "/api/v1/organizations/{org_id}/events",
-            axum::routing::get(handlers::events::list_events_handler::<V>),
+            axum::routing::get(handlers::events::list_events_handler),
         )
         .route(
             "/api/v1/organizations/{org_id}/promoted-resources/{resource_type}/{native_id}",
-            axum::routing::delete(handlers::promotions::tombstone_promotion_handler::<V>),
+            axum::routing::delete(handlers::promotions::tombstone_promotion_handler),
         )
         .route(
             "/api/v1/organizations/{org_id}/promoted-resources",
-            axum::routing::get(handlers::promotions::list_promotions_handler::<V>),
+            axum::routing::get(handlers::promotions::list_promotions_handler),
         )
         .route(
             "/api/v1/organizations/{org_id}/signing-keys",
-            axum::routing::get(handlers::signing_keys::list_signing_keys_handler::<V>),
+            axum::routing::get(handlers::signing_keys::list_signing_keys_handler),
         )
         .route(
             "/api/v1/organizations/{org_id}/activate",
-            axum::routing::post(handlers::lifecycle::activate_handler::<V>),
+            axum::routing::post(handlers::lifecycle::activate_handler),
         )
         .route(
             "/api/v1/organizations/{org_id}/suspend",
-            axum::routing::post(handlers::lifecycle::suspend_handler::<V>),
+            axum::routing::post(handlers::lifecycle::suspend_handler),
         )
         .route(
             "/api/v1/organizations/{org_id}/restore",
-            axum::routing::post(handlers::lifecycle::restore_handler::<V>),
+            axum::routing::post(handlers::lifecycle::restore_handler),
         )
         .with_state(state)
         .layer(axum::middleware::from_fn_with_state(fg, forgeguard_layer))

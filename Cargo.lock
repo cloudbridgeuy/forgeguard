@@ -1981,7 +1981,6 @@ dependencies = [
  "aws-config",
  "aws-sdk-cognitoidentityprovider",
  "aws-sdk-dynamodb",
- "aws-sdk-verifiedpermissions",
  "axum",
  "base64",
  "chrono",
