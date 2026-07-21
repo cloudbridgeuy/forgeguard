@@ -55,7 +55,7 @@ The measured cedar-policy spike (seven conformance assertions S1–S5, toolchain
 | [Request Signing](./.claude/context/request-signing.md) | Ed25519 signing: canonical payload, config, key rotation, and crate layout. |
 | [Demo App](./.claude/context/demo-app.md) | E2E demo: Python TODO app, native proxy, demo config, and running instructions. |
 | [Control Plane](./.claude/context/control-plane.md) | CP scaffold, proxy-config endpoint, OrgStore trait, auth, VP authorization, ETag, draft/configured lifecycle, event append spine, promotion lifecycle (tombstone + reconciliation), time-travel fold (revision-pinned historical reads), and testing. |
-| [Groups V3/V4](./.claude/context/groups-v3.md) | Active-org VP materialization: `vp_client` module, `OrgWriteContext`/`VpStage` ADTs, push-then-append write ordering (#113 V4), F-VP/F-VP-mid/F-append failure-mode taxonomy, rollback metric, and test scaffolding. |
+| [Groups V3/V4](./.claude/context/groups-v3.md) | Groups CRUD, event-sourced (#117 V2): pure event-sourced append for every org status, `X-Fg-If-Revision`/412 precondition, no-op detection; also documents the retired V3/V4 VP push-then-append pipeline for historical reference. |
 | [Infra: Control Plane](./.claude/context/infra-control-plane.md) | CDK project, 1Password integration, DynamoDB Global Table, and xtask infra commands. |
 | [AWS ARN Formats](./.claude/context/aws-arn-formats.md) | Per-service ARN gotchas and the rule to prefer CDK CFN attribute getters. |
 | [Cluster Mode](./.claude/context/cluster.md) | TieredCache, Redis wiring, config, health stats, and future slices. |

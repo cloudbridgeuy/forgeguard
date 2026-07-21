@@ -20,6 +20,16 @@ Acceptance is "all four `seed_*` integration tests pass" — `seed_happy_path_wr
 
 **Why:** the teardown filter at `xtask/src/control_plane/seed/teardown.rs:157` (`PolicyType::TemplateLinked → continue`) protects template-linked policies from the `cp-rbac-*` description sweep. This procedure validates the filter end-to-end against a real VP store.
 
+**Status after #117 V2:** the control plane no longer pushes any policies to
+VP on live group writes — group `PUT`/`POST`/`DELETE` is a pure
+event-sourced append for every org status now, with zero VP calls. This
+fixture originally simulated a policy that could collide with what a live
+group write pushed; since nothing pushes fresh `cp-rbac-*` policies from
+group writes any more, this scenario now only covers survival of
+**legacy/leftover V0-seed** policies against the teardown sweep, not
+anything the CP produces today. The fixture is a candidate for deletion in a
+future V3 (issue #117) slice once the CDK-side VP write IAM is also removed.
+
 **Blast radius:** the seed command runs against the prod VP store + prod DynamoDB + prod Cognito. This is the canonical dev workflow per `CLAUDE.md` ("only `prod` exists"), but every invocation rewrites the prod seed orgs. Run only when you intend to refresh the seed state.
 
 ### 1. Resolve the prod policy store

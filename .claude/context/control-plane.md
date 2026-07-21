@@ -488,20 +488,18 @@ Response (201, `x-fg-revision` header also set): same shape as Generate Key.
 - CORS middleware (no browser clients -- deferred to #40 dashboard)
 - Hot-reload of config file
 
-## Groups CRUD (#102 V2/V3, #113 V4)
+## Groups CRUD (#117 V2 — event-sourced append)
 
 Endpoints under `/api/v1/organizations/{org_id}/groups[/{name}]`. Group writes
-are event-sourced (`ModelEventStore::{put_group,delete_group}`, #113 V4) —
-`X-Fg-If-Revision` is optional on PUT/DELETE (a stale value returns `412` with
-the current revision; omitting it skips the check), replacing the old
-mandatory ETag/`If-Match` model. DELETE pre-checks for both live memberships
+are a pure event-sourced append (`ModelEventStore::{put_group,delete_group}`)
+for every org status — Draft and Active behave identically. `X-Fg-If-Revision`
+is optional on PUT/DELETE (a stale value returns `412` with the current
+revision; omitting it skips the check), replacing the old mandatory
+ETag/`If-Match` model. DELETE pre-checks for both live memberships
 (`count_memberships_for_group`) and inheriting groups (`list_inheritors`);
-either non-empty set blocks deletion. On Active orgs, the write pushes
-compiled Cedar policies to Verified Permissions **first**, then appends the
-event only once the VP push succeeds (push-then-append, D6) — see
-[groups-v3.md](./groups-v3.md) for the full write pipeline and the
-F-VP/F-VP-mid/F-append failure-mode taxonomy that supersedes the old
-F3/F3'/F4 model.
+either non-empty set blocks deletion. There is no Verified Permissions push on
+this path — see [groups-v3.md](./groups-v3.md) for the historical V3/V4
+push-then-append pipeline that #117 V2 retired.
 
 ## Event Append Spine (V1)
 
@@ -597,6 +595,6 @@ Revision-pinned historical reads: reconstruct an org's entity state as of any pa
 
 Pre-V5 events (appended before the identity wrapper existed) are permanently unfoldable — no backfill/migration is planned; dev logs are ephemeral and the prod log holds only QA events at this point.
 
-## V3 of #102 — Active-org VP materialization
+## V3 of #102 — Active-org VP materialization (retired, #117 V2)
 
-V3 replaces the V2 `todo!("V3")` Active branch with a real DDB + Verified Permissions write pipeline (pure pre-flight → DDB write → parent VP push → alphabetical fanout) under `crates/control-plane/src/{vp_client,handlers/groups}/`. Failure-mode taxonomy (F3 / F3' / F4), rollback metric, test scaffolding, and Risk #5 boundary live in [groups-v3.md](./groups-v3.md). The Active path runs end-to-end against `StubVpClient` today.
+V3 originally replaced the V2 `todo!("V3")` Active branch with a real DDB + Verified Permissions write pipeline (pure pre-flight → DDB write → parent VP push → alphabetical fanout) under `crates/control-plane/src/{vp_client,handlers/groups}/`. #117 V2 deleted this entirely — `vp_client` and its DDB+VP write pipeline no longer exist; group writes are a pure event append (see Groups CRUD above). Historical failure-mode taxonomy (F3 / F3' / F4) and test scaffolding are documented in [groups-v3.md](./groups-v3.md) for archaeology only.

@@ -1,29 +1,93 @@
-# Groups V3/V4 — Active-org VP Materialization
+# Groups CRUD (event-sourced)
 
-V3 extended the V2 Groups CRUD (DDB-only, Draft orgs) with the distributed-write
-path that materialises compiled Cedar permits into each Active org's Verified
-Permissions (VP) policy store on every CREATE/UPDATE/DELETE. The handler shape
-stayed the same; the V2 `todo!("V3")` Active branches became real.
+> **VP push retired in #117 V2.** This doc previously described V3/V4
+> (issue #102 / #113) Active-org Verified Permissions (VP) materialization on
+> group writes — a distributed push-then-append pipeline with its own
+> failure-mode taxonomy and rollback metric. Issue #117 V2 deleted that
+> pipeline entirely: `VpClient`, `AwsVpClient`, `StubVpClient`, the
+> `aws-sdk-verifiedpermissions` dependency, `OrgWriteContext`/`VpContext`, and
+> the `ActiveWithoutVpStore` (D11) invariant are all gone from
+> `crates/control-plane`. Group `PUT`/`POST`/`DELETE` is now a **pure
+> event-sourced append for every org status** (Draft or Active) — there is no
+> VP call on the write path at all. `vp_store_id` still exists on `OrgConfig`
+> as inert metadata (unrelated to CP's own self-authz; it still matters to the
+> proxy's tenant policy delivery), but the control plane no longer reads it to
+> branch group-write behavior. The historical VP-push material below
+> (`VP Client`, `[name]` description-prefix encoding, policy naming) is kept
+> for archaeological reference — it still describes `xtask cedar sync`, which
+> is unaffected by this change — but no longer describes anything the CP
+> runtime does on a group write.
 
-**Superseded by #113 V4 (issue #113, "Groups — Push-Then-Append"):** group
-writes are event-sourced (`ModelEventStore::{put_group,delete_group}`) instead
-of `OrgStore::{put_group,delete_group}`, revision tokens (`X-Fg-If-Revision`)
-replace ETag/`If-Match` on group `PUT`/`DELETE`, and the write ordering is
-**inverted** — VP push now happens first, the event-sourced append second.
-The F3/F3'/F4 failure-mode taxonomy below is superseded by F-VP / F-VP-mid /
-F-append (see _Failure Mode Taxonomy_). Sections describing the VP client,
-policy naming, and the `[name]` description-prefix encoding are unaffected by
-V4 and remain accurate.
+## Write Pipeline (event-sourced append, current)
+
+Every group `PUT`/`POST`/`DELETE`, regardless of org status, goes straight to
+the event-sourced append:
+
+```
+pure pre-flight (parse + validate + D6 no-op check)
+    └─> event-sourced append (ModelEventStore::put_group / delete_group)
+```
+
+- **`X-Fg-If-Revision` / 412 `revision_mismatch` (D5).** Unchanged. Callers
+  send the last-seen revision in `X-Fg-If-Revision`; a stale value yields
+  `412` with the standard `{"error":"revision_mismatch",...}` body. Successful
+  writes echo the new revision in `X-Fg-Revision`.
+- **No-op detection (D6).** Unchanged. If the incoming entry is identical
+  (JSON-equality) to the current one, no append happens at all — the handler
+  short-circuits to `GroupWriteOutcome::NoOp`.
+- **No VP push, no Active-org branch.** The V3/V4 `OrgWriteContext::{Draft,Active}`
+  split, the `ActiveWithoutVpStore` 503 invariant, and the F-VP / F-VP-mid /
+  F-append failure-mode taxonomy described further below **no longer exist**.
+  Draft and Active orgs go through the exact same append path.
+- **No rollback metric.** `forgeguard_cp_group_rollback_failed_total` is
+  deleted — there is nothing to roll back since there is no cross-store
+  (DDB + VP) write to compensate.
+
+## API Wire Format
+
+The following sections describe the request/response wire format, which is
+**unaffected** by the #117 V2 change.
+
+### `X-Fg-If-Revision` / `X-Fg-Revision`
+
+Group `PUT`/`DELETE` use revision tokens instead of ETag/`If-Match`:
+
+- Request: `X-Fg-If-Revision: <revision>` — the client's last-seen revision.
+- Success response: `X-Fg-Revision: <new-revision>`.
+- Stale revision: `412` with `{"error":"revision_mismatch",...}`.
+
+### Colon-form actions
+
+Group action ids use the colon-form (`cp:groups:read`, etc.) shared with the
+embedded `cp:*` Cedar engine — see [control-plane.md](./control-plane.md) for
+the full action catalog.
+
+---
+
+## Historical: V3/V4 VP Push Pipeline (retired in #117 V2)
+
+The rest of this document describes the **retired** VP-materialization
+pipeline for historical/archaeological reference. None of it reflects current
+CP runtime behavior — every group write is a pure event-sourced append (see
+above).
+
+V3 (issue #102) extended the V2 Groups CRUD (DDB-only, Draft orgs) with a
+distributed-write path that materialised compiled Cedar permits into each
+Active org's Verified Permissions (VP) policy store on every CREATE/UPDATE/DELETE.
+V4 (issue #113, "Groups — Push-Then-Append") inverted the ordering so the VP
+push happened **first** and the event-sourced append second; if the append
+then failed, the shell compensated by reverting the VP push.
 
 > Implementation plan: `.claude/designs/issue-102-v3-implementation-plan.md`
 > (local-only). Manual QA plan: `.claude/plans/issue-102-v3-implementation-plan-qa.md`
 > (local-only). Both are gitignored — see [CONTEXT.md § Local-Only Documents](../../CONTEXT.md).
 > V4 plan: `.claude/plans/2026-07-17-issue-113-v4-groups-push-then-append-plan.md`.
 
-## Active-org Boundary
+### Active-org Boundary (historical)
 
 Group writes split on `OrgWriteContext`, parsed once at the handler boundary
-from the loaded `OrgRecord` (`crates/control-plane/src/handlers/groups/active_pure.rs`):
+from the loaded `OrgRecord` (`crates/control-plane/src/handlers/groups/active_pure.rs`,
+now deleted):
 
 ```rust
 pub(crate) enum OrgWriteContext {
@@ -32,22 +96,19 @@ pub(crate) enum OrgWriteContext {
 }
 ```
 
-`VpContext { store_id, namespace, tenant }` is the closed set of inputs the
-Active path needs. `OrgWriteContext::from_record` is the only constructor:
+`VpContext { store_id, namespace, tenant }` was the closed set of inputs the
+Active path needed. `OrgWriteContext::from_record` was the only constructor:
 
 - `OrgStatus::Active` + `cfg.vp_store_id == Some(_)` → `Active(VpContext)`
 - `OrgStatus::Active` + `vp_store_id == None` → `ActiveStateError::ActiveWithoutVpStore`
   (Risk #5 — an Active org must carry a `vp_store_id`; see _Boundary cases_ below)
 - Anything else → `Draft`
 
-The orchestrator never re-checks `Option<vp_store_id>` — make-impossible-states-impossible
-done at the handler edge.
+### Write Pipeline (historical — V4 push-then-append, D6)
 
-## Write Pipeline (V4 — push-then-append, D6)
-
-For each handler the shape is now **inverted** from V3: the VP push happens
+For each handler the shape was inverted from V3: the VP push happened
 first, and the event-sourced append (`ModelEventStore::{put_group,delete_group}`)
-happens only after the push succeeds.
+happened only after the push succeeded.
 
 ```
 pure pre-flight (parse + compile)
@@ -57,25 +118,27 @@ pure pre-flight (parse + compile)
                     └─> event-sourced append (ModelEventStore::put_group / delete_group)
 ```
 
-The fanout walks transitive inheritors of the parent (computed by
-`compute_dependents_in_order`) and re-emits a compiled permit for each one.
-Dependent ordering is **globally alphabetical** so F-VP-mid reproductions land
-on the same boundary every run.
+The fanout walked transitive inheritors of the parent (computed by
+`compute_dependents_in_order`). Dependent ordering was globally alphabetical
+so F-VP-mid reproductions landed on the same boundary every run.
 
-Rationale for the inversion: VP is the harder side to compensate (no atomic
-transaction across DDB and VP), so the shell pushes to VP first — if that
-fails, nothing has been written anywhere and there is nothing to roll back.
-Only once VP reflects the new state does the shell attempt the event append;
-if *that* fails, the shell compensates by reverting the VP push it just made
+Rationale for the inversion: VP was the harder side to compensate (no atomic
+transaction across DDB and VP), so the shell pushed to VP first — if that
+failed, nothing was written anywhere and there was nothing to roll back. Only
+once VP reflected the new state did the shell attempt the event append; if
+*that* failed, the shell compensated by reverting the VP push it just made
 (see _Failure Mode Taxonomy_, F-append).
 
-Group writes on Draft orgs skip the VP push entirely (`OrgWriteContext::Draft`)
-and go straight to the event-sourced append — there's no VP store to push to
-before an org is Active.
+Group writes on Draft orgs skipped the VP push entirely (`OrgWriteContext::Draft`)
+and went straight to the event-sourced append.
 
-## VP Client
+### VP Client (historical, deleted in #117 V2)
 
-`crates/control-plane/src/vp_client/` is the only module that talks to VP.
+`crates/control-plane/src/vp_client/` was the only module that talked to VP.
+It has been deleted entirely, along with the `aws-sdk-verifiedpermissions`
+dependency. (`xtask cedar sync` retains its own, separate VP client — see
+`xtask/src/control_plane/cedar_io.rs` — that tool is unaffected by this
+change.)
 
 | File | Role |
 |------|------|
@@ -83,8 +146,8 @@ before an org is Active.
 | `aws.rs` | `AwsVpClient` — production impl wrapping `aws_sdk_verifiedpermissions::Client`. |
 | `stub.rs` | `StubVpClient` — in-process test impl with failure-injection knobs. Gated `cfg(any(test, feature = "test-support"))`. |
 
-The trait surface is intentionally small — three async methods returning
-`impl Future + Send` so axum handler futures stay `Send`:
+The trait surface was intentionally small — three async methods returning
+`impl Future + Send` so axum handler futures stayed `Send`:
 
 ```rust
 pub(crate) trait VpClient: Send + Sync {
@@ -100,44 +163,40 @@ pub(crate) trait VpClient: Send + Sync {
 }
 ```
 
-`delete_policy_by_name` is internally `list_policy_ids` then `delete`, so it's
-non-atomic — callers must treat `Error::NotFound` as "no policy with that name
-right now," not "the delete itself failed."
+`delete_policy_by_name` was internally `list_policy_ids` then `delete`, so it
+was non-atomic — callers had to treat `Error::NotFound` as "no policy with
+that name right now," not "the delete itself failed."
 
-### `[name]` Description-Prefix Encoding
+#### `[name]` Description-Prefix Encoding (still live in `xtask cedar sync`)
 
 VP rejects a `name` field on `CreatePolicy` (`ValidationException: Invalid input`).
 The workaround — encoding the resource name as a `[name]` prefix in the
-`description` field — is **shared between two callers**:
+`description` field — was **shared between two callers** while the CP's own
+VP client existed:
 
-1. `xtask cedar sync` (`xtask/src/control_plane/cedar_io.rs`)
-2. The control-plane runtime (`crates/control-plane/src/vp_client/mod.rs`)
+1. `xtask cedar sync` (`xtask/src/control_plane/cedar_io.rs`) — **still uses this.**
+2. The control-plane runtime (`crates/control-plane/src/vp_client/mod.rs`) — **deleted.**
 
-Both produce byte-identical output via `encode_name_in_description`/
-`decode_name_from_description` in `vp_client/mod.rs`. Policies created by
-either tool round-trip cleanly through the other. See
-[verified-permissions.md § VP API Quirks](./verified-permissions.md#vp-api-quirks)
-for the original quirk.
+See [verified-permissions.md § VP API Quirks](./verified-permissions.md#vp-api-quirks)
+for the original quirk; the encoder/decoder now lives solely in
+`xtask/src/control_plane/cedar_io.rs`.
 
-### Policy Naming
+#### Policy Naming (historical, `xtask cedar sync` still uses this convention)
 
-Group `name` → VP policy name via `policy_name_for_group` in `active_pure.rs`:
+Group `name` → VP policy name via `policy_name_for_group`, formerly in
+`active_pure.rs` (deleted), now only relevant to `xtask cedar sync`:
 
 ```
 admin   →  cp-rbac-admin
 member  →  cp-rbac-member
 ```
 
-This mapping is canonical and shared with `xtask cedar sync` so policies
-materialised by either tool collide deterministically.
+### Failure Mode Taxonomy (historical — deleted in #117 V2)
 
-## Failure Mode Taxonomy (V4 — supersedes F3/F3'/F4)
-
-Push-then-append inverts which side needs compensation. Under V3, DDB was
-written first and a failed VP push meant rolling back DDB. Under V4, VP is
-pushed first — a failed VP push leaves nothing written anywhere, and a failed
-*append* (after a successful VP push) means compensating VP instead of DDB.
-The three failure classes have distinct status codes and body shapes:
+Push-then-append inverted which side needed compensation. Under V3, DDB was
+written first and a failed VP push meant rolling back DDB. Under V4, VP was
+pushed first — a failed VP push left nothing written anywhere, and a failed
+*append* (after a successful VP push) meant compensating VP instead of DDB.
 
 | Mode | Trigger | Status | Compensation | Body |
 |------|---------|--------|--------------|------|
@@ -146,86 +205,61 @@ The three failure classes have distinct status codes and body shapes:
 | **F-append** | VP push (parent + fanout) succeeded, but the event-sourced append failed | `412` (revision mismatch) or `500` (other append error) | Revert the VP push just made (`resolve_append_compensation` in `active.rs`) | `412`: same shape as any revision-mismatch response (`{"error":"revision_mismatch",...}`). `500`: `{"error":"internal"}` |
 | **F-append, compensation also fails** | F-append trigger AND the VP-reverting compensation also fails | `500` | n/a — VP and the event log have diverged | `{"error":"inconsistent_state","vp_committed":true,"append_committed":false}` |
 
-`resolve_append_compensation` (`active.rs`) special-cases the append error:
-a `RevisionMismatch` from the append attempt, once compensation succeeds,
-surfaces as `412` (the client's stale-revision request bounced cleanly, with
-VP already reverted) — not the generic `500`. Any other append error still
-maps to `500 Internal` after successful compensation. Compensation *failure*
-always maps to `500 InconsistentState` regardless of the underlying append
-error, since at that point VP and the event log genuinely disagree.
+None of these failure modes exist any more — there is only one write target
+(the event log), so there is nothing left to reconcile between two stores.
 
-### Boundary cases
+#### Boundary cases (historical)
 
-- **Active-without-vp_store_id** (Risk #5, carried from V3). An Active org
-  with `vp_store_id == None` violates the invariant that Active orgs carry a
-  `vp_store_id`. The handler
-  surfaces the same `503 vp_push_failed{stage="parent"}` shape as F-VP, with
-  `failed` set to the canonical policy name the request would have written.
-  Nothing is written, so no compensation is needed.
+- **Active-without-vp_store_id** (Risk #5, carried from V3, deleted in
+  #117 V2). An Active org with `vp_store_id == None` used to violate the
+  invariant that Active orgs carry a `vp_store_id`; the handler surfaced a
+  `503 vp_push_failed{stage="parent"}`. This check (`ActiveWithoutVpStore`,
+  D11) no longer exists — `vp_store_id` is inert metadata and is never
+  consulted on the group-write path.
 - **Idempotent DELETE on Active**. `DELETE` on a missing group still returns
-  `404`/absent-noop semantics — the VP push only runs after the pre-flight
-  read confirms the group exists.
+  `404`/absent-noop semantics — unchanged.
 - **D6 no-op rule**. If the incoming entry is identical (JSON-equality) to
-  the current one, no VP push and no append happen at all — the handler
-  short-circuits to `GroupWriteOutcome::NoOp` before either side is touched.
+  the current one, no append happens at all — unchanged, still current
+  behavior.
 
-## Metrics
+### Metrics (historical, deleted in #117 V2)
 
 | Metric | Labels | Bumped on |
 |--------|--------|-----------|
-| `forgeguard_cp_group_rollback_failed_total` | `stage="parent"\|"fanout"` | F-append's compensation failing (VP-revert fails after a failed append). Each increment means **VP and the event log are inconsistent** — alert and reconcile. |
+| `forgeguard_cp_group_rollback_failed_total` | `stage="parent"\|"fanout"` | (retired) F-append's compensation failing (VP-revert fails after a failed append). |
 
-Note the metric's meaning changed under V4: under V3 it counted failed DDB
-rollbacks after a failed VP push; under V4 it counts failed VP-revert
-compensations after a failed event append — the compensation direction
-reversed along with the write ordering, but the metric name and alert
-semantics ("something failed to roll back cleanly") stayed the same.
-`stage="fanout"` remains reserved for forward compatibility. The
-`update_org` and group-write tracing spans also record `rollback_stage` so
-per-request attribution is available without exploding cardinality.
+This metric and its `rollback_stage` tracing-span attribute are gone from
+`crates/control-plane`. There is no successor metric — pure event-sourced
+appends either succeed or fail cleanly (`412`/`500`), with nothing to
+compensate.
 
-Recommended alert: `rate(forgeguard_cp_group_rollback_failed_total[5m]) > 0`.
+### Test Scaffolding (historical, deleted in #117 V2)
 
-## Test Scaffolding
+The Active-branch test fixtures below (`active_org_store` VP variants,
+`FailingStore`, `metric_lock`, `StubVpClient` failure knobs) were deleted
+along with the VP push pipeline. Group-write tests now exercise the single
+event-sourced append path directly.
 
-Active-branch tests live under
-`crates/control-plane/src/handlers/tests/groups_active_*.rs` and share fixtures
-from `tests/active_support.rs`:
-
-- **`active_org_store(org_id, vp_store_id)`** — seeds an `InMemoryOrgStore`
+- **`active_org_store(org_id, vp_store_id)`** — seeded an `InMemoryOrgStore`
   with one Active org carrying a populated `vp_store_id`.
 - **`test_app_for_store<S>`** — generic counterpart to `test_app_with_stub`,
-  parameterised over the store impl so failure-mode tests can plug in
-  `FailingStore<InMemoryOrgStore>`. Mounts **only** the group routes (the only
-  ones the Active-branch tests need).
+  parameterised over the store impl so failure-mode tests could plug in
+  `FailingStore<InMemoryOrgStore>`.
 - **`FailingStore<S>`** — delegating wrapper with one-shot `AtomicBool`
-  knobs `fail_next_delete_group` / `fail_next_put_group`. The first matching
-  call after arming returns `Error::Store`; the flag is cleared via
-  `swap(false, SeqCst)` so subsequent calls pass through.
+  knobs `fail_next_delete_group` / `fail_next_put_group`.
 - **`metric_lock()`** — process-wide async lock guarding tests that read
-  `GROUP_ROLLBACK_FAILED_TOTAL` deltas. The Prometheus counter is
-  process-global and `cargo test` runs in parallel, so concurrent
-  F-VP/F-VP-mid/F-append tests would race on `counter_after - counter_before`
-  without it. Uses
-  `tokio::sync::Mutex` (not `std::sync::Mutex`) because the guard must cross
-  `await` points — `clippy::await_holding_lock` would otherwise reject it.
+  `GROUP_ROLLBACK_FAILED_TOTAL` deltas.
 
-### `StubVpClient` failure knobs
+#### `StubVpClient` failure knobs (historical)
 
 | Knob | Semantics |
 |------|-----------|
 | `fail_on_create(name)` | First `create_policy` call with this exact name returns `Error::Other`. One-shot. |
 | `fail_on_delete(name)` | First `delete_policy_by_name` call with this exact name returns `Error::Other`. One-shot. |
-| `fail_after_n_creates(n)` | Trips on the `(n+1)`-th successful create. **Counts absolute successful creates from the stub's lifetime, not from the moment the knob is armed** — UPDATE/DELETE tests that replay seed creates against a fresh stub must include the seed-replay count in `n`. |
+| `fail_after_n_creates(n)` | Trips on the `(n+1)`-th successful create. |
 
-Example: an UPDATE test that seeds 4 groups via `create_group(...)` (which
-each go through one `create_policy` call) and then wants the editor's fanout
-to fail on the 3rd handler-driven create must arm `fail_after_n_creates(4 + 2)`
-— 4 seed creates already burnt `creates_so_far` to 4, the parent push burns
-the 5th, the first dependent burns the 6th, and the 7th fails.
+### Follow-ups (historical, moot)
 
-## Follow-ups
-
-Automated reconciliation for F-append's compensation-failure case is a
-follow-up concern (the alert points operators at it; nothing automated runs
-yet).
+Automated reconciliation for F-append's compensation-failure case was a
+follow-up concern before #117 V2 deleted the pipeline it would have applied
+to.

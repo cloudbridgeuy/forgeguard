@@ -129,7 +129,7 @@ The control-plane Lambda's startup behavior depends on a coupled env-var-plus-IA
 | --------- | -------- | --- |
 | `dynamodb:*` (read+write) | `TABLE_NAME` ARN | `table.grantReadWriteData(controlPlane)` |
 | `verifiedpermissions:IsAuthorized` | Policy store ARN (`policyStoreArn`) | CP authorization decisions; scoped — never `*` |
-| `verifiedpermissions:{CreatePolicy,DeletePolicy,ListPolicies,GetPolicy}` | `*` (unavoidable) | V3 Active-org group writes materialise Cedar permits into each org's **dedicated** VP store; per-org store ARNs are created at runtime and are unknowable to CDK, so these write actions cannot be ARN-scoped |
+| `verifiedpermissions:{CreatePolicy,DeletePolicy,ListPolicies,GetPolicy}` | `*` (unavoidable) | **Dead weight after #117 V2.** Historically backed V3 Active-org group writes, which materialised Cedar permits into each org's **dedicated** VP store (per-org store ARNs are created at runtime and are unknowable to CDK, so these write actions could not be ARN-scoped). Since #117 V2, group writes are pure event-sourced appends and never call VP — this grant is unused by the binary and slated for deletion in a future V3 (issue #117) CDK slice. |
 
 `IsAuthorizedWithToken` is **not** granted because the CP parses JWTs itself and submits a fully-formed `IsAuthorized` request. If a future slice adopts token-mode VP calls, expand the action list there.
 
