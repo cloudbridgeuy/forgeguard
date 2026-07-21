@@ -110,7 +110,7 @@ The CP ships three RBAC roles plus a single machine permit. Each human role maps
 | `admin` | `member` | org create/update, member invite/remove/change-role, `cp-config-write`, key generate/revoke/rotate, `cp-group-create`, `cp-group-update`, `cp-group-delete` |
 | `owner` | `admin` | `cp-member-promote-owner` |
 
-Canonical source: the `[[policies]]` `allow` arrays in `forgeguard.toml` at the workspace root. Sync them to the CP-dogfood VP store with `cargo xtask control-plane cedar sync --config forgeguard.toml`.
+Canonical source: the `[[policies]]` `allow` arrays in `forgeguard.toml` at the workspace root. Since #117 V1, this same file is compiled to Cedar policy text at control-plane build time (`forgeguard_authz_core::compile_cp_model`, invoked from `crates/control-plane/build.rs`) and embedded into the `CpCedarEngine` that decides every `cp:*` request in-process — no VP call on the request path. `cargo xtask control-plane cedar sync --config forgeguard.toml` still pushes the same model to the CP-dogfood VP store, but that store no longer backs live `cp:*` decisions; full retirement of the VP-backed path is targeted for V3 of issue #117.
 
 The compiler emits one `permit(principal in forgeguard::Group::"<role>", ...)` per role with `when { principal.org_id == resource.org_id }` auto-appended for tenant scoping. No per-user VP instantiation runs at invitation time — group membership alone grants the permit.
 

@@ -253,9 +253,9 @@ BYOC Proxy                              Control Plane
 
 **Wiring in `app.rs`:** `dynamodb_router()` creates a `DynamoSigningKeyStore` (backed by the same DynamoDB table), wraps it in `Ed25519SignatureResolver`, and appends it to the `IdentityChain` after `CognitoJwtResolver`. Memory mode never gets the Ed25519 resolver.
 
-**VP Authorization (V4):** When auth is enabled and a VP client is available (`--store=dynamodb` + `--jwks-url` + `--policy-store-id`), the policy engine is `VpPolicyEngine`. The Cedar project namespace is `forgeguard` (from `ProjectId::new("forgeguard")`). The tenant is read per request from `PolicyContext::tenant_id()` — populated from the `X-ForgeGuard-Org-Id` header during pipeline Phase 5b (membership enrichment) — so the engine is no longer bound to a static tenant at construction time. `DefaultPolicy::Deny` is used — unmatched routes are denied. See the Authorization section below for the route-to-action mapping and PrincipalKind routing.
+**Embedded CP Authorization (#117 V1):** `cp:*` authorization decisions run in-process on an embedded Cedar engine — zero AWS Verified Permissions calls on the request path. `crates/control-plane/build.rs` compiles the repo-root `forgeguard.toml` (`[schema]`/`[tenant]`/`[[policies]]`) into Cedar policy text at build time via `forgeguard_authz_core::compile_cp_model` (a trimmed port of the xtask `cedar_core` compiler); a bad model fails the build. The compiled text is embedded via `include_str!(concat!(env!("OUT_DIR"), "/cp_policies.cedar"))` and parsed into a `Snapshot` at startup in `build_forgeguard`. When auth is enabled, the policy engine is `CpCedarEngine` (`forgeguard_authz_core`), which builds Cedar entities/requests per query (a local port of `crates/authz/src/translate.rs`'s VP entity shapes) and evaluates with `cedar_policy::Authorizer` against the embedded snapshot. The Cedar project namespace is `forgeguard` (from `ProjectId::new("forgeguard")`). The tenant is read per request from `PolicyContext::tenant_id()` — populated from the `X-ForgeGuard-Org-Id` header during pipeline Phase 5b (membership enrichment). `DefaultPolicy::Deny` is used — unmatched routes are denied. See the Authorization section below for the route-to-action mapping and PrincipalKind routing.
 
-`forgeguard_authz` (the `VpPolicyEngine` crate) is gated behind the control-plane's `vp` Cargo feature, default ON — nothing changes for existing deployments. Building with `--no-default-features` drops `forgeguard_authz` from the dependency graph; if a policy store ID is configured in that build, startup fails fast with an error instead of silently falling back to allow-all.
+`--policy-store-id` is still parsed (kept for backward-compat with existing deploy configs) but is **ignored** — it no longer drives engine construction. `forgeguard_authz` (the retired `VpPolicyEngine`) is no longer used for `cp:*` decisions at all; the crate stays wired for the V3 Groups VP-store push (`vp` Cargo feature, default ON) until that is retired separately. `cedar sync`/`cedar diff`/`cedar status` still exist for the VP store but no longer feed the request path — full retirement targeted for V3 of issue #117.
 
 ## Authorization
 
@@ -264,10 +264,10 @@ BYOC Proxy                              Control Plane
 | Condition | Policy Engine | Default Policy |
 |-----------|--------------|----------------|
 | No `--jwks-url` (dev mode) | `StaticPolicyEngine(Allow)` | `Passthrough` |
-| `--jwks-url` + `--store=memory` | `StaticPolicyEngine(Allow)` | `Deny` |
-| `--jwks-url` + `--store=dynamodb` + `--policy-store-id` | `VpPolicyEngine` | `Deny` |
+| `--jwks-url` + `--store=memory` | `CpCedarEngine` (embedded) | `Deny` |
+| `--jwks-url` + `--store=dynamodb` | `CpCedarEngine` (embedded) | `Deny` |
 
-The Cedar namespace is `forgeguard` (from `ProjectId::new("forgeguard")`). The tenant is resolved per request from `PolicyContext::tenant_id()` (populated from `X-ForgeGuard-Org-Id` via pipeline Phase 5b), not fixed at engine construction.
+The Cedar namespace is `forgeguard` (from `ProjectId::new("forgeguard")`). The tenant is resolved per request from `PolicyContext::tenant_id()` (populated from `X-ForgeGuard-Org-Id` via pipeline Phase 5b), not fixed at engine construction. The engine itself is embedded (compiled from `forgeguard.toml` at build time) rather than backed by a VP client — `--policy-store-id` no longer gates which engine is used.
 
 ### Route-to-Action Mapping
 
@@ -345,14 +345,16 @@ cargo run -p forgeguard_control_plane -- --store dynamodb --dynamodb-table forge
 | `--jwks-url` | `FORGEGUARD_CP_JWKS_URL` | JWKS URL for Cognito JWT auth. Omit for dev mode (no auth) |
 | `--issuer` | `FORGEGUARD_CP_ISSUER` | JWT issuer URL. Required when `--jwks-url` is set |
 | `--audience` | `FORGEGUARD_CP_AUDIENCE` | JWT audience (Cognito app client ID). Optional |
-| `--policy-store-id` | `FORGEGUARD_CP_POLICY_STORE_ID` | Verified Permissions policy store ID. Required when `--jwks-url` is set |
+| `--policy-store-id` | `FORGEGUARD_CP_POLICY_STORE_ID` | DEPRECATED: ignored since #117 V1 (`cp:*` authorization is embedded). Still parsed/required when `--jwks-url` is set for backward-compat |
 
 See `crates/control-plane/README.md` for full usage instructions and curl examples.
 
 ## Module Structure
 
 ```
-crates/control-plane/src/
+crates/control-plane/
+  build.rs            -- compiles repo-root forgeguard.toml to Cedar policy text at build time (forgeguard_authz_core::compile_cp_model); embedded via include_str!(concat!(env!("OUT_DIR"), "/cp_policies.cedar")) in app.rs
+  src/
   lib.rs              -- library root: pub mod app + internal modules
   app.rs              -- public router builders: dynamodb_router(), memory_router()
   main.rs             -- binary entry point: CLI parsing, delegates to app:: (shell)
