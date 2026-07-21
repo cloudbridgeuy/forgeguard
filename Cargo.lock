@@ -436,30 +436,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "aws-sdk-sfn"
-version = "1.102.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7c86828ac9f1965ac5a0291bdbb70f440d6b60c66d67db46d595939435e609b"
-dependencies = [
- "aws-credential-types",
- "aws-runtime",
- "aws-smithy-async",
- "aws-smithy-http",
- "aws-smithy-json",
- "aws-smithy-observability",
- "aws-smithy-runtime",
- "aws-smithy-runtime-api",
- "aws-smithy-types",
- "aws-types",
- "bytes",
- "fastrand",
- "http 0.2.12",
- "http 1.4.0",
- "regex-lite",
- "tracing",
-]
-
-[[package]]
 name = "aws-sdk-sso"
 version = "1.97.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -774,31 +750,11 @@ dependencies = [
 
 [[package]]
 name = "aws_lambda_events"
-version = "0.16.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "144ec7565561115498a288850cc6a42b279e09b6c4b88f623eecb9c8ca96c08c"
-dependencies = [
- "base64 0.22.1",
- "bytes",
- "chrono",
- "flate2",
- "http 1.4.0",
- "http-body 1.0.1",
- "http-serde",
- "query_map",
- "serde",
- "serde_dynamo",
- "serde_json",
- "serde_with",
-]
-
-[[package]]
-name = "aws_lambda_events"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "474e5c215398b56aa1c8021cb51907d132c022737dc86b1b5ac9a3fa0fa25fdc"
 dependencies = [
- "base64 0.22.1",
+ "base64",
  "bytes",
  "http 1.4.0",
  "http-body 1.0.1",
@@ -895,12 +851,6 @@ dependencies = [
  "rustc-demangle",
  "windows-link",
 ]
-
-[[package]]
-name = "base64"
-version = "0.21.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9d297deb1925b89f2ccc13d7635fa0714f12c87adce1c75356b39ca9b7178567"
 
 [[package]]
 name = "base64"
@@ -1809,15 +1759,9 @@ checksum = "9f1f227452a390804cdb637b74a86990f2a7d7ba4b7d5693aac9b4dd6defd8d6"
 name = "fg-lambdas"
 version = "0.0.0"
 dependencies = [
- "aws-config",
- "aws-sdk-sfn",
- "aws_lambda_events 0.16.1",
  "color-eyre",
  "forgeguard_control_plane",
- "forgeguard_core",
  "lambda_http",
- "lambda_runtime",
- "serde_dynamo",
  "serde_json",
  "tokio",
  "tracing",
@@ -1918,7 +1862,7 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "aws-sdk-cognitoidentityprovider",
- "base64 0.22.1",
+ "base64",
  "chrono",
  "forgeguard_authn_core",
  "forgeguard_core",
@@ -1937,7 +1881,7 @@ dependencies = [
 name = "forgeguard_authn_core"
 version = "0.0.0"
 dependencies = [
- "base64 0.22.1",
+ "base64",
  "chrono",
  "ed25519-dalek",
  "forgeguard_core",
@@ -2038,7 +1982,7 @@ dependencies = [
  "aws-sdk-dynamodb",
  "aws-sdk-verifiedpermissions",
  "axum",
- "base64 0.22.1",
+ "base64",
  "chrono",
  "clap",
  "color-eyre",
@@ -2633,7 +2577,7 @@ version = "0.1.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "96547c2556ec9d12fb1578c4eaf448b04993e7fb79cbaad930a656880a6bdfa0"
 dependencies = [
- "base64 0.22.1",
+ "base64",
  "bytes",
  "futures-channel",
  "futures-util",
@@ -2956,7 +2900,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0529410abe238729a60b108898784df8984c87f6054c9c4fcacc47e4803c1ce1"
 dependencies = [
  "aws-lc-rs",
- "base64 0.22.1",
+ "base64",
  "getrandom 0.2.17",
  "js-sys",
  "pem",
@@ -3013,7 +2957,7 @@ version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c54938eab7a90e46a59fef2332f7fbcd5cfeba74a8bfc741e3f48a2504e96cd2"
 dependencies = [
- "aws_lambda_events 1.1.2",
+ "aws_lambda_events",
  "bytes",
  "encoding_rs",
  "futures-util",
@@ -3039,7 +2983,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c58c2197a86a6b73fdc61f18be54de1b1f7681d2df91e49798eac6ea2d482da"
 dependencies = [
  "async-stream",
- "base64 0.22.1",
+ "base64",
  "bytes",
  "futures",
  "http 1.4.0",
@@ -3517,7 +3461,7 @@ version = "3.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d30c53c26bc5b31a98cd02d20f25a7c8567146caf63ed593a9d87b2775291be"
 dependencies = [
- "base64 0.22.1",
+ "base64",
  "serde_core",
 ]
 
@@ -4180,7 +4124,7 @@ version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab3f43e3283ab1488b624b44b0e988d0acea0b3214e694730a055cb6b2efa801"
 dependencies = [
- "base64 0.22.1",
+ "base64",
  "bytes",
  "encoding_rs",
  "futures-core",
@@ -4524,17 +4468,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "serde_dynamo"
-version = "4.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "873a97c3f7a67dd042bceb47d056d288424b82d4c66b0a25e1a3b34675620951"
-dependencies = [
- "base64 0.21.7",
- "serde",
- "serde_core",
-]
-
-[[package]]
 name = "serde_json"
 version = "1.0.149"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4586,7 +4519,7 @@ version = "3.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dd5414fad8e6907dbdd5bc441a50ae8d6e26151a03b1de04d89a5576de61d01f"
 dependencies = [
- "base64 0.22.1",
+ "base64",
  "chrono",
  "hex",
  "indexmap 1.9.3",
@@ -4630,7 +4563,7 @@ version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3fa1f336066b758b7c9df34ed049c0e693a426afe2b27ff7d5b14f410ab1a132"
 dependencies = [
- "base64 0.22.1",
+ "base64",
  "indexmap 2.14.0",
  "rust_decimal",
 ]
@@ -6150,7 +6083,7 @@ dependencies = [
  "aws-sdk-dynamodb",
  "aws-sdk-lambda",
  "aws-sdk-verifiedpermissions",
- "base64 0.22.1",
+ "base64",
  "chrono",
  "clap",
  "color-eyre",

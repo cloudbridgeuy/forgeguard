@@ -4,9 +4,9 @@
 //! pass `now`), no AWS calls, no filesystem.
 //!
 //! ## V5 invariant
-//! `seed_org_to_status_attr` returns `"draft"` unconditionally. Active-org
-//! provisioning lives in the saga ticket (separate from #102) — the seed
-//! never produces an Active row.
+//! `seed_org_to_status_attr` returns `"draft"` unconditionally — the seed
+//! never produces an Active row. Activation is a control-plane lifecycle verb
+//! (#113 V2), not a seed concern.
 
 use std::collections::BTreeMap;
 

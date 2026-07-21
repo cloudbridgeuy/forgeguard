@@ -1,6 +1,6 @@
 //! AWS Cognito-backed `UserPoolClient`.
 //!
-//! Single seam between the saga driver / xtask seed and the AWS SDK.
+//! Single seam between the xtask seed and the AWS SDK.
 //! `map_*_error` helpers classify SDK errors into the four [`UserPoolError`]
 //! variants so callers can pattern-match outcomes without inspecting SDK types
 //! directly.

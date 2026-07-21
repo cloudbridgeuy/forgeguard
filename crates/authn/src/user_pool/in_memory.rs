@@ -1,7 +1,7 @@
 //! In-memory `UserPoolClient` for tests.
 //!
 //! Mimics Cognito by storing `(pool_id, email) → sub` rows in a `BTreeMap`.
-//! Failure injection knobs (`arm_*_once`) let saga driver and seed tests
+//! Failure injection knobs (`arm_*_once`) let seed tests
 //! reproduce transient/permanent SDK paths without an AWS round trip. The
 //! `arm_*` knobs are gated behind the `testing` Cargo feature so other crates
 //! can drive failure paths against this stub.

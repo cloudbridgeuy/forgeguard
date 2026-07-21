@@ -22,9 +22,6 @@ pub enum Error {
     /// A config version string that is not a valid YYYY-MM-DD date.
     #[error("invalid config version: {raw} (expected YYYY-MM-DD)")]
     InvalidConfigVersion { raw: String },
-    /// A saga id string that is empty or otherwise malformed.
-    #[error("invalid saga id: {raw}")]
-    InvalidSagaId { raw: String },
     /// A structural violation of the organizational spine (Brief v1.4):
     /// the hierarchy edges must form a single-rooted tree.
     #[error("spine violation: {reason}: {fgrn}")]

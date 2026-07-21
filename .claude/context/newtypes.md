@@ -63,13 +63,6 @@ let e = Etag::try_new("abc123")?;     // rejected — missing quotes
 
 The implementation lesson: **decide once, document at the constructor**. If a value's wire form has decoration (quotes, prefixes, format strings), include that decoration in the inner representation and reject anything that doesn't match. The alternative — storing a bare value and re-quoting at the boundary — leaks framing into business logic and gives you two sources of truth for "what's a valid etag."
 
-`SagaId` is the contrast: the wire form is `"SAGA#01HXYZ..."` (DynamoDB partition key), but the domain stores the bare `01HXYZ...`. The decoration is structural, not semantic, so we strip it at parse time:
-
-```rust
-let saga_id = SagaId::from_pk("SAGA#01HXYZ...")?; // strips prefix
-let saga_id = SagaId::try_new("01HXYZ...")?;      // bare form
-```
-
 The rule: include framing in the value when the framing IS part of the value's identity (etags, qualified names). Strip framing when it's a transport detail (DynamoDB PK prefixes, URL path segments).
 
 ## Inbound Structs: the `Payload` Suffix
@@ -112,7 +105,6 @@ The test for "is this newtype shaped correctly?" is: can a downstream consumer e
 | `OrganizationId` | `core` | `segment` | non-empty, no `#` | identical |
 | `Percentage` | `core` | `percentage` | `0..=100` (u8) | bare integer |
 | `ConfigVersion` | `core` | `config_version` | `chrono::NaiveDate`, formatted `YYYY-MM-DD` | string |
-| `SagaId` | `core` | `saga_id` | non-empty, no `#`; `from_pk` strips `SAGA#` | bare; PK form `SAGA#<id>` |
 | `Etag` | `control-plane` | `etag` | quoted strong etag, non-empty; read-side only — drives conditional GET (`If-None-Match` / 304) on org config and group reads, not a write-side precondition | identical (RFC 7232) |
 | `Fgrn` | `core` | `fgrn` | Brief v1.4 stable identity: `fgrn:{organization}:{kind}:{id}`, closed `FgrnKind` (`orgunit`\|`principal`\|`principal-set`\|`resource`), no wildcards | identical |
 | `NativeId` | `core` | `native_id` | non-empty, visible ASCII (`0x21..=0x7E`), no `:` or `*` — `/`, `_`, uppercase allowed | identical |
@@ -155,7 +147,7 @@ Hits in test code or wire-DTO structs (`PreconditionFailedBody`) are fine; hits 
 
 ## Lessons from Issue #74
 
-The eight-stream rollout that propagated `Percentage` / `ConfigVersion` / `SagaId` / `Etag` / `http::StatusCode` / `http::Method` produced a few patterns worth lifting up:
+The eight-stream rollout that propagated `Percentage` / `ConfigVersion` / `Etag` / `http::StatusCode` / `http::Method` produced a few patterns worth lifting up:
 
 - **Don't double-wrap errors.** When the inner `Error` variant already prefixes its message (e.g. `forgeguard_http::Error::Config` displays as `"config error: ..."`), the binary wrapper should add **context** (`failed to load config from '/path'`), not re-prefix. The doubled-prefix pattern showed up in `crates/cli/src/check.rs` before the fix and was caught only by the QA walkthrough — not by lint, not by tests. Use `wrap_err_with(|| format!("failed to <verb> <noun> from '<path>'"))` and let the inner error's `Display` carry its own framing. The canonical example is `crates/cli/src/policies/test.rs`.
 - **`Result` returns must have a real failure path.** During the Etag migration, `from_stored -> Result<Self>` and `compute_etag -> Result<Etag>` both ended up with no reachable error case after the inner type became infallible. Code review caught both. When migrating away from primitives, audit `Result` returns at every layer — if `?` is never reachable, drop the wrapper.

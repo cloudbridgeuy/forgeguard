@@ -26,7 +26,7 @@ use super::pure;
 use super::SeedContext;
 
 /// `email_verified` is a Cognito invariant injected on every seeded user,
-/// never declared in `seed.toml`. Matches the V3 `POST /users` saga handler.
+/// never declared in `seed.toml`.
 const EMAIL_VERIFIED_KEY: &str = "email_verified";
 const EMAIL_VERIFIED_VALUE: &str = "true";
 

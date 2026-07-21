@@ -28,20 +28,12 @@ impl LambdaTarget {
 }
 
 /// All registered Lambda targets.
-pub(crate) static TARGETS: &[LambdaTarget] = &[
-    LambdaTarget {
-        name: "control-plane",
-        crate_name: "fg-lambdas",
-        binary_name: "control_plane",
-        function_name_pattern: "forgeguard-{name}-{env}",
-    },
-    LambdaTarget {
-        name: "saga-trigger",
-        crate_name: "fg-lambdas",
-        binary_name: "saga_trigger",
-        function_name_pattern: "forgeguard-{name}-{env}",
-    },
-];
+pub(crate) static TARGETS: &[LambdaTarget] = &[LambdaTarget {
+    name: "control-plane",
+    crate_name: "fg-lambdas",
+    binary_name: "control_plane",
+    function_name_pattern: "forgeguard-{name}-{env}",
+}];
 
 /// Find a target by name.
 pub(crate) fn find_target(name: &str) -> Option<&'static LambdaTarget> {
@@ -58,12 +50,6 @@ mod tests {
         let t = find_target("control-plane").unwrap();
         assert_eq!(t.binary_name, "control_plane");
         assert_eq!(t.crate_name, "fg-lambdas");
-    }
-
-    #[test]
-    fn find_saga_trigger() {
-        let t = find_target("saga-trigger").unwrap();
-        assert_eq!(t.binary_name, "saga_trigger");
     }
 
     #[test]

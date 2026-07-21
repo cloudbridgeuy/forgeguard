@@ -34,12 +34,12 @@ pub(crate) struct LambdaArgs {
 enum LambdaCommands {
     /// Cross-compile a Lambda binary for ARM64
     Build {
-        /// Target name (e.g. "control-plane", "saga-trigger")
+        /// Target name (e.g. "control-plane")
         target: String,
     },
     /// Deploy a Lambda function to AWS
     Deploy {
-        /// Target name (e.g. "control-plane", "saga-trigger")
+        /// Target name (e.g. "control-plane")
         target: Option<String>,
         /// Deploy all registered targets
         #[arg(long)]

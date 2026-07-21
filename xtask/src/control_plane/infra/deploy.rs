@@ -46,8 +46,6 @@ pub(crate) async fn run(
     let lambda_outputs = op::read_stack_outputs(&cf_client, &lambda_stack_name).await?;
     let cp_arn = op::find_stack_output(&lambda_outputs, "ControlPlaneFunctionArn")?;
     let cp_url = op::find_stack_output(&lambda_outputs, "ControlPlaneFunctionUrl")?;
-    let saga_arn = op::find_stack_output(&lambda_outputs, "SagaTriggerFunctionArn")?;
-    let dlq_arn = op::find_stack_output(&lambda_outputs, "DlqArn")?;
 
     // VP outputs
     let vp_outputs = op::read_stack_outputs(&cf_client, &vp_stack_name).await?;
@@ -67,8 +65,6 @@ pub(crate) async fn run(
     op::store_in_op(&vault, "dynamodb", "table-arn", &table_arn, op_account)?;
     op::store_in_op(&vault, "lambda", "control-plane-arn", &cp_arn, op_account)?;
     op::store_in_op(&vault, "lambda", "control-plane-url", &cp_url, op_account)?;
-    op::store_in_op(&vault, "lambda", "saga-trigger-arn", &saga_arn, op_account)?;
-    op::store_in_op(&vault, "lambda", "dlq-arn", &dlq_arn, op_account)?;
     op::store_in_op(
         &vault,
         "verified-permissions",
@@ -99,8 +95,6 @@ pub(crate) async fn run(
     println!("  Table ARN:     {table_arn}");
     println!("  CP function:   {cp_arn}");
     println!("  CP URL:        {cp_url}");
-    println!("  Saga trigger:  {saga_arn}");
-    println!("  DLQ ARN:       {dlq_arn}");
     println!("  Policy store:  {policy_store_id}");
     println!("  User pool ID:  {user_pool_id}");
     println!("  User pool ARN: {user_pool_arn}");

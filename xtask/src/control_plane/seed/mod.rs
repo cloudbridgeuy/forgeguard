@@ -2,9 +2,9 @@
 //! organizations into DynamoDB as `OrgStatus::Draft`.
 //!
 //! ## V6 invariant
-//! No VP push. Every seeded org is `Draft`; Cognito users are created in Phase 4
-//! and the V3 Active-org VP write-path is owned by the saga ticket (separate
-//! from #102).
+//! No VP push. Every seeded org is `Draft`; Cognito users are created in Phase 4.
+//! Active-org VP permits are materialised per group write by the control plane
+//! (#113 V4 push-then-append) — never by the seed.
 //!
 //! ## 1Password dependencies
 //! - `op://forgeguard-{env}/dynamodb/table-name` — DDB table for the seed.

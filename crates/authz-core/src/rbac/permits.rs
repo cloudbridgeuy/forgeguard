@@ -2,8 +2,8 @@
 //! ready for `VpClient::create_policy`.
 //!
 //! Lifted in V4 from `crates/control-plane/src/handlers/groups/active_pure.rs`
-//! so the saga handoff stub can build permits without depending on CP-internal
-//! types. The V3 Active write path now imports from this module too.
+//! so permit compilation is shared without depending on CP-internal types.
+//! Consumers: the Active-org group write path and `xtask cedar sync`.
 
 use crate::rbac::{compile_rbac_to_cedar, RbacEntry, TenantConfig};
 
@@ -17,9 +17,9 @@ pub struct NamedPermit {
 
 /// The VP policy name for a group. Format: `cp-rbac-{group_name}`.
 ///
-/// Canonical mapping shared between the V3 Active write path, the V4 saga
-/// stub, and `xtask cedar sync` — all three must produce identical names so
-/// policies survive across reconciler runs.
+/// Canonical mapping shared between the Active-org group write path and
+/// `xtask cedar sync` — both must produce identical names so policies
+/// survive across reconciler runs.
 pub fn policy_name_for_group(group_name: &str) -> String {
     format!("cp-rbac-{group_name}")
 }
@@ -35,9 +35,9 @@ pub struct MaterializeCompileError {
 /// Compile every declared group into a `NamedPermit`, sorted alphabetically
 /// by group name.
 ///
-/// **Order:** the output is sorted by `entry.name` ascending. Saga callers
-/// rely on this for reproducible test assertions and for stable VP write
-/// order across retries.
+/// **Order:** the output is sorted by `entry.name` ascending. Callers rely
+/// on this for reproducible test assertions and for stable VP write order
+/// across retries.
 ///
 /// **Failure semantics:** stops at the first compile failure and returns
 /// `Err(MaterializeCompileError { name, reason })`. No partial-success

@@ -124,7 +124,7 @@ async fn update_mid_fanout_failure_restores_completed_priors_503() {
 
 /// Risk #5 boundary: an org with `OrgStatus::Active` but no `vp_store_id`
 /// should surface the same error shape as an F3 `vp_push_failed{stage=parent}`.
-/// This guards the saga-invariant violation path.
+/// This guards the Active-without-VP-store path (D11: status-quo 503).
 #[tokio::test]
 async fn create_on_active_org_without_vp_store_id_returns_503() {
     // Seed an Active org with config but no vp_store_id.

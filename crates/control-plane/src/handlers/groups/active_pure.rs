@@ -47,9 +47,9 @@ pub(crate) enum OrgWriteContext {
 /// Why an org failed to parse into an `OrgWriteContext`.
 ///
 /// Currently only `ActiveWithoutVpStore`, which happens when an org's status
-/// is `Active` but its config is missing `vp_store_id`. The saga that flips
-/// status to Active is supposed to populate `vp_store_id` first; this variant
-/// catches the case where that invariant was violated.
+/// is `Active` but its config is missing `vp_store_id`. Activation does not
+/// provision VP stores (#113), so such orgs exist legitimately — group writes
+/// on them fail 503 until a store is provisioned (D11; real answer is #117's).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ActiveStateError {
     ActiveWithoutVpStore,

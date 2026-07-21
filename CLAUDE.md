@@ -9,7 +9,7 @@
 - **Dev watcher:** `bacon` — see `bacon.toml`
 - **Pre-commit hooks:** `cargo xtask lint --install-hooks`
 - **Commits:** Conventional Commits — see [commit-and-release.md](./.claude/context/commit-and-release.md)
-- **Newtypes:** wrap primitives at deserialize boundaries (`Percentage`, `ConfigVersion`, `SagaId`, `Etag`, `KeyId`, `UserId`, `TenantId`, …) — never `etag: String` / `version: String` / `rollout_percentage: u8` in domain types. See [newtypes.md](./.claude/context/newtypes.md)
+- **Newtypes:** wrap primitives at deserialize boundaries (`Percentage`, `ConfigVersion`, `Etag`, `KeyId`, `UserId`, `TenantId`, …) — never `etag: String` / `version: String` / `rollout_percentage: u8` in domain types. See [newtypes.md](./.claude/context/newtypes.md)
 - **Releases:** `cargo xtask release` — see [commit-and-release.md](./.claude/context/commit-and-release.md)
 - **Rust toolchain:** pinned in `rust-toolchain.toml` (channel + required `components`) — see [ci.md](./.claude/context/ci.md)
 - **CI:** GitHub Actions in `.github/workflows/ci.yml` — see [ci.md](./.claude/context/ci.md) for toolchain/typos/deny/rail rules
