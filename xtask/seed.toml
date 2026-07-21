@@ -18,7 +18,7 @@
 [[organization]]
 org_id = "org-acme"
 name = "Acme Corp"
-cognito_user_pool_id = "us-east-2_acme"   # CDK output: AcmeUserPoolId
+cognito_user_pool_id = "us-east-2_Ge850AP5u"   # prod dashboard pool (placeholder "us-east-2_acme" was never a real pool)
 
 [organization.user_schema.standard]
 name = { required = true }
@@ -61,7 +61,7 @@ allow = ["cp-member-promote-owner"]
 [[organization]]
 org_id = "org-globex"
 name = "Globex Corporation"
-cognito_user_pool_id = "us-east-2_globex"   # CDK output: GlobexUserPoolId
+cognito_user_pool_id = "us-east-2_Ge850AP5u"   # prod dashboard pool (placeholder "us-east-2_globex" was never a real pool)
 
 [organization.user_schema.standard]
 name = { required = true }
