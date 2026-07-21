@@ -5,6 +5,7 @@ pub mod cp_model;
 pub mod decision;
 pub mod engine;
 pub mod engine_cedar;
+pub mod engine_cp;
 pub mod error;
 pub mod event;
 pub mod query;
@@ -22,6 +23,7 @@ pub use engine::{CacheStats, PolicyEngine};
 pub use engine_cedar::{
     CedarEngine, Decision, DecisionQuery, DecisionRecord, EmbeddedPolicyEngine,
 };
+pub use engine_cp::CpCedarEngine;
 pub use error::{Error, Result};
 #[cfg(feature = "test-support")]
 pub use event::InMemoryEventLog;
