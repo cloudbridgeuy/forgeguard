@@ -13,11 +13,7 @@ use axum::routing::{get, post};
 use axum::Router;
 use forgeguard_authn::{CognitoJwtResolver, Ed25519SignatureResolver, JwtResolverConfig};
 use forgeguard_authn_core::{IdentityChain, IdentityResolver};
-#[cfg(feature = "vp")]
-use forgeguard_authz::cache::AuthzCache;
-#[cfg(feature = "vp")]
-use forgeguard_authz::{TieredCache, VpEngineConfig, VpPolicyEngine};
-use forgeguard_authz_core::{PolicyDecision, StaticPolicyEngine};
+use forgeguard_authz_core::{CpCedarEngine, PolicyDecision, StaticPolicyEngine};
 use forgeguard_axum::{forgeguard_layer, ForgeGuard};
 use forgeguard_core::{FlagConfig, ProjectId, QualifiedAction};
 use forgeguard_http::{
@@ -46,8 +42,9 @@ pub struct AuthConfig {
     jwks_url: url::Url,
     issuer: String,
     audience: Option<String>,
-    // Only read building the `VpEngineConfig` in the `vp`-feature engine arm.
-    #[cfg_attr(not(feature = "vp"), allow(dead_code))]
+    // Ignored since V1 of #117 — cp:* authorization is embedded (CpCedarEngine).
+    // Deleted in V3 once the VP SDK client is retired entirely.
+    #[allow(dead_code)]
     policy_store_id: String,
 }
 
@@ -92,12 +89,13 @@ pub async fn dynamodb_router(
         "AWS SDK configuration loaded for control plane"
     );
     let dynamo_client = aws_sdk_dynamodb::Client::new(&sdk_config);
-    let vp_sdk_client = aws_sdk_verifiedpermissions::Client::new(&sdk_config);
     let s: Arc<dyn OrgStore> = Arc::new(DynamoOrgStore::new(
         dynamo_client.clone(),
         table_name.to_string(),
     ));
-    let vp = Arc::new(AwsVpClient::new(vp_sdk_client.clone()));
+    let vp = Arc::new(AwsVpClient::new(aws_sdk_verifiedpermissions::Client::new(
+        &sdk_config,
+    )));
     let model_events: Arc<dyn ModelEventStore> = Arc::new(DynamoModelEventStore::new(
         dynamo_client.clone(),
         table_name.to_string(),
@@ -116,12 +114,7 @@ pub async fn dynamodb_router(
     } else {
         None
     };
-    let fg = build_forgeguard(
-        auth,
-        ed25519_resolver,
-        Some(vp_sdk_client),
-        membership_resolver,
-    )?;
+    let fg = build_forgeguard(auth, ed25519_resolver, membership_resolver)?;
     Ok(build_router(
         AppState {
             store: s,
@@ -154,8 +147,7 @@ pub async fn memory_router(
     let model_events: Arc<dyn ModelEventStore> =
         Arc::new(InMemoryModelEventStore::new_with_org_store(Arc::clone(&s)));
     // Ed25519 resolver requires DynamoDB for key lookup; memory mode has no DynamoDB client.
-    // VP engine is also unavailable in memory mode — StaticPolicyEngine(Allow) is used instead.
-    let fg = build_forgeguard(auth, None, None, None)?;
+    let fg = build_forgeguard(auth, None, None)?;
     Ok(build_router(
         AppState {
             store: s,
@@ -381,7 +373,6 @@ fn cp_route_actions() -> forgeguard_http::Result<Vec<RouteMapping>> {
 fn build_forgeguard(
     auth: Option<&AuthConfig>,
     ed25519_resolver: Option<Arc<dyn IdentityResolver>>,
-    vp_client: Option<aws_sdk_verifiedpermissions::Client>,
     membership_resolver: Option<Arc<dyn MembershipResolver>>,
 ) -> color_eyre::Result<Arc<ForgeGuard>> {
     let health_route = anon_route("GET", "/health")?;
@@ -409,29 +400,15 @@ fn build_forgeguard(
             let mappings = cp_route_actions()?;
             let route_matcher = RouteMatcher::new(&mappings)?;
 
-            // Build the policy engine: VP when a client is available, static allow otherwise.
-            let engine: Arc<dyn forgeguard_authz_core::PolicyEngine> = match vp_client {
-                #[cfg(feature = "vp")]
-                Some(client) => {
-                    let vp_config = VpEngineConfig::new(&auth.policy_store_id);
-                    let l1 = AuthzCache::new(vp_config.cache_ttl(), vp_config.cache_max_entries());
-                    let cache = TieredCache::new(l1, None, vp_config.cache_ttl());
-                    Arc::new(VpPolicyEngine::new(
-                        client,
-                        &vp_config,
-                        project_id.clone(),
-                        cache,
-                    ))
-                }
-                #[cfg(not(feature = "vp"))]
-                Some(_) => {
-                    return Err(color_eyre::eyre::eyre!(
-                        "a VP policy store is configured but forgeguard_control_plane was built \
-                         without the vp feature"
-                    ));
-                }
-                None => Arc::new(StaticPolicyEngine::new(PolicyDecision::Allow)),
-            };
+            // Embedded Cedar engine: the model was compiled from forgeguard.toml by
+            // build.rs — a bad model fails the build, so from_policy_text here parses
+            // known-good text and cannot fail in practice; fail startup loudly if it does.
+            let snapshot = forgeguard_authz_core::Snapshot::from_policy_text(include_str!(
+                concat!(env!("OUT_DIR"), "/cp_policies.cedar")
+            ))
+            .map_err(|e| color_eyre::eyre::eyre!("embedded cp policy snapshot: {e}"))?;
+            let engine: Arc<dyn forgeguard_authz_core::PolicyEngine> =
+                Arc::new(CpCedarEngine::new(snapshot, project_id.clone()));
 
             (
                 route_matcher,
