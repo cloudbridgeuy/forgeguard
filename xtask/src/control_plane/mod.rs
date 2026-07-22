@@ -1,6 +1,3 @@
-mod cedar;
-pub(crate) mod cedar_core;
-pub(crate) mod cedar_io;
 mod curl;
 mod dev;
 pub(crate) mod dynamo_local;
@@ -28,8 +25,6 @@ pub struct ControlPlaneArgs {
 
 #[derive(Subcommand)]
 enum ControlPlaneCommands {
-    /// Cedar policy store management
-    Cedar(cedar::CedarArgs),
     /// Make an Ed25519-signed HTTP request to the control plane
     Curl(curl::CurlArgs),
     /// Start a local development environment with DynamoDB Local and the control plane
@@ -50,7 +45,6 @@ enum ControlPlaneCommands {
 
 pub async fn run(args: &ControlPlaneArgs) -> Result<()> {
     match &args.command {
-        ControlPlaneCommands::Cedar(a) => cedar::run(a).await,
         ControlPlaneCommands::Curl(a) => curl::run(a).await,
         ControlPlaneCommands::Dev(a) => dev::run(a).await,
         ControlPlaneCommands::Infra(a) => infra::run(a).await,
