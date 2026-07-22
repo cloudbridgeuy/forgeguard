@@ -2,7 +2,6 @@ import * as path from "path";
 import * as cdk from "aws-cdk-lib";
 import {
   aws_lambda as lambda,
-  aws_iam as iam,
   aws_dynamodb as dynamodb,
 } from "aws-cdk-lib";
 import { Construct } from "constructs";
@@ -12,22 +11,13 @@ interface LambdaStackProps extends cdk.StackProps {
   table: dynamodb.ITableV2;
   userPoolId: string;
   appClientId: string;
-  policyStoreId: string;
-  policyStoreArn: string;
 }
 
 export class LambdaStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: LambdaStackProps) {
     super(scope, id, props);
 
-    const {
-      environment,
-      table,
-      userPoolId,
-      appClientId,
-      policyStoreId,
-      policyStoreArn,
-    } = props;
+    const { environment, table, userPoolId, appClientId } = props;
     const placeholderCode = lambda.Code.fromAsset(
       path.join(__dirname, "../assets/placeholder"),
     );
@@ -47,7 +37,6 @@ export class LambdaStack extends cdk.Stack {
         FORGEGUARD_CP_JWKS_URL: `https://cognito-idp.${this.region}.amazonaws.com/${userPoolId}/.well-known/jwks.json`,
         FORGEGUARD_CP_ISSUER: `https://cognito-idp.${this.region}.amazonaws.com/${userPoolId}`,
         FORGEGUARD_CP_AUDIENCE: appClientId,
-        FORGEGUARD_CP_POLICY_STORE_ID: policyStoreId,
         FORGEGUARD_CP_COGNITO_POOL_ID: userPoolId,
       },
     });
@@ -57,28 +46,6 @@ export class LambdaStack extends cdk.Stack {
     });
 
     table.grantReadWriteData(controlPlane);
-
-    controlPlane.addToRolePolicy(
-      new iam.PolicyStatement({
-        actions: ["verifiedpermissions:IsAuthorized"],
-        resources: [policyStoreArn],
-      }),
-    );
-
-    // V3 Active-org group writes materialise Cedar permits into each org's
-    // dedicated VP store. Per-org store ARNs are created at runtime and are
-    // unknowable to CDK, so the write actions cannot be ARN-scoped here.
-    controlPlane.addToRolePolicy(
-      new iam.PolicyStatement({
-        actions: [
-          "verifiedpermissions:CreatePolicy",
-          "verifiedpermissions:DeletePolicy",
-          "verifiedpermissions:ListPolicies",
-          "verifiedpermissions:GetPolicy",
-        ],
-        resources: ["*"],
-      }),
-    );
 
     // --- Tags ---
 
