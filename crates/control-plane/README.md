@@ -6,7 +6,7 @@ Serves per-organization proxy configuration to BYOC connected proxies. File-back
 
 Authentication and authorization are handled by the `forgeguard-axum` middleware layer.
 
-**Auth-enabled mode** (`--jwks-url` + `--policy-store-id`): all API routes are protected. The middleware uses `VpPolicyEngine` backed by AWS Verified Permissions with `DefaultPolicy::Deny`. The Cedar project namespace is `forgeguard` (from `ProjectId::new("forgeguard")`). Route-to-action mapping uses the `cp` namespace — see the Authorization section below.
+**Auth-enabled mode** (`--jwks-url` + `--issuer`): all API routes are protected. The middleware uses the embedded `CpCedarEngine` (compiled from `forgeguard.toml` at build time) with `DefaultPolicy::Deny` — no Verified Permissions call on the request path. The Cedar project namespace is `forgeguard` (from `ProjectId::new("forgeguard")`). Route-to-action mapping uses the `cp` namespace — see the Authorization section below.
 
 **Dev mode** (no `--jwks-url`): `StaticPolicyEngine(Allow)` with `DefaultPolicy::Passthrough`. All requests pass through without auth enforcement.
 
@@ -63,8 +63,6 @@ The V3 implementation plan lives at
 | 409 | Conflict — group name already exists on create |
 | 412 | Precondition Failed — stale `X-Fg-If-Revision` on PUT/DELETE (#113 V4) |
 | 422 | Unprocessable Entity — validation error (bad name, empty allow, bad action format, etc.) |
-| 500 | Inconsistent State — F-append compensation failed (VP-revert failed after a failed event append) |
-| 503 | VP Push Failed — F-VP (parent push failed) or F-VP-mid (mid-fanout failure on UPDATE) |
 
 **Caveats:**
 
@@ -74,16 +72,13 @@ The V3 implementation plan lives at
 - `DELETE` pre-checks for live memberships and inheriting groups; either
   blocks deletion with an appropriate error.
 
-#### V3: Active-org VP materialization
+#### Group writes are pure event appends
 
-When an org is in `OrgStatus::Active` (config carries a `vp_store_id`), the
-group write handlers materialise the compiled Cedar permit into the org's
-Verified Permissions policy store as part of the same request. The full
-pipeline (DDB write → VP parent push → alphabetical fanout), failure-mode
-taxonomy (F3 / F3' / F4 with status codes and body shapes), the
-`forgeguard_cp_group_rollback_failed_total` metric, the `vp_client` module
-shape, and the test scaffolding are documented in
-[`.claude/context/groups-v3.md`](../../.claude/context/groups-v3.md).
+Group `PUT`/`POST`/`DELETE` is a pure event-sourced append
+(`ModelEventStore::{put_group,delete_group}`) for every org status — no
+Verified Permissions push, no failure-mode taxonomy, no rollback metric. See
+[`.claude/context/groups-v3.md`](../../.claude/context/groups-v3.md) for the
+event-append model.
 
 #### Storage layout
 
@@ -122,8 +117,9 @@ The role mapping mirrors the CP-wide RBAC model in `forgeguard.toml`:
 | `admin` | `cp:group:create`, `cp:group:update`, `cp:group:delete` (inherits `member`) |
 | `owner` | inherits all from `admin` |
 
-Declared in `forgeguard.toml` `[[policies]]` `allow` arrays; apply with
-`cargo xtask control-plane cedar sync`. See
+Declared in `forgeguard.toml` `[[policies]]` `allow` arrays; compiled into the
+embedded `CpCedarEngine` at control-plane build time (`crates/control-plane/build.rs`).
+See
 [`.claude/plans/2026-05-13-issue-102-cp-groups-v6/v6-plan.md`](../../.claude/plans/2026-05-13-issue-102-cp-groups-v6/v6-plan.md)
 for V6 implementation details.
 
@@ -266,9 +262,8 @@ curl -is \
 ### 5. Metrics
 
 The control plane exposes Prometheus metrics on `GET /metrics` (anonymous, no
-auth), including `forgeguard_cp_group_rollback_failed_total{stage="parent"|"fanout"}`
-— bumped when a group write's VP-revert compensation fails after a failed
-event append (see [`.claude/context/groups-v3.md`](../../.claude/context/groups-v3.md)).
+auth). Group writes are pure event appends, so there is no rollback metric —
+see [`.claude/context/groups-v3.md`](../../.claude/context/groups-v3.md).
 
 ### CLI Options
 
@@ -282,7 +277,6 @@ event append (see [`.claude/context/groups-v3.md`](../../.claude/context/groups-
 | `--jwks-url` | `FORGEGUARD_CP_JWKS_URL` | JWKS URL for Cognito JWT auth. Omit for dev mode (no auth) |
 | `--issuer` | `FORGEGUARD_CP_ISSUER` | JWT issuer URL. Required when `--jwks-url` is set |
 | `--audience` | `FORGEGUARD_CP_AUDIENCE` | JWT audience (Cognito app client ID). Optional |
-| `--policy-store-id` | `FORGEGUARD_CP_POLICY_STORE_ID` | Verified Permissions policy store ID. Required when `--jwks-url` is set |
 
 ## Config File Format
 
@@ -317,7 +311,7 @@ Unknown fields in the config are ignored by serde, so older config files with ex
 
 ## Authorization
 
-When auth is enabled, every API request is authorized against AWS Verified Permissions using the `forgeguard` Cedar namespace (`ProjectId::new("forgeguard")`).
+When auth is enabled, every API request is authorized by the embedded `CpCedarEngine` using the `forgeguard` Cedar namespace (`ProjectId::new("forgeguard")`) — no external call on the request path.
 
 ### Route-to-Action Mapping
 
@@ -347,10 +341,6 @@ The Cedar principal entity type is determined by the `PrincipalKind` on the reso
 - Ed25519 signed request (BYOC proxy) → `PrincipalKind::Machine` → Cedar entity `forgeguard::Machine`
 
 Machine principals carry an `org_id` attribute and have no group parents. User principals may carry group memberships.
-
-### Memory Mode Limitation
-
-`--store=memory` cannot use `VpPolicyEngine` — no DynamoDB client is available for key lookup, so `StaticPolicyEngine(Allow)` is used instead, even when `--jwks-url` is provided.
 
 ## Membership Model
 
