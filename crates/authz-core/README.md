@@ -53,8 +53,9 @@ values to Cedar `permit(...)` statements with optional tenant scoping.
 - `resolve_inherits(entries, target)` — depth-first action collection over the inheritance graph with cycle detection.
 - `validate_cedar_ident(value, label)` — rejects empty strings, double quotes, backslashes, and control characters (`"` and `\` are Cedar's string-escape characters — either would let a crafted value break out of its quoted literal when interpolated into generated policy text). Called by `compile_rbac_to_cedar` and by `engine_cedar`'s grant-policy synthesis; exposed so external callers can apply the same hygiene check.
 
-**Consumers:** `xtask` (`cargo xtask control-plane cedar sync`) and
-`forgeguard_control_plane` Groups handlers (V2+).
+**Consumers:** `crates/control-plane/build.rs` (compiles `forgeguard.toml` into
+the embedded `CpCedarEngine` at build time) and `forgeguard_control_plane`
+Groups handlers (V2+).
 
 ### `snapshot`
 
@@ -142,7 +143,7 @@ For the saga handoff stub (`materialize_groups_to_vp` in
 | Symbol | Purpose |
 |---|---|
 | `NamedPermit { name, statement }` | A single Cedar permit with its canonical `cp-rbac-{group}` policy name already applied. |
-| `policy_name_for_group(name)` | Canonical mapping from group name to VP policy name. Shared with `xtask cedar sync` and the V3 Active write path. |
+| `policy_name_for_group(name)` | Canonical mapping from group name to VP policy name. |
 | `groups_to_permits(entries, namespace, tenant)` | Pure compile-many: turns a slice of `RbacEntry` into a `Vec<NamedPermit>` sorted alphabetically by group name. Stops at the first compile failure (`MaterializeCompileError`). |
 
 The V3 Active write path (`crates/control-plane/src/handlers/groups/active*.rs`)

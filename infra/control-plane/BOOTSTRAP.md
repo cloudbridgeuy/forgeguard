@@ -230,8 +230,9 @@ aws dynamodb get-item \
 - **Cross-org permissions for platform admins live in `forgeguard.toml`
   Cedar** (R10.5) — the `owner` role's `cp:*` permissions are tenant-scoped
   by design. To grant the platform `owner` the ability to act on customer
-  orgs, add explicit Cedar policies in `forgeguard.toml` and run `cargo
-  xtask control-plane cedar sync`.
+  orgs, add explicit Cedar policies in `forgeguard.toml`; they take effect
+  on the next control-plane build (compiled in-process via
+  `crates/control-plane/build.rs`, no separate sync step).
 - **Cognito pool name pattern**: `forgeguard-${env}-dashboard-users`. The
   project ships a single environment, `prod`, per `CLAUDE.md`.
 - **PUT user-schema on Active orgs**: V2 of issue #100 returns `409
