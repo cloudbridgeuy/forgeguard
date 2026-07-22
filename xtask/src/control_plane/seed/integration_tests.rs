@@ -150,25 +150,19 @@ async fn create_test_table(client: &aws_sdk_dynamodb::Client, table_name: &str) 
         .unwrap();
 }
 
-/// Stub clients for the surfaces these tests don't exercise. The seed
-/// helpers under test (`write_orgs`, `write_groups`) only touch DynamoDB; the
-/// Cognito + VP clients are present so `SeedContext` typechecks. They point at
-/// `127.0.0.1:0` so an accidental request fails fast with a connect error
-/// rather than silently hitting `dynamodb-local`.
-async fn build_stub_cognito_and_vp() -> (
-    aws_sdk_cognitoidentityprovider::Client,
-    aws_sdk_verifiedpermissions::Client,
-) {
+/// Stub client for the surface these tests don't exercise. The seed helpers
+/// under test (`write_orgs`, `write_groups`) only touch DynamoDB; the Cognito
+/// client is present so `SeedContext` typechecks. It points at `127.0.0.1:0`
+/// so an accidental request fails fast with a connect error rather than
+/// silently hitting `dynamodb-local`.
+async fn build_stub_cognito() -> aws_sdk_cognitoidentityprovider::Client {
     let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
         .endpoint_url("http://127.0.0.1:0")
         .region(aws_config::Region::new("us-east-2"))
         .test_credentials()
         .load()
         .await;
-    (
-        aws_sdk_cognitoidentityprovider::Client::new(&config),
-        aws_sdk_verifiedpermissions::Client::new(&config),
-    )
+    aws_sdk_cognitoidentityprovider::Client::new(&config)
 }
 
 async fn count_org_rows(
@@ -194,7 +188,7 @@ async fn seed_happy_path_writes_one_config_and_three_group_rows() {
     let dynamo = test_client().await;
     let table = unique_table_name();
     create_test_table(&dynamo, &table).await;
-    let (cognito, vp) = build_stub_cognito_and_vp().await;
+    let cognito = build_stub_cognito().await;
     let config: SeedConfig = toml::from_str(SEED_TOML).unwrap();
     let scope = SeededOrgScope::new(vec!["org-acme".to_owned()]).unwrap();
 
@@ -202,11 +196,9 @@ async fn seed_happy_path_writes_one_config_and_three_group_rows() {
     let ctx = SeedContext {
         dynamo: &dynamo,
         cognito: &cognito,
-        vp: &vp,
         user_pool_client: &user_pool_client,
         table_name: table.clone(),
         pool_id: "stub".to_owned(),
-        cp_dogfood_policy_store_id: "stub".to_owned(),
         config: &config,
         scope,
         now: Utc::now(),
@@ -248,7 +240,7 @@ async fn seed_is_idempotent() {
     let dynamo = test_client().await;
     let table = unique_table_name();
     create_test_table(&dynamo, &table).await;
-    let (cognito, vp) = build_stub_cognito_and_vp().await;
+    let cognito = build_stub_cognito().await;
     let config: SeedConfig = toml::from_str(SEED_TOML).unwrap();
     let scope = SeededOrgScope::new(vec!["org-acme".to_owned()]).unwrap();
 
@@ -256,11 +248,9 @@ async fn seed_is_idempotent() {
     let ctx = SeedContext {
         dynamo: &dynamo,
         cognito: &cognito,
-        vp: &vp,
         user_pool_client: &user_pool_client,
         table_name: table.clone(),
         pool_id: "stub".to_owned(),
-        cp_dogfood_policy_store_id: "stub".to_owned(),
         config: &config,
         scope,
         now: Utc::now(),
@@ -287,7 +277,7 @@ async fn seed_dangling_inherit_aborts_before_any_put() {
     let dynamo = test_client().await;
     let table = unique_table_name();
     create_test_table(&dynamo, &table).await;
-    let (cognito, vp) = build_stub_cognito_and_vp().await;
+    let cognito = build_stub_cognito().await;
     let toml_str = r#"
 [[organization]]
 org_id = "org-acme"
@@ -306,11 +296,9 @@ allow = []
     let ctx = SeedContext {
         dynamo: &dynamo,
         cognito: &cognito,
-        vp: &vp,
         user_pool_client: &user_pool_client,
         table_name: table.clone(),
         pool_id: "stub".to_owned(),
-        cp_dogfood_policy_store_id: "stub".to_owned(),
         config: &config,
         scope,
         now: Utc::now(),
@@ -337,7 +325,7 @@ async fn seed_cycle_aborts_before_any_put() {
     let dynamo = test_client().await;
     let table = unique_table_name();
     create_test_table(&dynamo, &table).await;
-    let (cognito, vp) = build_stub_cognito_and_vp().await;
+    let cognito = build_stub_cognito().await;
     let toml_str = r#"
 [[organization]]
 org_id = "org-acme"
@@ -361,11 +349,9 @@ allow = []
     let ctx = SeedContext {
         dynamo: &dynamo,
         cognito: &cognito,
-        vp: &vp,
         user_pool_client: &user_pool_client,
         table_name: table.clone(),
         pool_id: "stub".to_owned(),
-        cp_dogfood_policy_store_id: "stub".to_owned(),
         config: &config,
         scope,
         now: Utc::now(),

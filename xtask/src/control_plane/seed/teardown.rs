@@ -7,7 +7,6 @@
 //!   seeded `org-{id}-*` shape.
 //! - DynamoDB membership rows (`PK=USER#{sub}, SK=ORG#*`) for every deleted
 //!   user.
-//! - Stray `cp-rbac-{org}-{role}` policies in the CP-dogfood VP store.
 //!
 //! Failures are fatal; partial teardown is a knowable, recoverable state
 //! (re-run the seed). No retries.
@@ -24,7 +23,6 @@ use super::SeedContext;
 pub(crate) struct TeardownReport {
     pub(crate) users: Vec<String>,
     pub(crate) membership_rows: u32,
-    pub(crate) cp_vp_policies: u32,
 }
 
 /// Delete every Cognito user matching the seeded `org-{id}-*` shape and
@@ -136,67 +134,4 @@ async fn delete_membership_rows(ctx: &SeedContext<'_>, sub: &str) -> Result<u32>
         println!("  Deleted {deleted} membership row(s) for sub '{sub}'");
     }
     Ok(deleted)
-}
-
-/// Delete `cp-rbac-{org}-{role}` policies authored by V0 from the CP-dogfood
-/// VP store. Conservative match: a policy is deleted only if its description
-/// starts with `cp-rbac-` AND its org-id segment is in `ctx.scope`.
-pub(crate) async fn teardown_cp_vp_policies(ctx: &SeedContext<'_>) -> Result<u32> {
-    let mut policy_ids: Vec<String> = Vec::new();
-
-    let mut paginator = ctx
-        .vp
-        .list_policies()
-        .policy_store_id(&ctx.cp_dogfood_policy_store_id)
-        .into_paginator()
-        .send();
-
-    while let Some(page) = paginator.next().await {
-        let page = page.context("VP ListPolicies failed")?;
-        for item in page.policies() {
-            if *item.policy_type() == aws_sdk_verifiedpermissions::types::PolicyType::TemplateLinked
-            {
-                continue;
-            }
-            policy_ids.push(item.policy_id().to_owned());
-        }
-    }
-
-    let mut victims: Vec<String> = Vec::new();
-    for policy_id in policy_ids {
-        let detail = ctx
-            .vp
-            .get_policy()
-            .policy_store_id(&ctx.cp_dogfood_policy_store_id)
-            .policy_id(&policy_id)
-            .send()
-            .await
-            .with_context(|| format!("VP GetPolicy '{policy_id}' failed"))?;
-
-        let description = match detail.definition() {
-            Some(aws_sdk_verifiedpermissions::types::PolicyDefinitionDetail::Static(s)) => {
-                s.description().map(str::to_owned)
-            }
-            _ => None,
-        };
-
-        if pure::is_seeded_cp_rbac_policy(description.as_deref(), &ctx.scope) {
-            victims.push(policy_id);
-        }
-    }
-
-    victims.sort();
-
-    for policy_id in &victims {
-        ctx.vp
-            .delete_policy()
-            .policy_store_id(&ctx.cp_dogfood_policy_store_id)
-            .policy_id(policy_id)
-            .send()
-            .await
-            .with_context(|| format!("VP DeletePolicy '{policy_id}' failed"))?;
-        println!("  Deleted VP policy '{policy_id}'");
-    }
-
-    Ok(u32::try_from(victims.len()).unwrap_or(u32::MAX))
 }

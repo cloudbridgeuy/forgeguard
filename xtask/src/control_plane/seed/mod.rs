@@ -2,17 +2,13 @@
 //! organizations into DynamoDB as `OrgStatus::Draft`.
 //!
 //! ## V6 invariant
-//! No VP push. Every seeded org is `Draft`; Cognito users are created in Phase 4.
-//! Active-org VP permits are materialised per group write by the control plane
-//! (#113 V4 push-then-append) — never by the seed.
+//! Every seeded org is `Draft`; Cognito users are created in Phase 4.
+//! Group writes are pure event appends for every org status (#117 V2).
 //!
 //! ## 1Password dependencies
 //! - `op://forgeguard-{env}/dynamodb/table-name` — DDB table for the seed.
 //! - `op://forgeguard-{env}/cognito/user-pool-id` — CP dashboard pool the
 //!   teardown phase scans for `org-{id}-*` users.
-//! - `op://forgeguard-{env}/verified-permissions/policy-store-id` — same
-//!   CP-dogfood VP store `cargo xtask control-plane cedar sync` writes to;
-//!   the teardown phase removes any V0-era `cp-rbac-*` policies it finds.
 
 mod groups;
 mod orgs;
@@ -36,18 +32,16 @@ use super::seed_core::{DynamoTarget, SeedConfig};
 use groups::write_groups;
 use orgs::write_orgs;
 use pure::SeededOrgScope;
-use teardown::{teardown_cp_vp_policies, teardown_users};
+use teardown::teardown_users;
 use users::write_users;
 
 /// Wiring carried into every imperative-shell helper.
 pub(crate) struct SeedContext<'a> {
     pub(crate) dynamo: &'a aws_sdk_dynamodb::Client,
     pub(crate) cognito: &'a aws_sdk_cognitoidentityprovider::Client,
-    pub(crate) vp: &'a aws_sdk_verifiedpermissions::Client,
     pub(crate) user_pool_client: &'a dyn UserPoolClient,
     pub(crate) table_name: String,
     pub(crate) pool_id: String,
-    pub(crate) cp_dogfood_policy_store_id: String,
     pub(crate) config: &'a SeedConfig,
     pub(crate) scope: SeededOrgScope,
     pub(crate) now: DateTime<Utc>,
@@ -97,11 +91,9 @@ pub(crate) struct SeedArgs {
 struct SeedWiring {
     dynamo: aws_sdk_dynamodb::Client,
     cognito: aws_sdk_cognitoidentityprovider::Client,
-    vp: aws_sdk_verifiedpermissions::Client,
     user_pool_client: AwsCognitoUserPoolClient,
     table_name: String,
     pool_id: String,
-    cp_dogfood_policy_store_id: String,
     config: SeedConfig,
     scope: SeededOrgScope,
     target: DynamoTarget,
@@ -124,7 +116,6 @@ async fn build_seed_context(args: &SeedArgs) -> Result<SeedWiring> {
         DynamoTarget::Local { endpoint, .. } => build_local_dynamo_client(endpoint),
     };
     let cognito = aws_sdk_cognitoidentityprovider::Client::new(&sdk_config);
-    let vp = aws_sdk_verifiedpermissions::Client::new(&sdk_config);
     let user_pool_client = AwsCognitoUserPoolClient::new(cognito.clone());
 
     let vault = build_vault_name(args.env);
@@ -135,12 +126,6 @@ async fn build_seed_context(args: &SeedArgs) -> Result<SeedWiring> {
         DynamoTarget::Local { table, .. } => table.clone(),
     };
     let pool_id = read_op(&vault, "cognito", "user-pool-id", op_account)?;
-    let cp_dogfood_policy_store_id = read_op(
-        &vault,
-        "verified-permissions",
-        "policy-store-id",
-        op_account,
-    )?;
 
     let scope = SeededOrgScope::new(
         config
@@ -154,11 +139,9 @@ async fn build_seed_context(args: &SeedArgs) -> Result<SeedWiring> {
     Ok(SeedWiring {
         dynamo,
         cognito,
-        vp,
         user_pool_client,
         table_name,
         pool_id,
-        cp_dogfood_policy_store_id,
         config,
         scope,
         target,
@@ -170,11 +153,9 @@ pub(crate) async fn run(args: &SeedArgs) -> Result<()> {
     let SeedWiring {
         dynamo,
         cognito,
-        vp,
         user_pool_client,
         table_name,
         pool_id,
-        cp_dogfood_policy_store_id,
         config,
         scope,
         target,
@@ -182,11 +163,9 @@ pub(crate) async fn run(args: &SeedArgs) -> Result<()> {
     let ctx = SeedContext {
         dynamo: &dynamo,
         cognito: &cognito,
-        vp: &vp,
         user_pool_client: &user_pool_client,
         table_name,
         pool_id,
-        cp_dogfood_policy_store_id,
         config: &config,
         scope,
         now: Utc::now(),
@@ -210,13 +189,11 @@ pub(crate) async fn run(args: &SeedArgs) -> Result<()> {
     println!();
 
     println!("== Teardown phase ==");
-    let mut report = teardown_users(&ctx).await?;
-    report.cp_vp_policies = teardown_cp_vp_policies(&ctx).await?;
+    let report = teardown_users(&ctx).await?;
     println!(
-        "Tore down {} user(s), {} membership row(s), {} VP policy(ies).",
+        "Tore down {} user(s), {} membership row(s).",
         report.users.len(),
-        report.membership_rows,
-        report.cp_vp_policies
+        report.membership_rows
     );
     println!();
 
