@@ -36,25 +36,25 @@ pub(crate) trait OrgStore: Send + Sync {
 | `InMemoryOrgStore` | In-memory HashMap behind `tokio::sync::RwLock` | File-backed dev mode, tests |
 | `DynamoOrgStore` | DynamoDB-backed | Production SaaS |
 
-`app.rs` builds a single `Arc<dyn OrgStore>` at startup (memory or DynamoDB based on `--store`) and stores it on `AppState<V>`. There is no enum or wrapper — backend selection happens once at construction; every consumer downstream sees the same trait object.
+`app.rs` builds a single `Arc<dyn OrgStore>` at startup (memory or DynamoDB based on `--store`) and stores it on `AppState`. There is no enum or wrapper — backend selection happens once at construction; every consumer downstream sees the same trait object. `AppState` is non-generic (de-genericized in #117, after `VpClient` and the VP SDK wiring were deleted — there is nothing left to parameterize over).
 
 ### Handler state extraction
 
 Handlers come in two shapes:
 
-- **No VP needed** (org read, `list_keys`): take `State<Arc<dyn OrgStore>>` directly. `AppState<V>` exposes the store via a `FromRef<AppState<V>> for Arc<dyn OrgStore>` impl, so Axum derives the sub-state automatically.
-- **VP needed** (group write handlers under `/groups`; key mutation handlers under `/keys`, which reach `state.model_events`): take `State<AppState<V>>` and reach `state.store` / `state.vp` / `state.model_events`. Only this group of handlers carries the `<V: VpClient>` parameter.
+- **Store-only** (org read, `list_keys`): take `State<Arc<dyn OrgStore>>` directly. `AppState` exposes the store via a `FromRef<AppState> for Arc<dyn OrgStore>` impl, so Axum derives the sub-state automatically.
+- **Event-log writes** (group write handlers under `/groups`; key mutation handlers under `/keys`): take `State<AppState>` and reach `state.store` / `state.model_events`.
 
 The rule when adding a new handler: never introduce `<S: OrgStore>` on a handler signature. If you find yourself wanting it, take `Arc<dyn OrgStore>` instead — it is the same dispatch under the hood with one fewer monomorphization. Per-handler generics over `S: OrgStore` are a removed pattern; do not reintroduce them.
 
 ### Test fixtures
 
-Tests live under `handlers::tests::test_support` and `handlers::tests::active_support`:
+Tests live under `handlers::tests::test_support`:
 
 - `empty_store() -> Arc<dyn OrgStore>` — default helper. Use when the test only needs trait methods.
 - `empty_in_memory_store() -> Arc<InMemoryOrgStore>` — escape hatch when a test needs `InMemoryOrgStore::seed_membership(...)` (a `#[cfg(test)]` inherent method that is intentionally not on the trait). Tests that use this typically shadow with `let store_dyn: Arc<dyn OrgStore> = Arc::clone(&store) as _;` for the request layer.
-- `FailingStore` — non-generic delegating wrapper over `Arc<dyn OrgStore>` that one-shot fails `delete_group` or `put_group` to drive F3' rollback paths. Adding methods to `OrgStore` requires updating `FailingStore` in lock-step.
-- `test_app_for_store(store: Arc<dyn OrgStore>, vp: Arc<StubVpClient>)` — minimal router (group routes only) for the V3 Active-org failure-mode tests.
+
+The `FailingStore` wrapper and the F3/F3'/F4 rollback-path fixtures that used to drive VP-push failure-mode tests were deleted in #117 V2 along with the write pipeline they exercised (group writes are now a pure event append with nothing left to roll back).
 
 ### OrgRecord
 
@@ -255,7 +255,7 @@ BYOC Proxy                              Control Plane
 
 **Embedded CP Authorization (#117 V1):** `cp:*` authorization decisions run in-process on an embedded Cedar engine — zero AWS Verified Permissions calls on the request path. `crates/control-plane/build.rs` compiles the repo-root `forgeguard.toml` (`[schema]`/`[tenant]`/`[[policies]]`) into Cedar policy text at build time via `forgeguard_authz_core::compile_cp_model` (a trimmed port of the xtask `cedar_core` compiler); a bad model fails the build. The compiled text is embedded via `include_str!(concat!(env!("OUT_DIR"), "/cp_policies.cedar"))` and parsed into a `Snapshot` at startup in `build_forgeguard`. When auth is enabled, the policy engine is `CpCedarEngine` (`forgeguard_authz_core`), which builds Cedar entities/requests per query (a local port of `crates/authz/src/translate.rs`'s VP entity shapes) and evaluates with `cedar_policy::Authorizer` against the embedded snapshot. The Cedar project namespace is `forgeguard` (from `ProjectId::new("forgeguard")`). The tenant is read per request from `PolicyContext::tenant_id()` — populated from the `X-ForgeGuard-Org-Id` header during pipeline Phase 5b (membership enrichment). `DefaultPolicy::Deny` is used — unmatched routes are denied. See the Authorization section below for the route-to-action mapping and PrincipalKind routing.
 
-`--policy-store-id` is still parsed (kept for backward-compat with existing deploy configs) but is **ignored** — it no longer drives engine construction. `forgeguard_authz` (the retired `VpPolicyEngine`) is no longer used for `cp:*` decisions at all; the crate stays wired for the V3 Groups VP-store push (`vp` Cargo feature, default ON) until that is retired separately. `cedar sync`/`cedar diff`/`cedar status` still exist for the VP store but no longer feed the request path — full retirement targeted for V3 of issue #117.
+There is no `--policy-store-id` flag — it was deleted in #117 V3 along with the rest of the CP-side Verified Permissions wiring (`forgeguard_authz`'s `VpPolicyEngine`, the `vp` Cargo feature, and `cargo xtask control-plane cedar {status,diff,sync}`). Auth is configured entirely via `--jwks-url`/`--issuer`/`--audience`.
 
 ## Authorization
 
@@ -267,7 +267,7 @@ BYOC Proxy                              Control Plane
 | `--jwks-url` + `--store=memory` | `CpCedarEngine` (embedded) | `Deny` |
 | `--jwks-url` + `--store=dynamodb` | `CpCedarEngine` (embedded) | `Deny` |
 
-The Cedar namespace is `forgeguard` (from `ProjectId::new("forgeguard")`). The tenant is resolved per request from `PolicyContext::tenant_id()` (populated from `X-ForgeGuard-Org-Id` via pipeline Phase 5b), not fixed at engine construction. The engine itself is embedded (compiled from `forgeguard.toml` at build time) rather than backed by a VP client — `--policy-store-id` no longer gates which engine is used.
+The Cedar namespace is `forgeguard` (from `ProjectId::new("forgeguard")`). The tenant is resolved per request from `PolicyContext::tenant_id()` (populated from `X-ForgeGuard-Org-Id` via pipeline Phase 5b), not fixed at engine construction. The engine itself is embedded (compiled from `forgeguard.toml` at build time) — there is no VP client and no policy-store flag anywhere in the control plane.
 
 ### Route-to-Action Mapping
 
@@ -345,7 +345,6 @@ cargo run -p forgeguard_control_plane -- --store dynamodb --dynamodb-table forge
 | `--jwks-url` | `FORGEGUARD_CP_JWKS_URL` | JWKS URL for Cognito JWT auth. Omit for dev mode (no auth) |
 | `--issuer` | `FORGEGUARD_CP_ISSUER` | JWT issuer URL. Required when `--jwks-url` is set |
 | `--audience` | `FORGEGUARD_CP_AUDIENCE` | JWT audience (Cognito app client ID). Optional |
-| `--policy-store-id` | `FORGEGUARD_CP_POLICY_STORE_ID` | DEPRECATED: ignored since #117 V1 (`cp:*` authorization is embedded). Still parsed/required when `--jwks-url` is set for backward-compat |
 
 See `crates/control-plane/README.md` for full usage instructions and curl examples.
 
@@ -583,7 +582,7 @@ Serves the org's event-signing public key(s), for external envelope verification
 
 ### Authorization
 
-`cp:signing-key:read` maps to the Cedar action `cp-signing-key-read` (`Some("org_id")`, tenant-scoped), read-tier (`member` role, beside `cp-promotion-list`). `forgeguard.toml` carries a `machine-signing-key-read` permit mirroring `machine-promotion-list`, since SDK consumers verifying envelopes are machines. **Not yet synced to the prod VP policy store** — `cargo xtask control-plane cedar sync` is a deployment step outside this slice.
+`cp:signing-key:read` maps to the Cedar action `cp-signing-key-read` (`Some("org_id")`, tenant-scoped), read-tier (`member` role, beside `cp-promotion-list`). `forgeguard.toml` carries a `machine-signing-key-read` permit mirroring `machine-promotion-list`, since SDK consumers verifying envelopes are machines. Since #117 V1/V3, this is picked up automatically the next time the control-plane binary is rebuilt — the embedded engine compiles `forgeguard.toml` at build time, with no separate VP-sync deployment step.
 
 ## Time Travel (V5 of the event-log spine, D9)
 

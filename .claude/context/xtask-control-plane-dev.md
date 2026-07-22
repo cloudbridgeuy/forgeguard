@@ -15,18 +15,18 @@ The parent ignores `SIGINT` while the child runs so that Ctrl-C reaches only the
 
 ## AWS env wiring
 
-The CP binary builds one shared `aws_config::defaults(...)` `SdkConfig` and hands it to both the DynamoDB client and the Verified Permissions client (`crates/control-plane/src/app.rs:78-87`). Because the same config feeds every AWS client, the dev stack has to scope its overrides carefully or they leak to services that should hit real AWS.
+The CP binary builds one shared `aws_config::defaults(...)` `SdkConfig` and hands it to the DynamoDB client (`crates/control-plane/src/app.rs:78-87`). Because the same config feeds every AWS client, the dev stack has to scope its overrides carefully or they leak to services that should hit real AWS.
 
 The child inherits the parent shell's environment with two overrides:
 
 | Env var | Value | Why |
 |---|---|---|
-| `AWS_ENDPOINT_URL_DYNAMODB` | `http://127.0.0.1:<port>` | Per-service endpoint override. Scopes the redirect to DynamoDB only. The service-unspecific `AWS_ENDPOINT_URL` would redirect VP/Cognito to `dynamodb-local` too — you'd see responses from the local Jetty server (`com.amazonaws.dynamodb.v20120810#InvalidAction`) being interpreted as a VP deny. `aws-config` 1.x resolves `AWS_ENDPOINT_URL_<SERVICE>` natively via its default provider chain. |
+| `AWS_ENDPOINT_URL_DYNAMODB` | `http://127.0.0.1:<port>` | Per-service endpoint override. Scopes the redirect to DynamoDB only. The service-unspecific `AWS_ENDPOINT_URL` would redirect Cognito to `dynamodb-local` too, breaking auth. `aws-config` 1.x resolves `AWS_ENDPOINT_URL_<SERVICE>` natively via its default provider chain. |
 | `AWS_REGION` | `us-east-2` | Pins the region so the child has a deterministic value regardless of what the caller's shell or profile sets. |
 
 **No access-key env vars are set.** The SDK's default credential provider chain resolves credentials from the parent shell (typically `AWS_PROFILE=admin` + an active SSO session). Why not force `AWS_ACCESS_KEY_ID=test`/`AWS_SECRET_ACCESS_KEY=test` like some dynamodb-local guides suggest?
 
-- VP and Cognito calls go to real AWS and reject synthetic credentials with `AccessDeniedException: "The security token included in the request is invalid."`
+- Cognito calls go to real AWS and reject synthetic credentials with `AccessDeniedException: "The security token included in the request is invalid."`
 - `dynamodb-local` accepts any signed request, so real SSO credentials work for it as well. There's no reason to force a fake pair.
 
 Because credential inheritance is silent, the launch banner reminds the operator to set `AWS_PROFILE` and refresh the SSO session before starting dev.
@@ -53,11 +53,10 @@ ISS=https://cognito-idp.us-east-2.amazonaws.com/<pool-id>
 
 cargo xtask control-plane dev -- \
   --jwks-url "$ISS/.well-known/jwks.json" \
-  --issuer "$ISS" \
-  --policy-store-id ignored
+  --issuer "$ISS"
 ```
 
-`--policy-store-id` is required whenever `--jwks-url` is set but its value is ignored — since issue #117 V1 the `cp:*` decision runs on the embedded `CpCedarEngine`, not Verified Permissions (deleted entirely in V3). With auth on, requests also need a membership row (`PK=USER#{sub}, SK=ORG#{org_id}` with a `groups` list) in the local table or they fail closed with 403 `"Not a member of this organization"`.
+Since issue #117 V1 the `cp:*` decision runs on the embedded `CpCedarEngine` (compiled from `forgeguard.toml` at build time) — there is no policy-store flag to pass; #117 V3 deleted `--policy-store-id` entirely. With auth on, requests also need a membership row (`PK=USER#{sub}, SK=ORG#{org_id}` with a `groups` list) in the local table or they fail closed with 403 `"Not a member of this organization"`.
 
 ## Ports and cleanup
 

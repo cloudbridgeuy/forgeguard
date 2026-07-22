@@ -14,9 +14,12 @@
 > proxy's tenant policy delivery), but the control plane no longer reads it to
 > branch group-write behavior. The historical VP-push material below
 > (`VP Client`, `[name]` description-prefix encoding, policy naming) is kept
-> for archaeological reference — it still describes `xtask cedar sync`, which
-> is unaffected by this change — but no longer describes anything the CP
-> runtime does on a group write.
+> for archaeological reference. It originally noted that `xtask cedar sync`
+> was unaffected and retained its own VP client — that is no longer true:
+> #117 V3 deleted `cargo xtask control-plane cedar {status,diff,sync}`
+> entirely, along with the CDK `VerifiedPermissionsStack`. There is now no
+> Verified Permissions client or CLI anywhere in the control-plane toolchain;
+> the material below describes code and tooling that no longer exists.
 
 ## Write Pipeline (event-sourced append, current)
 
@@ -136,9 +139,9 @@ and went straight to the event-sourced append.
 
 `crates/control-plane/src/vp_client/` was the only module that talked to VP.
 It has been deleted entirely, along with the `aws-sdk-verifiedpermissions`
-dependency. (`xtask cedar sync` retains its own, separate VP client — see
-`xtask/src/control_plane/cedar_io.rs` — that tool is unaffected by this
-change.)
+dependency. `xtask cedar sync`'s own, separate VP client (`xtask/src/control_plane/cedar_io.rs`)
+was later deleted too, in #117 V3 — there is no VP client anywhere in the
+control-plane toolchain today.
 
 | File | Role |
 |------|------|
@@ -167,24 +170,22 @@ pub(crate) trait VpClient: Send + Sync {
 was non-atomic — callers had to treat `Error::NotFound` as "no policy with
 that name right now," not "the delete itself failed."
 
-#### `[name]` Description-Prefix Encoding (still live in `xtask cedar sync`)
+#### `[name]` Description-Prefix Encoding (historical, deleted #117 V3)
 
 VP rejects a `name` field on `CreatePolicy` (`ValidationException: Invalid input`).
 The workaround — encoding the resource name as a `[name]` prefix in the
-`description` field — was **shared between two callers** while the CP's own
-VP client existed:
+`description` field — was **shared between two callers**, both now deleted:
 
-1. `xtask cedar sync` (`xtask/src/control_plane/cedar_io.rs`) — **still uses this.**
-2. The control-plane runtime (`crates/control-plane/src/vp_client/mod.rs`) — **deleted.**
+1. `xtask cedar sync` (`xtask/src/control_plane/cedar_io.rs`) — deleted in #117 V3.
+2. The control-plane runtime (`crates/control-plane/src/vp_client/mod.rs`) — deleted in #117 V2.
 
-See [verified-permissions.md § VP API Quirks](./verified-permissions.md#vp-api-quirks)
-for the original quirk; the encoder/decoder now lives solely in
-`xtask/src/control_plane/cedar_io.rs`.
+Kept here for archaeology only — the encoder/decoder no longer exists anywhere in the repo.
 
-#### Policy Naming (historical, `xtask cedar sync` still uses this convention)
+#### Policy Naming (historical, deleted #117 V3)
 
 Group `name` → VP policy name via `policy_name_for_group`, formerly in
-`active_pure.rs` (deleted), now only relevant to `xtask cedar sync`:
+`active_pure.rs` (deleted in #117 V2), then in `xtask cedar sync` (deleted in
+#117 V3):
 
 ```
 admin   →  cp-rbac-admin

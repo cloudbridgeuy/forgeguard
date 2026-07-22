@@ -104,18 +104,9 @@ All flags use clap's `env` attribute — precedence is: CLI flag > env var > def
 
 The Lambda stack reads Cognito outputs as cross-stack references and injects them as env vars (`FORGEGUARD_CP_JWKS_URL`, `FORGEGUARD_CP_ISSUER`, `FORGEGUARD_CP_AUDIENCE`) into the control-plane function.
 
-### Verified Permissions (`forgeguard-{env}-vp`)
-
-- **Policy store:** validation mode `OFF` (we author Cedar directly; relying on CDK-side schema validation is left to the `cedar sync` engine).
-- **Identity source:** Cognito user pool wired in when `userPoolArn` and `appClientId` props are passed (currently always present from `bin/app.ts`). Used by VP for `IsAuthorizedWithToken` flows; the CP doesn't call that today.
-- **Outputs:** `PolicyStoreId` (CFN output for operator visibility).
-- **Public stack properties:** `policyStoreId` and `policyStoreArn` are exposed as `public readonly` fields on `VerifiedPermissionsStack`. Both are sourced from CFN attribute getters (`attrPolicyStoreId`, `attrArn`) — never from `cdk.Stack.formatArn`. See [aws-arn-formats.md](./aws-arn-formats.md) for the empty-region-segment trap.
-
-These properties feed the Lambda stack via constructor props in `bin/app.ts`. Deploy order: VP stack must be constructed (and exist in CFN) before LambdaStack, because the cross-stack reference becomes an `Fn::ImportValue` that requires the export to already be resolved. CDK's `cdk deploy --all` handles this automatically; selective `cdk deploy forgeguard-{env}-lambda` against a fresh account fails until the VP stack lands first.
-
 ### Control-plane Lambda runtime contract
 
-The control-plane Lambda's startup behavior depends on a coupled env-var-plus-IAM contract. The Rust binary's parse-time invariant ([authn-wiring.md](./authn-wiring.md)) panics at cold start if the env says "JWT auth is on" without a backing VP store, so the CDK stack must inject both halves together.
+The control-plane Lambda's startup behavior depends on an env-var-plus-IAM contract. The Rust binary's parse-time invariant ([authn-wiring.md](./authn-wiring.md)) panics at cold start if the env says "JWT auth is on" without the other Cognito-derived values present, so the CDK stack must inject them together.
 
 | Env var | Source | Required |
 | ------- | ------ | -------- |
@@ -123,17 +114,21 @@ The control-plane Lambda's startup behavior depends on a coupled env-var-plus-IA
 | `FORGEGUARD_CP_JWKS_URL` | Cognito stack | When auth is enabled (always in deployed envs) |
 | `FORGEGUARD_CP_ISSUER` | Cognito stack | When auth is enabled |
 | `FORGEGUARD_CP_AUDIENCE` | Cognito stack (app client id) | When auth is enabled |
-| `FORGEGUARD_CP_POLICY_STORE_ID` | VP stack (`policyStoreId`) | When auth is enabled (parse-time invariant: JWT ⇒ VP) |
+| `FORGEGUARD_CP_COGNITO_POOL_ID` | Cognito stack | When auth is enabled |
 
 | IAM grant | Resource | Why |
 | --------- | -------- | --- |
 | `dynamodb:*` (read+write) | `TABLE_NAME` ARN | `table.grantReadWriteData(controlPlane)` |
-| `verifiedpermissions:IsAuthorized` | Policy store ARN (`policyStoreArn`) | CP authorization decisions; scoped — never `*` |
-| `verifiedpermissions:{CreatePolicy,DeletePolicy,ListPolicies,GetPolicy}` | `*` (unavoidable) | **Dead weight after #117 V2.** Historically backed V3 Active-org group writes, which materialised Cedar permits into each org's **dedicated** VP store (per-org store ARNs are created at runtime and are unknowable to CDK, so these write actions could not be ARN-scoped). Since #117 V2, group writes are pure event-sourced appends and never call VP — this grant is unused by the binary and slated for deletion in a future V3 (issue #117) CDK slice. |
 
-`IsAuthorizedWithToken` is **not** granted because the CP parses JWTs itself and submits a fully-formed `IsAuthorized` request. If a future slice adopts token-mode VP calls, expand the action list there.
+There is no Verified Permissions IAM grant on the control-plane execution role. `cp:*` authorization decisions run entirely in-process on the embedded `CpCedarEngine` (compiled from `forgeguard.toml` at build time); #117 V3 deleted the CDK `VerifiedPermissionsStack`, the `verifiedpermissions:IsAuthorized` grant, and the `verifiedpermissions:{CreatePolicy,DeletePolicy,ListPolicies,GetPolicy}` grant that used to back V3 group-write VP pushes (that write path was itself retired in #117 V2).
 
-The VP write grant is a separate `addToRolePolicy` statement (not folded into the `IsAuthorized` one) precisely because its `resources` is `*` while `IsAuthorized` stays scoped — keeping them apart documents the asymmetry. See [groups-v3.md](./groups-v3.md) for the per-org store model and `policy_name_for_group` (`cp-rbac-{name}`, no org prefix → why each org needs its own store).
+**Manual one-time cleanup (post #117 V3):** removing the stack from the CDK app does not destroy the already-deployed CloudFormation stack. Delete it by hand:
+
+```bash
+aws cloudformation delete-stack --stack-name forgeguard-prod-vp --region us-east-2 --profile admin
+```
+
+Runtime-created per-org VP policy stores (from the now-deleted V3/V4 group-write push path) are also inert and orphaned — they are not referenced by CDK and need hand-teardown if cleanup is desired. The 1Password field `op://forgeguard-prod/verified-permissions/policy-store-id` is likewise orphaned and can be removed from the vault.
 
 #### Schema changes that require pool replacement
 
@@ -141,28 +136,15 @@ Cognito does not support removing or modifying custom schema attributes or Cogni
 
 When a schema change is required, force pool recreation by changing the construct id (e.g., `DashboardUserPool` → `DashboardUserPoolV2`). CDK emits a new logical id; CloudFormation creates a fresh pool and handles the old one per its `RemovalPolicy`.
 
-Because the Lambda and VP stacks import pool exports (`userPoolId`, `userPoolArn`, `appClientId`), a straight CDK redeploy blocks with `Cannot update export … as it is in use`. The canonical migration is:
+Because the Lambda stack imports pool exports (`userPoolId`, `userPoolArn`, `appClientId`), a straight CDK redeploy blocks with `Cannot update export … as it is in use`. The canonical migration is:
 
-1. Replace the cognito props passed to `LambdaStack`/`VerifiedPermissionsStack` in `bin/app.ts` with dummy literals (`"DECOMMISSIONED"` / `undefined`).
-2. `cdk deploy forgeguard-prod-lambda forgeguard-prod-vp --exclusively` — drops imports.
+1. Replace the cognito props passed to `LambdaStack` in `bin/app.ts` with dummy literals (`"DECOMMISSIONED"` / `undefined`).
+2. `cdk deploy forgeguard-prod-lambda --exclusively` — drops imports.
 3. Apply the pool rename in `cognito-stack.ts` and `cdk deploy forgeguard-prod-cognito --exclusively`.
 4. Restore the real cognito props in `bin/app.ts` and `cargo xtask control-plane infra deploy`.
 5. Update 1Password entries (auto-refreshed by `infra deploy`) and run `cargo xtask control-plane seed`.
 
 The old pool is deleted per its `removalPolicy` (or orphaned on `RETAIN`). Child `UserPoolDomain`/`UserPoolClient` resources whose physical parent is already gone may land in `DELETE_FAILED`; the parent stack still reaches `UPDATE_COMPLETE` and the zombie does not block subsequent deploys.
-
-### Verified Permissions (`forgeguard-{env}-vp`)
-
-- **Policy store:** `vp.CfnPolicyStore` with `validationSettings.mode = "OFF"` (Cedar schema is managed via `cargo xtask control-plane cedar sync`, not CloudFormation).
-- **Identity source:** `vp.CfnIdentitySource` bound to the Cognito user pool + app client when both arns are passed in.
-- **Stack exports:** `policyStoreId` and `policyStoreArn` as `public readonly` properties (consumed by the Lambda stack via cross-stack references) plus matching `CfnOutput`s for human visibility.
-- **ARN format:** Verified Permissions is region-less. The stack exposes `policyStoreArn` straight from the CFN attribute getter (`policyStore.attrArn`) rather than hand-building it with `cdk.Stack.formatArn`. CloudFormation already emits the correct region-less `arn:aws:verifiedpermissions::<account>:policy-store/<id>`, so the manual `formatArn` call (with its empty-region-segment trap) is unnecessary. See [aws-arn-formats.md](./aws-arn-formats.md).
-- **Stack ordering:** instantiated in `bin/app.ts` *before* `LambdaStack` so the policy store id and arn are available as constructor props.
-
-The Lambda stack imports those exports and:
-
-1. Sets `FORGEGUARD_CP_POLICY_STORE_ID` on the control-plane function. The CP binary requires JWT (`FORGEGUARD_CP_JWKS_URL`) and policy-store id to be configured *together* — V4 wires `VpPolicyEngine` with `DefaultPolicy::Deny` whenever JWT is on. Missing the policy-store id makes init panic and the function URL returns 502 on every request.
-2. Grants `verifiedpermissions:IsAuthorized` on the execution role, scoped to `policyStoreArn` (no wildcard).
 
 ## FCIS Split (xtask)
 

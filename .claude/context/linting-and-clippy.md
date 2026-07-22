@@ -57,7 +57,8 @@ These live in source (not workspace config) so test code can still use `.unwrap(
 ## FCIS Carve-outs
 
 `xtask` may depend on pure leaf crates that have no I/O deps — currently
-`crates/authz-core`. This lets `cargo xtask control-plane cedar sync` and
-the control-plane Groups handler share the canonical RBAC compiler without
-duplicating the implementation. See `xtask/README.md` for the dep policy
-and `crates/authz-core/README.md` for the exposed module.
+`crates/authz-core`. This lets `cargo xtask control-plane seed`'s RBAC
+validation and the control-plane Groups handler share the canonical RBAC
+compiler without duplicating the implementation (`cargo xtask control-plane
+cedar {status,diff,sync}` was deleted in #117 V3). See `xtask/README.md` for
+the dep policy and `crates/authz-core/README.md` for the exposed module.

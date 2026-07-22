@@ -44,7 +44,7 @@ The measured cedar-policy spike (seven conformance assertions S1–S5, toolchain
 | [xtask lint](./.claude/context/xtask-lint.md) | Lint pipeline checks, flags, architecture, and adding new checks. |
 | [xtask Wrapper](./.claude/context/xtask-wrapper.md) | `cargo-xtask` mtime staleness, FCIS module split, hot/cold paths, and `--rebuild`. |
 | [Feature Flags](./.claude/context/feature-flags.md) | Flag types, evaluation order, overrides, debug endpoint, and proxy wiring. |
-| [Verified Permissions](./.claude/context/verified-permissions.md) | VP integration: action format, Cedar types, CLI, config, and infrastructure. |
+| [Verified Permissions](./.claude/context/verified-permissions.md) | Proxy-side VP integration (action format, Cedar types, CLI, config — unchanged) plus the control-plane RBAC role model (member/admin/owner, tenant scoping, machine permit), now compiled into an embedded Cedar engine; CP-side Cedar-sync/VP-push tooling is fully retired (#117 V3). |
 | [Container Builds](./.claude/context/container-builds.md) | Distroless images, multi-stage builds, SSL strategy, and health checks. |
 | [CORS](./.claude/context/cors.md) | CORS config, origin matching, request flow, and crate placement. |
 | [SaaS Architecture](./.claude/context/saas-architecture.md) | Control/data plane split, infra stack, event-log-driven worker, and org domain model. |

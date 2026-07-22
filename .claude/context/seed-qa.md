@@ -2,7 +2,9 @@
 
 Companion to [xtask-control-plane-tools.md](./xtask-control-plane-tools.md). Use this doc to validate `cargo xtask control-plane seed` end-to-end after refactors that touch the seed/loader/teardown paths.
 
-The canonical step-by-step plan lives at `.claude/plans/2026-05-06-issue-102-cp-groups-v5/v5-plan-qa.md`. That file is the source of truth for the **scenarios** (lint → unit → DDB integration → loader behavior → local e2e). This doc holds the **prod-only** procedure that the plan flags as "nice-to-have" — concretely, the template-linked VP policy survival check that needs a live Verified Permissions store.
+The canonical step-by-step plan lives at `.claude/plans/2026-05-06-issue-102-cp-groups-v5/v5-plan-qa.md`. That file is the source of truth for the **scenarios** (lint → unit → DDB integration → loader behavior → local e2e).
+
+> The prod-VP template-linked survival fixture that used to live in this doc was removed in #117 V3: `seed`'s Verified Permissions teardown sweep, the CP-dogfood VP store it targeted, and the `verified-permissions/policy-store-id` 1Password field are all gone. Seed teardown is now Cognito-users-and-membership-rows only.
 
 ## Quick Scenario Summary
 
@@ -16,102 +18,6 @@ The canonical step-by-step plan lives at `.claude/plans/2026-05-06-issue-102-cp-
 
 Acceptance is "all four `seed_*` integration tests pass" — `seed_happy_path_writes_one_config_and_three_group_rows`, `seed_is_idempotent`, `seed_dangling_inherit_aborts_before_any_put`, `seed_cycle_aborts_before_any_put`.
 
-## Prod-VP Template-Linked Fixture (Edge Case 3)
+## Where The Teardown Logic Lives
 
-**Why:** the teardown filter at `xtask/src/control_plane/seed/teardown.rs:157` (`PolicyType::TemplateLinked → continue`) protects template-linked policies from the `cp-rbac-*` description sweep. This procedure validates the filter end-to-end against a real VP store.
-
-**Status after #117 V2:** the control plane no longer pushes any policies to
-VP on live group writes — group `PUT`/`POST`/`DELETE` is a pure
-event-sourced append for every org status now, with zero VP calls. This
-fixture originally simulated a policy that could collide with what a live
-group write pushed; since nothing pushes fresh `cp-rbac-*` policies from
-group writes any more, this scenario now only covers survival of
-**legacy/leftover V0-seed** policies against the teardown sweep, not
-anything the CP produces today. The fixture is a candidate for deletion in a
-future V3 (issue #117) slice once the CDK-side VP write IAM is also removed.
-
-**Blast radius:** the seed command runs against the prod VP store + prod DynamoDB + prod Cognito. This is the canonical dev workflow per `CLAUDE.md` ("only `prod` exists"), but every invocation rewrites the prod seed orgs. Run only when you intend to refresh the seed state.
-
-### 1. Resolve the prod policy store
-
-```bash
-export FG_VP_STORE_ID=$(op read 'op://forgeguard-prod/verified-permissions/policy-store-id')
-aws verifiedpermissions get-policy-store \
-  --region us-east-2 --profile admin \
-  --policy-store-id "$FG_VP_STORE_ID" --query 'arn'
-```
-
-### 2. Create a policy template with a `cp-rbac-` description
-
-The description prefix makes the test rigorous: if the `TemplateLinked` filter ever regressed, the description filter would catch the fixture and delete it.
-
-```bash
-export FG_VP_TEMPLATE_ID=$(aws verifiedpermissions create-policy-template \
-  --region us-east-2 --profile admin \
-  --policy-store-id "$FG_VP_STORE_ID" \
-  --description "cp-rbac-qa-template-linked-fixture-issue-102-v5" \
-  --statement 'permit(principal == ?principal, action, resource);' \
-  --query 'policyTemplateId' --output text)
-```
-
-### 3. Link the template to a synthetic principal
-
-```bash
-export FG_VP_LINKED_POLICY_ID=$(aws verifiedpermissions create-policy \
-  --region us-east-2 --profile admin \
-  --policy-store-id "$FG_VP_STORE_ID" \
-  --definition "{
-    \"templateLinked\": {
-      \"policyTemplateId\": \"$FG_VP_TEMPLATE_ID\",
-      \"principal\": {
-        \"entityType\": \"forgeguard::User\",
-        \"entityId\": \"qa-fixture-issue-102-v5\"
-      }
-    }
-  }" \
-  --query 'policyId' --output text)
-```
-
-### 4. Run the seed (destructive against prod DDB/Cognito/VP)
-
-```bash
-cargo xtask control-plane seed
-```
-
-Expected: exit 0, both orgs seeded as Draft, six group rows total.
-
-### 5. Verify the fixture survived
-
-```bash
-aws verifiedpermissions get-policy \
-  --region us-east-2 --profile admin \
-  --policy-store-id "$FG_VP_STORE_ID" \
-  --policy-id "$FG_VP_LINKED_POLICY_ID" \
-  --query '{type:policyType,created:createdDate}'
-```
-
-Acceptance: `type` is `TEMPLATE_LINKED` and `created` matches the pre-seed timestamp (proves it was not deleted+recreated).
-
-### 6. Cleanup (required — fixtures must not linger)
-
-```bash
-aws verifiedpermissions delete-policy \
-  --region us-east-2 --profile admin \
-  --policy-store-id "$FG_VP_STORE_ID" \
-  --policy-id "$FG_VP_LINKED_POLICY_ID"
-
-aws verifiedpermissions delete-policy-template \
-  --region us-east-2 --profile admin \
-  --policy-store-id "$FG_VP_STORE_ID" \
-  --policy-template-id "$FG_VP_TEMPLATE_ID"
-```
-
-VP requires linked policies to be deleted before their template.
-
-## Where The Filters Live
-
-| Filter | File | What it skips |
-|---|---|---|
-| `PolicyType::TemplateLinked` early-exit | `xtask/src/control_plane/seed/teardown.rs:157` | Any template-linked policy, before description is inspected |
-| `pure::is_seeded_cp_rbac_policy` description match | `xtask/src/control_plane/seed/teardown.rs:183` | Any static policy whose description does not name a seeded org scope |
-| Local-DDB short-circuit on teardown | `xtask/src/control_plane/seed/teardown.rs` | Cognito + VP teardown is skipped when `--dynamodb-endpoint` is set (local emulator has neither) |
+Teardown (`xtask/src/control_plane/seed/teardown.rs`) is Cognito-users-and-DynamoDB-membership-rows only: it deletes seeded users (matched via `pure::is_seeded_username`) and their `PK=USER#{sub}, SK=ORG#{org_id}` rows. The `--dynamodb-endpoint` local-DDB path short-circuits Cognito teardown entirely (no local emulator for it).

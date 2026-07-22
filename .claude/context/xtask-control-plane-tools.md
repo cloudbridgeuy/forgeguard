@@ -4,12 +4,12 @@ The `cargo xtask control-plane` binary ships three subcommands that automate end
 
 ## `seed` — Reset organizations as Draft
 
-Reads `xtask/seed.toml`, tears down prior fixtures, and re-seeds each declared org as `OrgStatus::Draft` with its RBAC roles and Cognito users. **No Verified Permissions policies are pushed** — Active-org VP materialization only happens on live group writes against an `Active` org (see [groups-v3.md](./groups-v3.md)).
+Reads `xtask/seed.toml`, tears down prior fixtures, and re-seeds each declared org as `OrgStatus::Draft` with its RBAC roles and Cognito users. There is no Verified Permissions involvement anywhere in this flow — group writes are pure event-sourced appends (see [groups-v3.md](./groups-v3.md)), and the CP-dogfood VP store itself was deleted in #117 V3.
 
 The command runs in three phases:
 
 1. **Phase 0 (preflight, pure)** — `pure::preflight_validate` walks every declared org and, before any AWS call, validates `OrganizationId::new(org_id)`, `PoolId::try_new(cognito_user_pool_id)`, validates every declared user's attributes, validates each user's `GroupName`s, and validates the group inheritance graph (name regex, dangling inherit, cycles). A failure anywhere aborts the seed before Teardown or Re-seed touch AWS.
-2. **Teardown** — scans the CP dashboard Cognito pool for usernames matching `org-{seeded_org_id_suffix}-*` (per `pure::is_seeded_username`), deletes those users, deletes their `PK=USER#{sub}, SK=ORG#…` membership rows in DynamoDB, and removes any `cp-rbac-*` policies the V0 seed had pushed into the CP-dogfood VP store (matched by decoding the `[name] description` encoding the CP writes). Template-linked policies are never deleted; the conservative match also requires the `org-id` segment to be in the seeded org scope, so hand-authored policies and policies belonging to non-seeded orgs are left untouched.
+2. **Teardown** — scans the CP dashboard Cognito pool for usernames matching `org-{seeded_org_id_suffix}-*` (per `pure::is_seeded_username`), deletes those users, and deletes their `PK=USER#{sub}, SK=ORG#…` membership rows in DynamoDB. There is no VP-policy teardown sweep — that machinery (and the CP-dogfood VP store it targeted) was deleted in #117 V3.
 3. **Re-seed** — `write_orgs` writes one DynamoDB org row per `[[organization]]` entry at `PK=ORG#{org_id}, SK=META` with `status=draft`. `write_groups` writes the validated GROUP rows. Finally `write_users` provisions each declared `[[organization.user]]` in Cognito (via `UserPoolClient`) and writes its `PK=USER#{sub}, SK=ORG#{org_id}` membership row in DynamoDB.
 
 ```bash
@@ -56,7 +56,7 @@ cargo xtask control-plane seed \
 ```
 
 - Org and group rows are written to the local table; the prod 1Password lookup for the table name is skipped.
-- Cognito + VP teardown still talk to real AWS — there is no local emulator for either. The teardown phase is a no-op against a freshly-started local pool.
+- Cognito teardown still talks to real AWS — there is no local emulator for it. The teardown phase is a no-op against a freshly-started local pool.
 - Omit both flags to target prod (reads `op://forgeguard-prod/dynamodb/table-name`).
 - Passing only one flag is a validation error.
 
@@ -74,7 +74,7 @@ cargo xtask control-plane token --user acme-admin --verbose
 
 ## `curl` — Send an Ed25519-signed HTTP request
 
-Generates the machine-principal signature headers (`x-forgeguard-signature`, `x-forgeguard-timestamp`, `x-forgeguard-key-id`, `x-forgeguard-trace-id`) from a PEM private key and sends the request via `reqwest`. Useful for QA'ing the machine principal → VP authorization flow without a real proxy.
+Generates the machine-principal signature headers (`x-forgeguard-signature`, `x-forgeguard-timestamp`, `x-forgeguard-key-id`, `x-forgeguard-trace-id`) from a PEM private key and sends the request via `reqwest`. Useful for QA'ing the machine principal → embedded `cp:*` authorization flow without a real proxy.
 
 ```bash
 cargo xtask control-plane curl \
@@ -91,7 +91,7 @@ The canonical payload that the server recomputes and verifies against matches ex
 
 ## Shared Helpers
 
-- `op::read_op(vault, item, field, op_account)` — one-shot 1Password read, used by `seed` (CP dashboard pool id, CP-dogfood VP policy-store id, prod DynamoDB table name) and by `token` for the dashboard app-client id and per-user password.
+- `op::read_op(vault, item, field, op_account)` — one-shot 1Password read, used by `seed` (CP dashboard pool id, prod DynamoDB table name) and by `token` for the dashboard app-client id and per-user password.
 - `op::store_in_op(...)` — one-shot 1Password write. **No longer used by `seed`** (no users are created); kept available for future tooling.
 - `op::build_aws_config(profile, region)` — constructs an `aws_config::SdkConfig` with the requested profile and region.
 

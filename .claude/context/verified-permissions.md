@@ -1,10 +1,12 @@
 # Verified Permissions Integration
 
-## Overview
+> This file covers two unrelated things sharing a filename for historical reasons: (1) proxy-side AWS Verified Permissions (VP) integration — still live, unchanged, covers `crates/proxy`, `crates/cli`, `crates/authz` — and (2) the control-plane RBAC role model, which used to be pushed to a CP-dogfood VP store but is now compiled entirely in-process. **All Cedar-sync/VP-push machinery on the control-plane side is fully retired (#117 V3).** There is no VP client, no `cargo xtask control-plane cedar`, and no CP-dogfood policy store anymore. Section headers below are marked accordingly.
 
-ForgeGuard uses AWS Verified Permissions (VP) as the authorization engine. The proxy calls `IsAuthorized` at runtime; the CLI manages schema and policies at dev/deploy time.
+## Overview (proxy-side, unchanged)
 
-## Action Format
+ForgeGuard uses AWS Verified Permissions (VP) as the authorization engine for the proxy. The proxy calls `IsAuthorized` at runtime; the CLI manages schema and policies at dev/deploy time.
+
+## Action Format (proxy-side, unchanged)
 
 Canonical three-part format: `namespace:entity:action` (e.g., `todo:list:read`).
 
@@ -15,7 +17,7 @@ Canonical three-part format: `namespace:entity:action` (e.g., `todo:list:read`).
 | Cedar entity type | `namespace__entity` | `todo__list` |
 | Action pattern | `namespace:entity:action` | `todo:list:*` |
 
-## Cedar Type System
+## Cedar Type System (proxy-side, unchanged)
 
 Types in `forgeguard_core` encode Cedar IDENT validity:
 
@@ -25,84 +27,16 @@ Types in `forgeguard_core` encode Cedar IDENT validity:
 
 IAM entities (`user`, `group`) use bare names without namespace prefix.
 
-## VP Architecture Decisions
+## VP Architecture Decisions (proxy-side, unchanged)
 
 - **`IsAuthorized` only** — no `IsAuthorizedWithToken`. The proxy validates JWTs via `forgeguardauthn`; re-validation in VP wastes latency. Cache keys use claim-derived values.
 - **No entity store** — VP stores schema and policies only. Entity data (user-in-group hierarchy) is passed inline via the `entities` parameter on each `IsAuthorized` call.
 - **Single namespace per policy store** — derived from `ProjectId`. ForgeGuard namespaces flatten into Cedar entity types using `__` separator.
 - **Cache key includes groups** — format: `{user_id}|{action}|{resource}|{tenant}|{sorted_groups}` to avoid collisions when the same user has different group memberships.
 
-## Cedar Sync Engine
+## Control-plane Role Model (historical — no longer VP-backed)
 
-The sync engine (`cargo xtask control-plane cedar`) manages the VP policy store declaratively from `forgeguard.toml`. It supports dual-dialect policies: RBAC roles compiled to Cedar with tenant scoping, and raw Cedar for patterns RBAC can't express.
-
-### Commands
-
-| Command | Purpose |
-|---|---|
-| `cargo xtask control-plane cedar status` | Show current VP store state |
-| `cargo xtask control-plane cedar diff --config forgeguard.toml` | Preview changes (exit 0=clean, 1=pending) |
-| `cargo xtask control-plane cedar sync --config forgeguard.toml` | Apply changes to VP |
-| `cargo xtask control-plane cedar sync --config forgeguard.toml --dry-run` | Show plan without applying |
-
-### VP API Quirks
-
-These workarounds are baked into the sync engine. Knowing them prevents re-introducing the original bugs:
-
-1. **No `name` field on CreatePolicyTemplate/CreatePolicy.** The SDK v1.110.0 exposes `.name()` on the builder, but VP rejects it with `ValidationException: Invalid input`. The sync engine encodes names as a `[name]` prefix in the `description` field and decodes on read. The same `[name]` encoding is now consumed by the control-plane runtime when the V3 Groups handlers materialize per-org Cedar permits via `vp_client/mod.rs` — both call sites (xtask `cedar sync` and the CP runtime) share the encoding so policies created by either tool round-trip cleanly. See `encode_name_in_description` / `decode_name_from_description` in `cedar_io.rs`, and the mirror helpers in `crates/control-plane/src/vp_client/mod.rs`.
-
-2. **Actions require `appliesTo` blocks.** Schema actions defined as `"name": {}` (no `appliesTo`) are accepted by `PutSchema` but cause `ValidationException` when templates/policies reference them. The schema generator adds `appliesTo` with all entity types as both `principalTypes` and `resourceTypes`. See `generate_schema_json` in `schema.rs`.
-
-3. **VP normalizes schema JSON.** `PutSchema` accepts pretty-printed JSON but `GetSchema` returns minified. The sync engine uses semantic JSON comparison (`serde_json::Value` equality) to avoid false diffs on every run. See `schemas_equal` in `sync.rs`.
-
-### Sync Design
-
-- **Idempotent:** second sync = no changes. Comparison is by name + statement content.
-- **Update = delete + create:** VP has no update API; the engine deletes then recreates.
-- **Ordering:** schema first → update-deletes → update-creates → new creates → standalone deletes.
-- **Resource matching:** `[name]` prefix in description field (not VP `name` field).
-- **Partial failure recovery:** re-run sync — already-applied actions become no-ops.
-
-### Where the Compiler Lives
-
-The pure RBAC → Cedar compiler (`compile_rbac_to_cedar`, `resolve_inherits`,
-`validate_cedar_ident`, `RbacEntry`, `TenantConfig`) lives in
-`forgeguard_authz_core::rbac`. xtask consumes it directly via
-`cedar_core::desired` — there is no longer a separate `cedar_core/rbac.rs`
-module (deleted in V6 of issue #102). The lone I/O-edge adapter
-`policy_entries_to_rbac` (which maps xtask-local TOML `PolicyEntry` shapes
-onto `RbacEntry`) is a private function inside `cedar_core::desired`, the only
-caller of it. The control-plane Groups handlers (V2+) call the compiler
-directly when materializing per-org Groups into the org's VP store.
-
-### Plan Output
-
-`cedar diff` (and `cedar sync --dry-run`) renders the plan as a colored terraform-style block list. Each `DiffAction::Delete` carries the current remote statement so the formatter can produce a unified diff without re-reading state, and `compute_sync_plan` emits adjacent `Delete + Create` pairs for the same named resource so the display layer can coalesce them into a single `UPDATE` block.
-
-- `~ schema (N → M bytes)` — schema change, rendered as a unified diff between old and new JSON.
-- `~ template "name"  [id]` / `~ policy "name"  [id]` — update block; old and new statements are diffed line-by-line with hunks (3 lines of context, `…` between hunks).
-- `+ template "name"` / `+ policy "name"` — standalone create; the full statement is printed indented.
-- `- template "name"  [id]` / `- policy "name"  [id]` — standalone delete; the current remote statement is printed indented.
-
-Colors use `owo-colors` with TTY auto-detection (via `if_supports_color`): added lines green, removed red, unchanged dim, hunk separators cyan. Output is plain text when the destination stream is not a TTY, so piping into `less -R` or capturing to a file still yields readable plans.
-
-Implementation: `xtask/src/control_plane/cedar_core/sync.rs` (`collapse_actions`, `try_pair_update`, `render_block`, `render_diff`). Diffing uses the `similar` crate; grouped unified ops come from `TextDiff::grouped_ops(3)`.
-
-### Config Structure (`forgeguard.toml`)
-
-The root `forgeguard.toml` is the control plane's own dogfooding authorization model:
-
-- `[authz]` — `policy_store_id` (1Password reference or raw ID)
-- `[schema]` — namespace, explicit actions, entity types with attributes
-- `[tenant]` — principal/resource attribute names for RBAC tenant scoping
-- `[[policies]]` — RBAC roles (`allow`, `inherits`) or raw Cedar (`type = "cedar"`, `body`)
-- `[[templates]]` — Cedar templates with `?principal`/`?resource` slots
-
-Actions from RBAC `allow` lists are auto-collected into the schema. Actions only in raw Cedar or templates must be listed in `[schema] actions`.
-
-## Control-plane Role Model
-
-The CP ships three RBAC roles plus a single machine permit. Each human role maps 1:1 to a Cognito group claim (`cognito:groups`); membership is data resolved per-request from DynamoDB (`PK=USER#{sub}, SK=ORG#{org_id}`), not from VP policies.
+The CP ships three RBAC roles plus a single machine permit. Each human role maps 1:1 to a Cognito group claim (`cognito:groups`); membership is data resolved per-request from DynamoDB (`PK=USER#{sub}, SK=ORG#{org_id}`), not from any policy store.
 
 | Role | Inherits | Adds |
 |---|---|---|
@@ -110,7 +44,7 @@ The CP ships three RBAC roles plus a single machine permit. Each human role maps
 | `admin` | `member` | org create/update, member invite/remove/change-role, `cp-config-write`, key generate/revoke/rotate, `cp-group-create`, `cp-group-update`, `cp-group-delete` |
 | `owner` | `admin` | `cp-member-promote-owner` |
 
-Canonical source: the `[[policies]]` `allow` arrays in `forgeguard.toml` at the workspace root. Since #117 V1, this same file is compiled to Cedar policy text at control-plane build time (`forgeguard_authz_core::compile_cp_model`, invoked from `crates/control-plane/build.rs`) and embedded into the `CpCedarEngine` that decides every `cp:*` request in-process — no VP call on the request path. `cargo xtask control-plane cedar sync --config forgeguard.toml` still pushes the same model to the CP-dogfood VP store, but that store no longer backs live `cp:*` decisions; full retirement of the VP-backed path is targeted for V3 of issue #117.
+Canonical source: the `[[policies]]` `allow` arrays in `forgeguard.toml` at the workspace root. Since #117 V1, this same file is compiled to Cedar policy text at control-plane build time (`forgeguard_authz_core::compile_cp_model`, invoked from `crates/control-plane/build.rs`) and embedded into the `CpCedarEngine` that decides every `cp:*` request in-process — no VP call on the request path, ever. Since #117 V3, there is no VP-backed fallback path at all: the CP-dogfood VP store, `cargo xtask control-plane cedar sync`, and the CDK `VerifiedPermissionsStack` have all been deleted.
 
 The compiler emits one `permit(principal in forgeguard::Group::"<role>", ...)` per role with `when { principal.org_id == resource.org_id }` auto-appended for tenant scoping. No per-user VP instantiation runs at invitation time — group membership alone grants the permit.
 
@@ -124,23 +58,19 @@ The single non-RBAC permit is `machine-proxy-config-read`, a raw Cedar policy th
 
 The broader question — whether ForgeGuard should expose Cedar templates as a customer-facing primitive for per-resource permissions — is tracked separately as #84 and waits on a real driver.
 
-## CLI Commands
+### Where the RBAC compiler lives (proxy/CLI + control-plane, shared pure code)
+
+The pure RBAC → Cedar compiler (`compile_rbac_to_cedar`, `resolve_inherits`, `validate_cedar_ident`, `RbacEntry`, `TenantConfig`) lives in `forgeguard_authz_core::rbac`. It has two consumers: `crates/cli` for the proxy-side `forgeguard policies sync`/`validate` workflow described below, and `crates/control-plane/build.rs` (via `forgeguard_authz_core::compile_cp_model`), which compiles `forgeguard.toml` into the embedded `CpCedarEngine` at build time. There is no xtask-side Cedar tooling anymore — `cargo xtask control-plane cedar {status,diff,sync}` was deleted in #117 V3.
+
+## CLI Commands (proxy-side, unchanged)
 
 - `forgeguard policies validate` — pure local validation, no AWS calls
 - `forgeguard policies sync` — validate then push schema + policies to VP (`--dry-run`)
 - `forgeguard policies test` — run authorization tests against live VP
 
-## Config Sections
+## Config Sections (proxy-side, unchanged)
 
 - `[aws]` — optional region/profile. Precedence: CLI flag > env var > config > SDK default.
 - `[authz]` — `policy_store_id`, `cache_ttl_secs`, `cache_max_entries` (no `aws_region`).
 - `[[policy_tests]]` — inline authorization test scenarios.
 - `[schema.entities]` — entity relationships and attributes for Cedar schema generation.
-
-## Infrastructure
-
-- CDK stack `verified-permissions-stack.ts` creates policy store (OFF validation mode) + Cognito identity source.
-- The stack exposes `policyStoreId` and `policyStoreArn` as `public readonly` fields, populated from CFN attribute getters (`attrPolicyStoreId`, `attrArn`) — never from `cdk.Stack.formatArn`. See [aws-arn-formats.md](./aws-arn-formats.md).
-- The Lambda stack consumes both via constructor props: the ID becomes the `FORGEGUARD_CP_POLICY_STORE_ID` env var on the control-plane function, and the ARN scopes a `verifiedpermissions:IsAuthorized` IAM statement on its execution role. Full env/IAM contract: [infra-control-plane.md](./infra-control-plane.md#control-plane-lambda-runtime-contract).
-- Control-plane infrastructure is managed via `cargo xtask control-plane infra` subcommands (deploy, diff, destroy, status).
-- V2 of #102 implements DDB-only Groups CRUD; VP push (materialising per-org Cedar policies into the org's VP store on group writes) lands in V3.
