@@ -23,7 +23,6 @@ pub(crate) async fn run(
         op_core::build_stack_name(env),
         op_core::build_lambda_stack_name(env),
         op_core::build_cognito_stack_name(env),
-        op_core::build_vp_stack_name(env),
     ];
 
     for stack_name in &stacks {

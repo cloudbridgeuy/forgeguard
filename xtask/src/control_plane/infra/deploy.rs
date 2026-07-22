@@ -21,11 +21,8 @@ pub(crate) async fn run(
     // 3. Run CDK deploy (deploys all stacks)
     let stack_name = op_core::build_stack_name(env);
     let lambda_stack_name = op_core::build_lambda_stack_name(env);
-    let vp_stack_name = op_core::build_vp_stack_name(env);
     let cognito_stack_name = op_core::build_cognito_stack_name(env);
-    println!(
-        "Deploying {stack_name}, {lambda_stack_name}, {cognito_stack_name}, {vp_stack_name}..."
-    );
+    println!("Deploying {stack_name}, {lambda_stack_name}, {cognito_stack_name}...");
     op::run_cdk_with_op(
         ".env",
         env,
@@ -47,10 +44,6 @@ pub(crate) async fn run(
     let cp_arn = op::find_stack_output(&lambda_outputs, "ControlPlaneFunctionArn")?;
     let cp_url = op::find_stack_output(&lambda_outputs, "ControlPlaneFunctionUrl")?;
 
-    // VP outputs
-    let vp_outputs = op::read_stack_outputs(&cf_client, &vp_stack_name).await?;
-    let policy_store_id = op::find_stack_output(&vp_outputs, "PolicyStoreId")?;
-
     // Cognito outputs
     let cognito_outputs = op::read_stack_outputs(&cf_client, &cognito_stack_name).await?;
     let user_pool_id = op::find_stack_output(&cognito_outputs, "UserPoolId")?;
@@ -65,13 +58,6 @@ pub(crate) async fn run(
     op::store_in_op(&vault, "dynamodb", "table-arn", &table_arn, op_account)?;
     op::store_in_op(&vault, "lambda", "control-plane-arn", &cp_arn, op_account)?;
     op::store_in_op(&vault, "lambda", "control-plane-url", &cp_url, op_account)?;
-    op::store_in_op(
-        &vault,
-        "verified-permissions",
-        "policy-store-id",
-        &policy_store_id,
-        op_account,
-    )?;
     op::store_in_op(&vault, "cognito", "user-pool-id", &user_pool_id, op_account)?;
     op::store_in_op(
         &vault,
@@ -95,7 +81,6 @@ pub(crate) async fn run(
     println!("  Table ARN:     {table_arn}");
     println!("  CP function:   {cp_arn}");
     println!("  CP URL:        {cp_url}");
-    println!("  Policy store:  {policy_store_id}");
     println!("  User pool ID:  {user_pool_id}");
     println!("  User pool ARN: {user_pool_arn}");
     println!("  App client ID: {app_client_id}");

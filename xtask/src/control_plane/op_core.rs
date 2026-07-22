@@ -73,11 +73,6 @@ pub(crate) fn build_lambda_stack_name(env: ForgeguardEnv) -> String {
     format!("forgeguard-{env}-lambda")
 }
 
-/// Build the Verified Permissions CloudFormation stack name for a given environment.
-pub(crate) fn build_vp_stack_name(env: ForgeguardEnv) -> String {
-    format!("forgeguard-{env}-vp")
-}
-
 /// Build the Cognito CloudFormation stack name for a given environment.
 pub(crate) fn build_cognito_stack_name(env: ForgeguardEnv) -> String {
     format!("forgeguard-{env}-cognito")
@@ -285,21 +280,6 @@ mod tests {
             build_lambda_stack_name(ForgeguardEnv::Dev),
             "forgeguard-dev-lambda"
         );
-    }
-
-    // --- build_vp_stack_name ---
-
-    #[test]
-    fn build_vp_stack_name_prod() {
-        assert_eq!(
-            build_vp_stack_name(ForgeguardEnv::Prod),
-            "forgeguard-prod-vp"
-        );
-    }
-
-    #[test]
-    fn build_vp_stack_name_dev() {
-        assert_eq!(build_vp_stack_name(ForgeguardEnv::Dev), "forgeguard-dev-vp");
     }
 
     // --- build_cognito_stack_name ---
