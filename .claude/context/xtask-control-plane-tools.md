@@ -92,7 +92,7 @@ The canonical payload that the server recomputes and verifies against matches ex
 ## Shared Helpers
 
 - `op::read_op(vault, item, field, op_account)` — one-shot 1Password read, used by `seed` (CP dashboard pool id, prod DynamoDB table name) and by `token` for the dashboard app-client id and per-user password.
-- `op::store_in_op(...)` — one-shot 1Password write. **No longer used by `seed`** (no users are created); kept available for future tooling.
+- `op::store_in_op(...)` — one-shot 1Password write used by `infra deploy` and `lambda deploy`. Resolves the item title to an ID via `op item list` first: one match → edit by ID, zero → create then edit, multiple → hard error listing the duplicate IDs (creation is never triggered by an edit failure, so transient `op` errors can't spawn duplicate items). **No longer used by `seed`** (no users are created).
 - `op::build_aws_config(profile, region)` — constructs an `aws_config::SdkConfig` with the requested profile and region.
 
 ## Environment Defaults

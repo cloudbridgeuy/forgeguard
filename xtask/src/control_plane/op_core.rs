@@ -90,6 +90,60 @@ pub(crate) fn format_status_output(
     result
 }
 
+/// Outcome of resolving a 1Password item title to a concrete item ID.
+///
+/// Produced by [`resolve_item_id`] from `op item list --format=json` output.
+/// Making ambiguity a first-class variant (instead of "any edit failure means
+/// the item is missing") is what prevents `store_in_op` from spawning
+/// duplicate items when a title matches more than one item.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ItemResolution {
+    /// No item with the requested title exists — safe to create one.
+    NotFound,
+    /// Exactly one item matches; edit it by this ID.
+    Found(String),
+    /// More than one item shares the title. Editing by title would fail and
+    /// creating another would make it worse — the caller must surface the IDs.
+    Ambiguous(Vec<String>),
+}
+
+#[derive(serde::Deserialize)]
+struct OpItemSummary {
+    id: String,
+    title: String,
+}
+
+/// Resolve an item title against `op item list --format=json` output.
+///
+/// # Errors
+///
+/// Returns an error message when `list_json` is not the expected JSON array.
+pub(crate) fn resolve_item_id(list_json: &str, title: &str) -> Result<ItemResolution, String> {
+    let items: Vec<OpItemSummary> = serde_json::from_str(list_json)
+        .map_err(|e| format!("failed to parse `op item list` output: {e}"))?;
+    let mut ids: Vec<String> = items
+        .into_iter()
+        .filter(|i| i.title == title)
+        .map(|i| i.id)
+        .collect();
+    match ids.len() {
+        0 => Ok(ItemResolution::NotFound),
+        1 => Ok(ItemResolution::Found(ids.remove(0))),
+        _ => Ok(ItemResolution::Ambiguous(ids)),
+    }
+}
+
+/// Extract the `id` from `op item create --format=json` output.
+///
+/// # Errors
+///
+/// Returns an error message when the output is not JSON or has no string `id`.
+pub(crate) fn parse_created_item_id(create_json: &str) -> Result<String, String> {
+    let created: OpItemSummary = serde_json::from_str(create_json)
+        .map_err(|e| format!("failed to parse `op item create` output: {e}"))?;
+    Ok(created.id)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -315,5 +369,73 @@ mod tests {
         assert!(output.contains("my-stack"));
         assert!(output.contains("PENDING"));
         assert!(!output.contains("Outputs:"));
+    }
+
+    // --- resolve_item_id ---
+
+    const LIST_JSON: &str = r#"[
+        {"id": "id-lambda-1", "title": "lambda", "category": "LOGIN"},
+        {"id": "id-cognito", "title": "cognito", "category": "LOGIN"},
+        {"id": "id-lambda-2", "title": "lambda", "category": "LOGIN"}
+    ]"#;
+
+    #[test]
+    fn resolve_item_id_found() {
+        assert_eq!(
+            resolve_item_id(LIST_JSON, "cognito"),
+            Ok(ItemResolution::Found("id-cognito".to_string()))
+        );
+    }
+
+    #[test]
+    fn resolve_item_id_not_found() {
+        assert_eq!(
+            resolve_item_id(LIST_JSON, "dynamodb"),
+            Ok(ItemResolution::NotFound)
+        );
+        assert_eq!(
+            resolve_item_id("[]", "lambda"),
+            Ok(ItemResolution::NotFound)
+        );
+    }
+
+    #[test]
+    fn resolve_item_id_ambiguous_lists_every_id() {
+        assert_eq!(
+            resolve_item_id(LIST_JSON, "lambda"),
+            Ok(ItemResolution::Ambiguous(vec![
+                "id-lambda-1".to_string(),
+                "id-lambda-2".to_string()
+            ]))
+        );
+    }
+
+    #[test]
+    fn resolve_item_id_exact_title_match_only() {
+        // No prefix/substring matching — "lambd" must not match "lambda".
+        assert_eq!(
+            resolve_item_id(LIST_JSON, "lambd"),
+            Ok(ItemResolution::NotFound)
+        );
+    }
+
+    #[test]
+    fn resolve_item_id_rejects_malformed_json() {
+        let err = resolve_item_id("[ERROR] authorization timeout", "lambda").unwrap_err();
+        assert!(err.contains("failed to parse"));
+    }
+
+    // --- parse_created_item_id ---
+
+    #[test]
+    fn parse_created_item_id_extracts_id() {
+        let json = r#"{"id": "abc123", "title": "lambda", "category": "LOGIN"}"#;
+        assert_eq!(parse_created_item_id(json), Ok("abc123".to_string()));
+    }
+
+    #[test]
+    fn parse_created_item_id_rejects_non_json() {
+        let err = parse_created_item_id("").unwrap_err();
+        assert!(err.contains("failed to parse"));
     }
 }
