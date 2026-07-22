@@ -40,10 +40,6 @@ pub struct AuthConfig {
     jwks_url: url::Url,
     issuer: String,
     audience: Option<String>,
-    // Ignored since V1 of #117 — cp:* authorization is embedded (CpCedarEngine).
-    // Deleted in V3 once the VP SDK client is retired entirely.
-    #[allow(dead_code)]
-    policy_store_id: String,
 }
 
 impl AuthConfig {
@@ -56,7 +52,6 @@ impl AuthConfig {
         jwks_url: &str,
         issuer: impl Into<String>,
         audience: Option<String>,
-        policy_store_id: impl Into<String>,
     ) -> color_eyre::Result<Self> {
         let jwks_url: url::Url = jwks_url
             .parse()
@@ -65,7 +60,6 @@ impl AuthConfig {
             jwks_url,
             issuer: issuer.into(),
             audience,
-            policy_store_id: policy_store_id.into(),
         })
     }
 }

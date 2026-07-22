@@ -46,9 +46,4 @@ pub(crate) struct Cli {
     /// Cognito app client ID for audience validation (optional).
     #[arg(long, env = "FORGEGUARD_CP_AUDIENCE")]
     pub audience: Option<String>,
-
-    /// DEPRECATED: ignored — cp:* authorization is embedded since #117 V1.
-    /// Still required when --jwks-url is set for backward-compat parsing only.
-    #[arg(long, env = "FORGEGUARD_CP_POLICY_STORE_ID")]
-    pub policy_store_id: Option<String>,
 }

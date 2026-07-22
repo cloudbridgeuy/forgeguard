@@ -25,12 +25,7 @@ async fn main() -> Result<(), Error> {
                 Error::from("FORGEGUARD_CP_ISSUER is required when FORGEGUARD_CP_JWKS_URL is set")
             })?;
             let audience = std::env::var("FORGEGUARD_CP_AUDIENCE").ok();
-            let policy_store_id = std::env::var("FORGEGUARD_CP_POLICY_STORE_ID").map_err(|_| {
-                Error::from(
-                    "FORGEGUARD_CP_POLICY_STORE_ID is required when FORGEGUARD_CP_JWKS_URL is set",
-                )
-            })?;
-            let config = AuthConfig::new(&jwks_url, issuer, audience, policy_store_id)
+            let config = AuthConfig::new(&jwks_url, issuer, audience)
                 .map_err(|e| Error::from(format!("invalid auth config: {e:#}")))?;
             Some(config)
         }
