@@ -11,6 +11,7 @@ pub mod error;
 pub mod features;
 pub mod fgrn;
 pub mod grant;
+pub mod headers;
 pub mod native_id;
 pub mod org;
 pub mod percentage;
