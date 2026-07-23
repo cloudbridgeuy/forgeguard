@@ -45,7 +45,12 @@ pub(crate) fn scope_path_of(slice: &EntitySlice) -> ScopePath {
 /// its ancestry. Deduplicated, sorted (BTreeSet) for a stable projection.
 pub(crate) fn entitlements_of(slice: &EntitySlice) -> Vec<Verb> {
     let mut grantees: HashSet<&Fgrn> = HashSet::from([slice.principal().fgrn()]);
-    grantees.extend(slice.principal_sets().iter().map(forgeguard_core::PrincipalSet::fgrn));
+    grantees.extend(
+        slice
+            .principal_sets()
+            .iter()
+            .map(forgeguard_core::PrincipalSet::fgrn),
+    );
     grantees.extend(slice.org_units().iter().map(forgeguard_core::OrgUnit::fgrn));
 
     let verbs: BTreeSet<Verb> = slice

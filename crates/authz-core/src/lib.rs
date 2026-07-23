@@ -18,7 +18,7 @@ pub mod static_engine;
 
 pub use context::PolicyContext;
 pub use cp_model::compile_cp_model;
-pub use decision::{DenyReason, PolicyDecision};
+pub use decision::{DenyReason, EvaluatedDecision, PolicyDecision};
 pub use engine::{CacheStats, PolicyEngine};
 pub use engine_cedar::{
     CedarEngine, Decision, DecisionQuery, DecisionRecord, EmbeddedPolicyEngine, ScopePath,
