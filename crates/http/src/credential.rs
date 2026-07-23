@@ -1,6 +1,7 @@
 //! Credential extraction from HTTP headers.
 
 use forgeguard_authn_core::Credential;
+use forgeguard_core::headers as hn;
 
 /// Case-insensitive header lookup returning the first matching value.
 fn find_header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
@@ -11,12 +12,12 @@ fn find_header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a st
 }
 
 /// The four protocol headers required for Ed25519 signed requests.
-/// Any other `x-forgeguard-*` headers are collected as identity headers.
+/// Any other `x-fg-*` headers are collected as identity headers.
 const SIGNED_REQUEST_HEADERS: [&str; 4] = [
-    "x-forgeguard-signature",
-    "x-forgeguard-timestamp",
-    "x-forgeguard-key-id",
-    "x-forgeguard-trace-id",
+    hn::X_FG_SIGNATURE,
+    hn::X_FG_TIMESTAMP,
+    hn::X_FG_KEY_ID,
+    hn::X_FG_TRACE_ID,
 ];
 
 /// Returns `true` if `name` is one of the four signed-request protocol headers.
@@ -31,8 +32,8 @@ fn is_protocol_header(name: &str) -> bool {
 /// Priority order:
 /// 1. `Authorization: Bearer <token>` — JWT
 /// 2. `X-API-Key: <key>` — API key
-/// 3. `X-ForgeGuard-Signature` + `X-ForgeGuard-Timestamp` + `X-ForgeGuard-Key-Id`
-///    + `X-ForgeGuard-Trace-Id` — Ed25519 signed request (BYOC proxy)
+/// 3. `X-Fg-Signature` + `X-Fg-Timestamp` + `X-Fg-Key-Id`
+///    + `X-Fg-Trace-Id` — Ed25519 signed request (BYOC proxy)
 ///
 /// Header names are compared case-insensitively (HTTP/2 mandates lowercase,
 /// HTTP/1.1 is case-insensitive).
@@ -58,18 +59,18 @@ pub fn extract_credential(headers: &[(String, String)]) -> Option<Credential> {
         }
     }
 
-    // Priority 3: X-ForgeGuard-Signature (Ed25519 signed request)
-    let sig = find_header(headers, "x-forgeguard-signature")?;
-    let ts = find_header(headers, "x-forgeguard-timestamp")?;
-    let key_id = find_header(headers, "x-forgeguard-key-id")?;
-    let trace_id = find_header(headers, "x-forgeguard-trace-id")?;
+    // Priority 3: X-Fg-Signature (Ed25519 signed request)
+    let sig = find_header(headers, hn::X_FG_SIGNATURE)?;
+    let ts = find_header(headers, hn::X_FG_TIMESTAMP)?;
+    let key_id = find_header(headers, hn::X_FG_KEY_ID)?;
+    let trace_id = find_header(headers, hn::X_FG_TRACE_ID)?;
 
     let timestamp = ts.parse::<u64>().ok()?;
 
     let identity_headers: Vec<(String, String)> = headers
         .iter()
         .filter(|(k, _)| {
-            k.to_ascii_lowercase().starts_with("x-forgeguard-") && !is_protocol_header(k)
+            k.to_ascii_lowercase().starts_with(hn::X_FG_PREFIX) && !is_protocol_header(k)
         })
         .cloned()
         .collect();
@@ -174,10 +175,10 @@ mod tests {
     #[test]
     fn signed_request_extracted() {
         let headers = h(&[
-            ("x-forgeguard-signature", "v1:AAAA"),
-            ("x-forgeguard-timestamp", "1700000000000"),
-            ("x-forgeguard-key-id", "key-001"),
-            ("x-forgeguard-trace-id", "trace-abc"),
+            ("x-fg-signature", "v1:AAAA"),
+            ("x-fg-timestamp", "1700000000000"),
+            ("x-fg-key-id", "key-001"),
+            ("x-fg-trace-id", "trace-abc"),
         ]);
         let cred = extract_credential(&headers).unwrap();
         assert_eq!(
@@ -195,11 +196,11 @@ mod tests {
     #[test]
     fn signed_request_includes_identity_headers() {
         let headers = h(&[
-            ("x-forgeguard-signature", "v1:AAAA"),
-            ("x-forgeguard-timestamp", "1700000000000"),
-            ("x-forgeguard-key-id", "key-001"),
-            ("x-forgeguard-trace-id", "trace-abc"),
-            ("X-ForgeGuard-Org-Id", "org-123"),
+            ("x-fg-signature", "v1:AAAA"),
+            ("x-fg-timestamp", "1700000000000"),
+            ("x-fg-key-id", "key-001"),
+            ("x-fg-trace-id", "trace-abc"),
+            ("X-Fg-Org-Id", "org-123"),
         ]);
         let cred = extract_credential(&headers).unwrap();
         match cred {
@@ -207,7 +208,7 @@ mod tests {
                 identity_headers, ..
             } => {
                 assert_eq!(identity_headers.len(), 1);
-                assert_eq!(identity_headers[0].0, "X-ForgeGuard-Org-Id");
+                assert_eq!(identity_headers[0].0, "X-Fg-Org-Id");
                 assert_eq!(identity_headers[0].1, "org-123");
             }
             other => panic!("expected SignedRequest, got {other:?}"),
@@ -218,9 +219,9 @@ mod tests {
     fn signed_request_missing_signature_returns_none() {
         // Only 3 of 4 required headers — no signature
         let headers = h(&[
-            ("x-forgeguard-timestamp", "1700000000000"),
-            ("x-forgeguard-key-id", "key-001"),
-            ("x-forgeguard-trace-id", "trace-abc"),
+            ("x-fg-timestamp", "1700000000000"),
+            ("x-fg-key-id", "key-001"),
+            ("x-fg-trace-id", "trace-abc"),
         ]);
         assert!(extract_credential(&headers).is_none());
     }
@@ -228,10 +229,10 @@ mod tests {
     #[test]
     fn signed_request_invalid_timestamp_returns_none() {
         let headers = h(&[
-            ("x-forgeguard-signature", "v1:AAAA"),
-            ("x-forgeguard-timestamp", "not-a-number"),
-            ("x-forgeguard-key-id", "key-001"),
-            ("x-forgeguard-trace-id", "trace-abc"),
+            ("x-fg-signature", "v1:AAAA"),
+            ("x-fg-timestamp", "not-a-number"),
+            ("x-fg-key-id", "key-001"),
+            ("x-fg-trace-id", "trace-abc"),
         ]);
         assert!(extract_credential(&headers).is_none());
     }
@@ -240,10 +241,10 @@ mod tests {
     fn bearer_takes_priority_over_signed_request() {
         let headers = h(&[
             ("authorization", "Bearer tok_abc"),
-            ("x-forgeguard-signature", "v1:AAAA"),
-            ("x-forgeguard-timestamp", "1700000000000"),
-            ("x-forgeguard-key-id", "key-001"),
-            ("x-forgeguard-trace-id", "trace-abc"),
+            ("x-fg-signature", "v1:AAAA"),
+            ("x-fg-timestamp", "1700000000000"),
+            ("x-fg-key-id", "key-001"),
+            ("x-fg-trace-id", "trace-abc"),
         ]);
         let cred = extract_credential(&headers).unwrap();
         assert_eq!(cred, Credential::Bearer("tok_abc".into()));
@@ -253,10 +254,10 @@ mod tests {
     fn api_key_takes_priority_over_signed_request() {
         let headers = h(&[
             ("x-api-key", "key_xyz"),
-            ("x-forgeguard-signature", "v1:AAAA"),
-            ("x-forgeguard-timestamp", "1700000000000"),
-            ("x-forgeguard-key-id", "key-001"),
-            ("x-forgeguard-trace-id", "trace-abc"),
+            ("x-fg-signature", "v1:AAAA"),
+            ("x-fg-timestamp", "1700000000000"),
+            ("x-fg-key-id", "key-001"),
+            ("x-fg-trace-id", "trace-abc"),
         ]);
         let cred = extract_credential(&headers).unwrap();
         assert_eq!(cred, Credential::ApiKey("key_xyz".into()));

@@ -309,7 +309,7 @@ impl SigningConfig {
         &self.key_path
     }
 
-    /// The key identifier injected into `X-ForgeGuard-Key-Id`.
+    /// The key identifier injected into `X-Fg-Key-Id`.
     pub fn key_id(&self) -> &forgeguard_authn_core::signing::KeyId {
         &self.key_id
     }

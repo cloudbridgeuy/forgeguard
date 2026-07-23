@@ -16,7 +16,7 @@ Everything else is pure.
 3. **Config parsing** — `forgeguard.toml` to validated `ProxyConfig` (two-phase Parse Don't Validate).
 4. **Config validation** — duplicate routes, feature gate references, policy/group references.
 5. **Credential extraction** — `Authorization: Bearer` and `X-API-Key` from headers.
-6. **Header injection** — `X-ForgeGuard-*` identity headers for upstream.
+6. **Header injection** — `X-Fg-*` identity headers for upstream.
 7. **Authn-authz glue** — `build_query` bridges `Identity` into `PolicyQuery`.
 
 ## Dependencies

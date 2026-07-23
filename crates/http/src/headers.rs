@@ -3,7 +3,7 @@
 use std::net::IpAddr;
 
 use forgeguard_authn_core::Identity;
-use forgeguard_core::ResolvedFlags;
+use forgeguard_core::{headers as hn, ResolvedFlags};
 
 // ---------------------------------------------------------------------------
 // IdentityProjection
@@ -98,53 +98,47 @@ impl IdentityProjection {
 // Header injection
 // ---------------------------------------------------------------------------
 
-/// Produce `X-ForgeGuard-*` header pairs from an identity projection.
+/// Produce `X-Fg-*` header pairs from an identity projection.
 ///
 /// Returns owned pairs — the proxy layer maps to its own header types.
 pub fn inject_headers(projection: &IdentityProjection) -> Vec<(String, String)> {
     let mut headers = Vec::with_capacity(7);
 
-    headers.push((
-        "x-forgeguard-user-id".to_string(),
-        projection.user_id.clone(),
-    ));
+    headers.push((hn::X_FG_USER_ID.to_string(), projection.user_id.clone()));
 
     if let Some(ref tenant) = projection.tenant_id {
-        headers.push(("x-forgeguard-tenant-id".to_string(), tenant.clone()));
+        headers.push((hn::X_FG_TENANT_ID.to_string(), tenant.clone()));
     }
 
     if !projection.groups.is_empty() {
-        headers.push((
-            "x-forgeguard-groups".to_string(),
-            projection.groups.join(","),
-        ));
+        headers.push((hn::X_FG_GROUPS.to_string(), projection.groups.join(",")));
     }
 
     headers.push((
-        "x-forgeguard-auth-provider".to_string(),
+        hn::X_FG_AUTH_PROVIDER.to_string(),
         projection.auth_provider.clone(),
     ));
 
     if let Some(ref fgrn) = projection.principal_fgrn {
-        headers.push(("x-forgeguard-principal".to_string(), fgrn.clone()));
+        headers.push((hn::X_FG_PRINCIPAL.to_string(), fgrn.clone()));
     }
 
     if let Some(ref features) = projection.features_json {
-        headers.push(("x-forgeguard-features".to_string(), features.clone()));
+        headers.push((hn::X_FG_FEATURES.to_string(), features.clone()));
     }
 
     if let Some(ip) = projection.client_ip {
-        headers.push(("x-forgeguard-client-ip".to_string(), ip.to_string()));
+        headers.push((hn::X_FG_CLIENT_IP.to_string(), ip.to_string()));
     }
 
     headers
 }
 
-/// Produce `X-ForgeGuard-*` headers with an optional Ed25519 signature.
+/// Produce `X-Fg-*` headers with an optional Ed25519 signature.
 ///
 /// When `signing` is `Some`, the identity headers are signed and four additional
-/// headers are appended: `x-forgeguard-trace-id`, `x-forgeguard-timestamp`,
-/// `x-forgeguard-key-id`, and `x-forgeguard-signature`.
+/// headers are appended: `x-fg-trace-id`, `x-fg-timestamp`, `x-fg-key-id`, and
+/// `x-fg-signature`.
 ///
 /// When `signing` is `None`, this is equivalent to [`inject_headers`].
 pub fn inject_signed_headers(
@@ -165,19 +159,16 @@ pub fn inject_signed_headers(
             forgeguard_authn_core::signing::sign(key, key_id, &payload, now, trace_id.to_string());
 
         headers.push((
-            "x-forgeguard-trace-id".to_string(),
+            hn::X_FG_TRACE_ID.to_string(),
             signed.trace_id_header_value().to_string(),
         ));
         headers.push((
-            "x-forgeguard-timestamp".to_string(),
+            hn::X_FG_TIMESTAMP.to_string(),
             signed.timestamp_header_value(),
         ));
+        headers.push((hn::X_FG_KEY_ID.to_string(), signed.key_id_header_value()));
         headers.push((
-            "x-forgeguard-key-id".to_string(),
-            signed.key_id_header_value(),
-        ));
-        headers.push((
-            "x-forgeguard-signature".to_string(),
+            hn::X_FG_SIGNATURE.to_string(),
             signed.signature_header_value(),
         ));
     }
@@ -189,7 +180,7 @@ pub fn inject_signed_headers(
 ///
 /// Used for anonymous or failed-opportunistic requests where no identity is available.
 pub fn inject_client_ip(ip: IpAddr) -> (String, String) {
-    ("x-forgeguard-client-ip".to_string(), ip.to_string())
+    (hn::X_FG_CLIENT_IP.to_string(), ip.to_string())
 }
 
 #[cfg(test)]
@@ -223,10 +214,10 @@ mod tests {
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
 
-        assert_eq!(map["x-forgeguard-user-id"], "alice");
-        assert_eq!(map["x-forgeguard-tenant-id"], "acme-corp");
-        assert_eq!(map["x-forgeguard-groups"], "admin,ops");
-        assert_eq!(map["x-forgeguard-auth-provider"], "jwt");
+        assert_eq!(map["x-fg-user-id"], "alice");
+        assert_eq!(map["x-fg-tenant-id"], "acme-corp");
+        assert_eq!(map["x-fg-groups"], "admin,ops");
+        assert_eq!(map["x-fg-auth-provider"], "jwt");
     }
 
     #[test]
@@ -236,10 +227,10 @@ mod tests {
         let headers = inject_headers(&projection);
 
         let keys: Vec<&str> = headers.iter().map(|(k, _)| k.as_str()).collect();
-        assert!(!keys.contains(&"x-forgeguard-tenant-id"));
-        assert!(!keys.contains(&"x-forgeguard-groups"));
-        assert!(keys.contains(&"x-forgeguard-user-id"));
-        assert!(keys.contains(&"x-forgeguard-auth-provider"));
+        assert!(!keys.contains(&"x-fg-tenant-id"));
+        assert!(!keys.contains(&"x-fg-groups"));
+        assert!(keys.contains(&"x-fg-user-id"));
+        assert!(keys.contains(&"x-fg-auth-provider"));
     }
 
     #[test]
@@ -253,7 +244,7 @@ mod tests {
             .iter()
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
-        assert_eq!(map["x-forgeguard-client-ip"], "192.168.1.1");
+        assert_eq!(map["x-fg-client-ip"], "192.168.1.1");
     }
 
     #[test]
@@ -267,17 +258,14 @@ mod tests {
             .iter()
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
-        assert_eq!(
-            map["x-forgeguard-principal"],
-            "fgrn:my-app:acme:iam:user:alice"
-        );
+        assert_eq!(map["x-fg-principal"], "fgrn:my-app:acme:iam:user:alice");
     }
 
     #[test]
     fn inject_client_ip_only() {
         let ip: IpAddr = "10.0.0.1".parse().unwrap();
         let (key, value) = inject_client_ip(ip);
-        assert_eq!(key, "x-forgeguard-client-ip");
+        assert_eq!(key, "x-fg-client-ip");
         assert_eq!(value, "10.0.0.1");
     }
 
@@ -289,7 +277,7 @@ mod tests {
         let projection = IdentityProjection::new(&identity, Some(&flags), None);
         let headers = inject_headers(&projection);
         let keys: Vec<&str> = headers.iter().map(|(k, _)| k.as_str()).collect();
-        assert!(!keys.contains(&"x-forgeguard-features"));
+        assert!(!keys.contains(&"x-fg-features"));
     }
 
     #[test]
@@ -300,6 +288,6 @@ mod tests {
         let projection = IdentityProjection::new(&identity, Some(&flags), None);
         let headers = inject_headers(&projection);
         let keys: Vec<&str> = headers.iter().map(|(k, _)| k.as_str()).collect();
-        assert!(keys.contains(&"x-forgeguard-features"));
+        assert!(keys.contains(&"x-fg-features"));
     }
 }
