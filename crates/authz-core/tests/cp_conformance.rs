@@ -40,7 +40,7 @@ async fn member_can_read_organization() {
         .evaluate(&query("u1", &["member"], "cp:organization:read"))
         .await
         .unwrap();
-    assert!(d.is_allowed());
+    assert!(d.decision().is_allowed());
 }
 
 #[tokio::test]
@@ -60,7 +60,7 @@ async fn admin_inherits_member_reads() {
         .evaluate(&query("u1", &["admin"], "cp:organization:read"))
         .await
         .unwrap();
-    assert!(d.is_allowed());
+    assert!(d.decision().is_allowed());
 }
 
 #[tokio::test]
@@ -70,7 +70,7 @@ async fn owner_inherits_admin_writes() {
         .evaluate(&query("u1", &["owner"], "cp:group:create"))
         .await
         .unwrap();
-    assert!(d.is_allowed());
+    assert!(d.decision().is_allowed());
 }
 
 #[tokio::test]
@@ -114,7 +114,12 @@ async fn machine_can_read_proxy_config_same_org_only() {
         ),
         PolicyContext::new().with_tenant("org-1".parse::<TenantId>().unwrap()),
     );
-    assert!(engine().evaluate(&same_org).await.unwrap().is_allowed());
+    assert!(engine()
+        .evaluate(&same_org)
+        .await
+        .unwrap()
+        .decision()
+        .is_allowed());
 
     let cross_org = PolicyQuery::new(
         PrincipalRef::machine("proxy-1".parse().unwrap()),

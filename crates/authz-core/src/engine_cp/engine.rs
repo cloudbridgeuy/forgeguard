@@ -10,7 +10,7 @@ use std::pin::Pin;
 use cedar_policy::Authorizer;
 use forgeguard_core::ProjectId;
 
-use crate::decision::{DenyReason, PolicyDecision};
+use crate::decision::{DenyReason, EvaluatedDecision, PolicyDecision};
 use crate::engine::PolicyEngine;
 use crate::engine_cp::entities::{build_cp_entities, build_cp_request};
 use crate::error::Result;
@@ -78,8 +78,8 @@ impl PolicyEngine for CpCedarEngine {
     fn evaluate(
         &self,
         query: &PolicyQuery,
-    ) -> Pin<Box<dyn Future<Output = Result<PolicyDecision>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<EvaluatedDecision>> + Send + '_>> {
         let decision = self.decide(query);
-        Box::pin(std::future::ready(Ok(decision)))
+        Box::pin(std::future::ready(Ok(EvaluatedDecision::bare(decision))))
     }
 }

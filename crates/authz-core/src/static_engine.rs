@@ -6,7 +6,7 @@ use std::pin::Pin;
 
 use forgeguard_core::QualifiedAction;
 
-use crate::decision::PolicyDecision;
+use crate::decision::{EvaluatedDecision, PolicyDecision};
 use crate::engine::PolicyEngine;
 use crate::error::Result;
 use crate::query::PolicyQuery;
@@ -41,14 +41,14 @@ impl PolicyEngine for StaticPolicyEngine {
     fn evaluate(
         &self,
         query: &PolicyQuery,
-    ) -> Pin<Box<dyn Future<Output = Result<PolicyDecision>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<EvaluatedDecision>> + Send + '_>> {
         let action_key = query.action().to_string();
         let decision = self
             .overrides
             .get(&action_key)
             .cloned()
             .unwrap_or_else(|| self.default_decision.clone());
-        Box::pin(std::future::ready(Ok(decision)))
+        Box::pin(std::future::ready(Ok(EvaluatedDecision::bare(decision))))
     }
 }
 
@@ -74,7 +74,7 @@ mod tests {
         let query = make_query("todo:list:read");
 
         let decision = engine.evaluate(&query).await.unwrap();
-        assert!(decision.is_allowed());
+        assert!(decision.decision().is_allowed());
     }
 
     #[tokio::test]
@@ -102,7 +102,7 @@ mod tests {
         // Default action → allow
         let allowed_query = make_query("todo:list:read");
         let decision = engine.evaluate(&allowed_query).await.unwrap();
-        assert!(decision.is_allowed());
+        assert!(decision.decision().is_allowed());
 
         // Overridden action → deny
         let denied_query = make_query("admin:user:delete");

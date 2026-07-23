@@ -3,7 +3,7 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use crate::decision::PolicyDecision;
+use crate::decision::EvaluatedDecision;
 use crate::error::Result;
 use crate::query::PolicyQuery;
 
@@ -68,13 +68,17 @@ impl CacheStats {
 /// Async because I/O implementations (e.g., AWS Verified Permissions)
 /// need it. Pure implementations use `Box::pin(std::future::ready(...))`.
 ///
+/// Speaks the `DecisionRecord` shape since #111 V1: engines that read a
+/// versioned entity slice (embedded Cedar) return `EvaluatedDecision`
+/// backed by a record; engines that don't (static, VP, CP) return `bare`.
+///
 /// Defined in this pure crate, implemented in I/O crates.
 pub trait PolicyEngine: Send + Sync {
     /// Evaluate a policy query and return a decision.
     fn evaluate(
         &self,
         query: &PolicyQuery,
-    ) -> Pin<Box<dyn Future<Output = Result<PolicyDecision>> + Send + '_>>;
+    ) -> Pin<Box<dyn Future<Output = Result<EvaluatedDecision>> + Send + '_>>;
 
     /// Return cache performance counters, if the engine supports caching.
     ///

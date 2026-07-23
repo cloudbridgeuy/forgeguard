@@ -21,12 +21,10 @@ use crate::Result;
 
 use super::{CedarEngine, DecisionQuery};
 
-/// The existing-trait face of the embedded engine.
-///
-/// Scheduled demolition: #111 retires `PolicyEngine` (or evolves it into the
-/// `DecisionRecord` shape) during the middleware refit; this adapter dies
-/// with it. It exists so today's five `Arc<dyn PolicyEngine>` consumers can
-/// point at embedded Cedar without changing shape.
+/// The embedded engine's native `PolicyEngine` face: maps flat
+/// `PolicyQuery`s into FGRN-scoped `DecisionQuery`s and evaluates through
+/// `CedarEngine`, passing the resulting `DecisionRecord` through intact
+/// (`EvaluatedDecision::with_record`) rather than discarding it.
 pub struct EmbeddedPolicyEngine {
     engine: CedarEngine,
     store: std::sync::Arc<dyn crate::store::AuthzStore>,
@@ -50,29 +48,32 @@ impl crate::PolicyEngine for EmbeddedPolicyEngine {
         &self,
         query: &PolicyQuery,
     ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = crate::Result<crate::PolicyDecision>> + Send + '_>,
+        Box<dyn std::future::Future<Output = crate::Result<crate::EvaluatedDecision>> + Send + '_>,
     > {
         let mapped = map_query(&self.org, query);
         Box::pin(async move {
             let decision_query = match mapped {
                 Ok(q) => q,
                 Err(e) => {
-                    return Ok(crate::PolicyDecision::Deny {
-                        reason: crate::DenyReason::EvaluationError(e.to_string()),
-                    })
+                    return Ok(crate::EvaluatedDecision::bare(
+                        crate::PolicyDecision::Deny {
+                            reason: crate::DenyReason::EvaluationError(e.to_string()),
+                        },
+                    ))
                 }
             };
             let record = self
                 .engine
                 .decide(self.store.as_ref(), &decision_query)
                 .await?;
-            Ok(if record.is_allow() {
+            let decision = if record.is_allow() {
                 crate::PolicyDecision::Allow
             } else {
                 crate::PolicyDecision::Deny {
                     reason: crate::DenyReason::NoMatchingPolicy,
                 }
-            })
+            };
+            Ok(crate::EvaluatedDecision::with_record(decision, record))
         })
     }
 }
@@ -205,7 +206,8 @@ mod tests {
 
         let decision = embedded.evaluate(&query).await.unwrap();
 
-        assert_eq!(decision, crate::PolicyDecision::Allow);
+        assert_eq!(decision.decision(), &crate::PolicyDecision::Allow);
+        assert!(decision.into_record().is_some());
     }
 
     #[tokio::test]
@@ -230,10 +232,11 @@ mod tests {
         let decision = embedded.evaluate(&query).await.unwrap();
 
         assert_eq!(
-            decision,
-            crate::PolicyDecision::Deny {
+            decision.decision(),
+            &crate::PolicyDecision::Deny {
                 reason: crate::DenyReason::NoMatchingPolicy
             }
         );
+        assert!(decision.into_record().is_some());
     }
 }
