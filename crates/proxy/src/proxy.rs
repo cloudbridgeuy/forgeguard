@@ -199,6 +199,7 @@ impl ProxyHttp for ForgeGuardProxy {
                 identity,
                 flags,
                 matched_route,
+                ..
             } => {
                 if identity.is_some() {
                     AUTH_OUTCOMES.with_label_values(&["success"]).inc();

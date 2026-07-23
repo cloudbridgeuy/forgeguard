@@ -4,6 +4,8 @@ mod cli;
 mod proxy;
 
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -313,14 +315,20 @@ impl forgeguard_authz_core::PolicyEngine for AllowAllEngine {
     fn evaluate(
         &self,
         _query: &forgeguard_authz_core::PolicyQuery,
-    ) -> std::pin::Pin<
+    ) -> Pin<
         Box<
-            dyn std::future::Future<
-                    Output = forgeguard_authz_core::Result<forgeguard_authz_core::PolicyDecision>,
+            dyn Future<
+                    Output = forgeguard_authz_core::Result<
+                        forgeguard_authz_core::EvaluatedDecision,
+                    >,
                 > + Send
                 + '_,
         >,
     > {
-        Box::pin(async { Ok(forgeguard_authz_core::PolicyDecision::Allow) })
+        Box::pin(std::future::ready(Ok(
+            forgeguard_authz_core::EvaluatedDecision::bare(
+                forgeguard_authz_core::PolicyDecision::Allow,
+            ),
+        )))
     }
 }

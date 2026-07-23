@@ -91,9 +91,7 @@ pub async fn forgeguard_layer(
 
     match outcome {
         PipelineOutcome::Forward {
-            identity,
-            flags,
-            matched_route: _,
+            identity, flags, ..
         } => {
             let mut request = request;
             request
