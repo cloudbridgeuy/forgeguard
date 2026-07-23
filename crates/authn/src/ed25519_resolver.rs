@@ -17,9 +17,6 @@ use tracing::instrument;
 /// Default maximum allowed drift between request timestamp and server time.
 const DEFAULT_MAX_DRIFT: Duration = Duration::from_secs(300);
 
-/// Header name used to locate the organization ID (case-insensitive match).
-const ORG_ID_HEADER: &str = "x-forgeguard-org-id";
-
 /// Fields extracted from a `SignedRequest` credential for verification.
 struct SignedRequestFields {
     key_id: String,
@@ -34,7 +31,7 @@ impl SignedRequestFields {
     fn org_id(&self) -> forgeguard_authn_core::Result<&str> {
         self.identity_headers
             .iter()
-            .find(|(name, _)| name.eq_ignore_ascii_case(ORG_ID_HEADER))
+            .find(|(name, _)| name.eq_ignore_ascii_case(forgeguard_core::headers::X_FG_ORG_ID))
             .map(|(_, value)| value.as_str())
             .ok_or(forgeguard_authn_core::Error::MissingOrgId)
     }
@@ -181,8 +178,8 @@ mod tests {
         let ts = Timestamp::from_millis(timestamp);
         let trace_id = "trace-test-123";
         let identity_headers = vec![
-            ("x-forgeguard-org-id".to_string(), org_id.to_string()),
-            ("x-forgeguard-user-id".to_string(), "alice".to_string()),
+            ("x-fg-org-id".to_string(), org_id.to_string()),
+            ("x-fg-user-id".to_string(), "alice".to_string()),
         ];
 
         let payload = CanonicalPayload::new(trace_id, ts, &identity_headers);
@@ -222,7 +219,7 @@ mod tests {
             timestamp: 1_700_000_000_000,
             signature: "v1:AAAA".into(),
             trace_id: "trace-abc".into(),
-            identity_headers: vec![("x-forgeguard-org-id".into(), "org-1".into())],
+            identity_headers: vec![("x-fg-org-id".into(), "org-1".into())],
         };
 
         assert!(resolver.can_resolve(&cred));
@@ -316,8 +313,8 @@ mod tests {
         let key_id = KeyId::try_from("key-1".to_string()).unwrap();
         let timestamp = Timestamp::from_millis(ts);
         let trace_id = "trace-test";
-        // No x-forgeguard-org-id header.
-        let identity_headers = vec![("x-forgeguard-user-id".to_string(), "alice".to_string())];
+        // No x-fg-org-id header.
+        let identity_headers = vec![("x-fg-user-id".to_string(), "alice".to_string())];
         let payload = CanonicalPayload::new(trace_id, timestamp, &identity_headers);
         let signed = sign(&sk, &key_id, &payload, timestamp, trace_id.to_string());
 

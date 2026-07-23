@@ -182,7 +182,7 @@ mod tests {
             timestamp: 1_700_000_000_000,
             signature: "v1:AAAA".into(),
             trace_id: "trace-abc".into(),
-            identity_headers: vec![("X-ForgeGuard-Org-Id".into(), "org-123".into())],
+            identity_headers: vec![("X-Fg-Org-Id".into(), "org-123".into())],
         }
     }
 

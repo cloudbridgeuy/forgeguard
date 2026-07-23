@@ -139,7 +139,7 @@ impl PolicyEngine for VpPolicyEngine {
         let Some(tenant_id) = query.context().tenant_id() else {
             tracing::warn!(
                 principal_kind = ?query.principal().kind(),
-                "VP evaluate denied: no tenant_id in query context — check X-ForgeGuard-Org-Id header and membership resolver wiring"
+                "VP evaluate denied: no tenant_id in query context — check X-Fg-Org-Id header and membership resolver wiring"
             );
             return deny_eval_error("no tenant_id in query context");
         };

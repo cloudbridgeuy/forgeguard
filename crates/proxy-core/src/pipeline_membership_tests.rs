@@ -155,7 +155,7 @@ async fn missing_org_header_on_required_route_rejects_400() {
     let config = make_config_with_membership(&[], &[], DefaultPolicy::Passthrough, resolver);
     let chain = make_chain_with_jwt_identity();
     let engine = allow_engine();
-    // No X-ForgeGuard-Org-Id header; non-public route (require_credential = true).
+    // No X-Fg-Org-Id header; non-public route (require_credential = true).
     let req = input_with_bearer("GET", "/protected", "valid-token");
 
     let outcome = super::evaluate_pipeline(&config, &req, &chain, &engine).await;
@@ -164,7 +164,7 @@ async fn missing_org_header_on_required_route_rejects_400() {
         PipelineOutcome::Reject { status, body } => {
             assert_eq!(status, 400);
             let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-            assert_eq!(v["error"], "Missing X-ForgeGuard-Org-Id header");
+            assert_eq!(v["error"], "Missing X-Fg-Org-Id header");
         }
         other => panic!("expected Reject(400), got {other:?}"),
     }
@@ -187,7 +187,7 @@ async fn invalid_org_header_rejects_400() {
         PipelineOutcome::Reject { status, body } => {
             assert_eq!(status, 400);
             let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-            assert_eq!(v["error"], "Invalid X-ForgeGuard-Org-Id header");
+            assert_eq!(v["error"], "Invalid X-Fg-Org-Id header");
         }
         other => panic!("expected Reject(400), got {other:?}"),
     }
@@ -271,7 +271,7 @@ async fn no_org_header_on_opportunistic_route_preserves_identity() {
     let config = make_config_with_membership(&[], &public_routes, DefaultPolicy::Deny, resolver);
     let chain = make_chain_with_jwt_identity();
     let engine = allow_engine();
-    // Valid bearer token, but NO X-ForgeGuard-Org-Id header.
+    // Valid bearer token, but NO X-Fg-Org-Id header.
     let req = input_with_bearer("GET", "/opt", "valid-token");
 
     let outcome = super::evaluate_pipeline(&config, &req, &chain, &engine).await;

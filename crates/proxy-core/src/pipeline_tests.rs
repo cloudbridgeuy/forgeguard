@@ -229,7 +229,7 @@ fn make_config_with_membership(
 fn input_with_bearer_and_org(method: &str, path: &str, token: &str, org: &str) -> RequestInput {
     let headers = vec![
         ("authorization".to_string(), format!("Bearer {token}")),
-        ("x-forgeguard-org-id".to_string(), org.to_string()),
+        ("x-fg-org-id".to_string(), org.to_string()),
     ];
     RequestInput::new(method, path, headers, None).unwrap()
 }

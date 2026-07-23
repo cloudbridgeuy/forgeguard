@@ -13,7 +13,7 @@ The pipeline runs the following phases in order. Any phase may terminate early w
 3. Credential extraction from headers.
 4. Feature-flag gates (maintenance mode, auth bypasses).
 5. **Identity resolution** — invoke the `IdentityResolver` chain (JWT, signed request, static API key).
-6. **Phase 5b — Membership enrichment** (new): when the resolved identity is a user whose `tenant_id` is not yet set, read the `X-ForgeGuard-Org-Id` header, parse it into `OrganizationId`, call `MembershipResolver::resolve(user_id, org_id)`, and replace the identity with a copy carrying the resolved `TenantId` and the groups returned by the resolver. Missing header on a credential-required route → `400`; invalid header → `400`; non-member → `403`; machine principals skip this phase entirely.
+6. **Phase 5b — Membership enrichment** (new): when the resolved identity is a user whose `tenant_id` is not yet set, read the `X-Fg-Org-Id` header, parse it into `OrganizationId`, call `MembershipResolver::resolve(user_id, org_id)`, and replace the identity with a copy carrying the resolved `TenantId` and the groups returned by the resolver. Missing header on a credential-required route → `400`; invalid header → `400`; non-member → `403`; machine principals skip this phase entirely.
 7. Feature flags (request-scoped).
 8. Authorization — invoke `PolicyEngine::evaluate(PolicyQuery)`.
 9. Upstream dispatch (handled outside this crate).

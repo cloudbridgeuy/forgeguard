@@ -99,23 +99,20 @@ pub async fn evaluate_pipeline(
     // Phase 5b: Org membership enrichment
     // If a resolver is configured AND the identity has no tenant_id yet
     // (JWT auth never sets one; Ed25519 machine auth always does), read
-    // X-ForgeGuard-Org-Id, validate membership, and enrich the identity.
+    // X-Fg-Org-Id, validate membership, and enrich the identity.
     if let Some(resolver) = config.membership_resolver() {
         if identity.as_ref().is_some_and(|id| id.tenant_id().is_none()) {
             let org_header = input
                 .headers()
                 .iter()
-                .find(|(name, _)| name.eq_ignore_ascii_case("x-forgeguard-org-id"))
+                .find(|(name, _)| name.eq_ignore_ascii_case(forgeguard_core::headers::X_FG_ORG_ID))
                 .map(|(_, value)| value.as_str());
 
             // Validate/parse the header before consuming the identity, so the
             // early-return paths leave `identity` untouched.
             let org_id = match org_header {
                 None if require_credential => {
-                    return reject_json(
-                        StatusCode::BAD_REQUEST,
-                        "Missing X-ForgeGuard-Org-Id header",
-                    );
+                    return reject_json(StatusCode::BAD_REQUEST, "Missing X-Fg-Org-Id header");
                 }
                 None => {
                     // No org header on an optional/public route — skip enrichment.
@@ -124,10 +121,7 @@ pub async fn evaluate_pipeline(
                 Some(org_str) => match forgeguard_core::OrganizationId::new(org_str) {
                     Ok(id) => Some(id),
                     Err(_) => {
-                        return reject_json(
-                            StatusCode::BAD_REQUEST,
-                            "Invalid X-ForgeGuard-Org-Id header",
-                        )
+                        return reject_json(StatusCode::BAD_REQUEST, "Invalid X-Fg-Org-Id header")
                     }
                 },
             };
