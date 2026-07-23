@@ -1820,6 +1820,7 @@ name = "forgeguard-axum"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "ed25519-dalek",
  "forgeguard_authn_core",
  "forgeguard_authz_core",
  "forgeguard_core",
@@ -1830,6 +1831,7 @@ dependencies = [
  "tokio",
  "tower",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

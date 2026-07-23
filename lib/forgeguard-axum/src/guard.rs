@@ -39,6 +39,7 @@ pub struct ForgeGuard {
     pub(crate) config: PipelineConfig,
     pub(crate) identity_chain: IdentityChain,
     pub(crate) policy_engine: Arc<dyn PolicyEngine>,
+    pub(crate) signing: Option<crate::SigningConfig>,
 }
 
 impl ForgeGuard {
@@ -52,6 +53,13 @@ impl ForgeGuard {
             config,
             identity_chain,
             policy_engine,
+            signing: None,
         }
+    }
+
+    /// Sign injected `X-Fg-*` headers with the org's Ed25519 key.
+    pub fn with_signing(mut self, signing: crate::SigningConfig) -> Self {
+        self.signing = Some(signing);
+        self
     }
 }

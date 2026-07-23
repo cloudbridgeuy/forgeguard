@@ -13,6 +13,26 @@ use forgeguard_proxy_core::{evaluate_pipeline, PipelineOutcome, RequestInput};
 
 use crate::{ForgeGuard, ForgeGuardDecision, ForgeGuardFlags, ForgeGuardIdentity};
 
+/// The `X-Fg-*` names this middleware ever produces on `Forward` — the
+/// spoofing guard strips all of these from the inbound request unconditionally
+/// (even when there's no identity/record to reinsert), so a client can never
+/// smuggle a forged value through on a route where nothing gets injected
+/// (e.g. an anonymous/public route). `x-fg-org-id` (membership routing) and
+/// the four signing/credential headers (`x-fg-trace-id`, `x-fg-timestamp`,
+/// `x-fg-key-id`, `x-fg-signature`) are deliberately excluded — those are
+/// either read upstream of this middleware or carry the inbound BYOC
+/// signed-request credential itself.
+const PROTECTED_FG_HEADERS: [&str; 8] = [
+    forgeguard_core::headers::X_FG_USER_ID,
+    forgeguard_core::headers::X_FG_TENANT_ID,
+    forgeguard_core::headers::X_FG_GROUPS,
+    forgeguard_core::headers::X_FG_AUTH_PROVIDER,
+    forgeguard_core::headers::X_FG_PRINCIPAL,
+    forgeguard_core::headers::X_FG_SCOPE_PATH,
+    forgeguard_core::headers::X_FG_ENTITLEMENTS,
+    forgeguard_core::headers::X_FG_REVISION,
+];
+
 /// Axum middleware that runs the ForgeGuard auth pipeline on every request.
 ///
 /// Translates `axum::http::Request` → [`RequestInput`], calls
@@ -47,7 +67,7 @@ use crate::{ForgeGuard, ForgeGuardDecision, ForgeGuardFlags, ForgeGuardIdentity}
 /// ```
 pub async fn forgeguard_layer(
     State(fg): State<Arc<ForgeGuard>>,
-    request: axum::http::Request<Body>,
+    mut request: axum::http::Request<Body>,
     next: Next,
 ) -> Response<Body> {
     let method = request.method().as_str();
@@ -93,17 +113,50 @@ pub async fn forgeguard_layer(
         PipelineOutcome::Forward {
             identity,
             flags,
+            matched_route: _,
             record,
-            ..
         } => {
-            let mut request = request;
+            let identity = identity.map(|boxed| *boxed);
+            let record = record.map(|boxed| *boxed);
+
+            let trace_id = uuid::Uuid::now_v7().to_string();
+            let now = forgeguard_authn_core::signing::Timestamp::from_system_time(
+                std::time::SystemTime::now(),
+            );
+            let fg_headers = crate::headers::build_fg_headers(&crate::headers::FgHeaderParams {
+                identity: identity.as_ref(),
+                record: record.as_ref(),
+                signing: fg.signing.as_ref(),
+                trace_id: &trace_id,
+                now,
+            });
+
+            // Spoofing guard: unconditionally strip every name this middleware
+            // could inject, THEN reinsert whatever `fg_headers` actually computed.
+            // Stripping first (not just overwriting inside the loop below) matters
+            // when `fg_headers` is empty — e.g. an anonymous/public route with no
+            // identity — a client-supplied `x-fg-user-id` must not survive to
+            // `next.run` unmodified just because there was nothing to overwrite it
+            // with.
+            for name in PROTECTED_FG_HEADERS {
+                request.headers_mut().remove(name);
+            }
+            for (name, value) in fg_headers {
+                let Ok(header_name) = axum::http::HeaderName::try_from(name.as_str()) else {
+                    tracing::warn!(header = %name, "skipping invalid X-Fg header name");
+                    continue;
+                };
+                let Ok(header_value) = axum::http::HeaderValue::try_from(value.as_str()) else {
+                    tracing::warn!(header = %name, "skipping invalid X-Fg header value");
+                    continue;
+                };
+                request.headers_mut().insert(header_name, header_value);
+            }
             request
                 .extensions_mut()
-                .insert(ForgeGuardIdentity(identity.map(|boxed| *boxed)));
+                .insert(ForgeGuardIdentity(identity));
             request.extensions_mut().insert(ForgeGuardFlags(flags));
-            request
-                .extensions_mut()
-                .insert(ForgeGuardDecision(record.map(|boxed| *boxed)));
+            request.extensions_mut().insert(ForgeGuardDecision(record));
             next.run(request).await
         }
         PipelineOutcome::Reject { status, body } => json_response(status, &body),
@@ -128,21 +181,30 @@ fn json_response(status: StatusCode, body: &str) -> Response<Body> {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     use axum::body::Body;
     use axum::http::Request;
     use axum::routing::get;
     use axum::Router;
-    use forgeguard_authn_core::IdentityChain;
+    use forgeguard_authn_core::signing::{
+        parse_signature_header, verify, CanonicalPayload, KeyId, SigningKey, Timestamp,
+        VerifyingKey,
+    };
+    use forgeguard_authn_core::static_api_key::ApiKeyEntry;
+    use forgeguard_authn_core::{IdentityChain, IdentityResolver, StaticApiKeyResolver};
     use forgeguard_authz_core::{PolicyDecision, StaticPolicyEngine};
-    use forgeguard_core::{FlagConfig, ProjectId};
+    use forgeguard_core::{FlagConfig, ProjectId, QualifiedAction, UserId};
     use forgeguard_http::{
-        DefaultPolicy, HttpMethod, PublicAuthMode, PublicRoute, PublicRouteMatcher, RouteMatcher,
+        DefaultPolicy, HttpMethod, PublicAuthMode, PublicRoute, PublicRouteMatcher, RouteMapping,
+        RouteMatcher,
     };
     use forgeguard_proxy_core::{PipelineConfig, PipelineConfigParams};
     use http_body_util::BodyExt;
     use tower::ServiceExt;
+
+    use crate::SigningConfig;
 
     use super::*;
 
@@ -164,6 +226,43 @@ mod tests {
             membership_resolver: None,
         });
         let chain = IdentityChain::new(vec![]);
+        let engine = Arc::new(StaticPolicyEngine::new(PolicyDecision::Allow));
+        ForgeGuard::new(config, chain, engine)
+    }
+
+    /// Authenticated fixture: one matched route (`GET /items`), a static
+    /// `X-API-Key` resolver mapping `valid-key` -> `alice`, and an allow-all
+    /// policy engine. Used by tests that need a real `Forward` outcome with
+    /// identity, since `test_forgeguard`'s empty route matcher only reaches
+    /// public/health/debug-endpoint outcomes.
+    fn test_forgeguard_authenticated() -> ForgeGuard {
+        let routes = vec![RouteMapping::new(
+            "GET".parse().unwrap(),
+            "/items".to_string(),
+            QualifiedAction::parse("todo:list:user").unwrap(),
+            None,
+            None,
+        )];
+        let route_matcher = RouteMatcher::new(&routes).unwrap();
+        let public_route_matcher = PublicRouteMatcher::new(&[]).unwrap();
+        let config = PipelineConfig::new(PipelineConfigParams {
+            route_matcher,
+            public_route_matcher,
+            flag_config: FlagConfig::default(),
+            project_id: ProjectId::new("test").unwrap(),
+            default_policy: DefaultPolicy::Deny,
+            debug_mode: false,
+            auth_providers: vec![],
+            membership_resolver: None,
+        });
+
+        let mut keys = HashMap::new();
+        keys.insert(
+            "valid-key".to_string(),
+            ApiKeyEntry::new(UserId::new("alice").unwrap(), None, vec![]),
+        );
+        let resolver: Arc<dyn IdentityResolver> = Arc::new(StaticApiKeyResolver::new(keys));
+        let chain = IdentityChain::new(vec![resolver]);
         let engine = Arc::new(StaticPolicyEngine::new(PolicyDecision::Allow));
         ForgeGuard::new(config, chain, engine)
     }
@@ -280,5 +379,162 @@ mod tests {
         // Debug endpoint returns JSON with flag information
         let _: serde_json::Value =
             serde_json::from_str(&text).expect("debug endpoint should return valid JSON");
+    }
+
+    #[tokio::test]
+    async fn public_route_gets_no_fg_headers_without_identity() {
+        let public_routes = vec![PublicRoute::new(
+            HttpMethod::Get,
+            "/public".to_string(),
+            PublicAuthMode::Anonymous,
+        )];
+        let fg = Arc::new(test_forgeguard(false, DefaultPolicy::Deny, &public_routes));
+        let app = Router::new()
+            .route(
+                "/public",
+                get(|headers: axum::http::HeaderMap| async move {
+                    assert!(headers.get("x-fg-user-id").is_none());
+                    "downstream"
+                }),
+            )
+            .layer(axum::middleware::from_fn_with_state(fg, forgeguard_layer));
+
+        let request = Request::builder()
+            .uri("/public")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    /// Regression test for the spoofing guard's empty-injection gap: an
+    /// anonymous route has no identity, so `build_fg_headers` returns
+    /// nothing — that must NOT mean a client-supplied `x-fg-user-id` (or
+    /// any other protected name) passes through untouched.
+    #[tokio::test]
+    async fn public_route_strips_spoofed_identity_and_decision_headers() {
+        let public_routes = vec![PublicRoute::new(
+            HttpMethod::Get,
+            "/public".to_string(),
+            PublicAuthMode::Anonymous,
+        )];
+        let fg = Arc::new(test_forgeguard(false, DefaultPolicy::Deny, &public_routes));
+        let app = Router::new()
+            .route(
+                "/public",
+                get(|headers: axum::http::HeaderMap| async move {
+                    for name in PROTECTED_FG_HEADERS {
+                        assert!(headers.get(name).is_none(), "{name} was not stripped");
+                    }
+                    "downstream"
+                }),
+            )
+            .layer(axum::middleware::from_fn_with_state(fg, forgeguard_layer));
+
+        let request = Request::builder()
+            .uri("/public")
+            .header("x-fg-user-id", "mallory")
+            .header("x-fg-scope-path", "root/eng")
+            .header("x-fg-entitlements", "delete")
+            .header("x-fg-revision", "999")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn forward_overwrites_spoofed_identity_header() {
+        let fg = Arc::new(test_forgeguard_authenticated());
+        let app = Router::new()
+            .route(
+                "/items",
+                get(|headers: axum::http::HeaderMap| async move {
+                    assert_eq!(headers.get("x-fg-user-id").unwrap(), "alice");
+                    "downstream"
+                }),
+            )
+            .layer(axum::middleware::from_fn_with_state(fg, forgeguard_layer));
+
+        let request = Request::builder()
+            .uri("/items")
+            .header("x-api-key", "valid-key")
+            .header("x-fg-user-id", "mallory")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn signed_headers_verify_end_to_end() {
+        let key_id = KeyId::try_from("test-key".to_string()).unwrap();
+        let signing = SigningConfig::new(SigningKey::from_bytes(&[42u8; 32]), key_id);
+        let verifying_key = VerifyingKey::from(signing.key());
+
+        let fg = Arc::new(test_forgeguard_authenticated().with_signing(signing));
+        let app = Router::new()
+            .route(
+                "/items",
+                get(move |headers: axum::http::HeaderMap| {
+                    let verifying_key = verifying_key.clone();
+                    async move {
+                        let trace_id = headers
+                            .get("x-fg-trace-id")
+                            .unwrap()
+                            .to_str()
+                            .unwrap()
+                            .to_string();
+                        let timestamp = headers
+                            .get("x-fg-timestamp")
+                            .unwrap()
+                            .to_str()
+                            .unwrap()
+                            .parse::<u64>()
+                            .unwrap();
+                        let signature = parse_signature_header(
+                            headers.get("x-fg-signature").unwrap().to_str().unwrap(),
+                        )
+                        .unwrap();
+
+                        let signature_headers = [
+                            "x-fg-trace-id",
+                            "x-fg-timestamp",
+                            "x-fg-key-id",
+                            "x-fg-signature",
+                        ];
+                        let covered: Vec<(String, String)> = headers
+                            .iter()
+                            .filter(|(k, _)| {
+                                k.as_str().starts_with("x-fg-")
+                                    && !signature_headers.contains(&k.as_str())
+                            })
+                            .map(|(k, v)| (k.to_string(), v.to_str().unwrap().to_string()))
+                            .collect();
+
+                        let payload = CanonicalPayload::new(
+                            &trace_id,
+                            Timestamp::from_millis(timestamp),
+                            &covered,
+                        );
+                        verify(&verifying_key, &payload, &signature)
+                            .expect("signature must verify against injected headers");
+                        "downstream"
+                    }
+                }),
+            )
+            .layer(axum::middleware::from_fn_with_state(fg, forgeguard_layer));
+
+        let request = Request::builder()
+            .uri("/items")
+            .header("x-api-key", "valid-key")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
     }
 }

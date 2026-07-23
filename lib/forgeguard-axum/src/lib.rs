@@ -3,8 +3,11 @@
 
 mod extractor;
 mod guard;
+mod headers;
 mod middleware;
+mod signing;
 
 pub use extractor::{ForgeGuardDecision, ForgeGuardFlags, ForgeGuardIdentity};
 pub use guard::ForgeGuard;
 pub use middleware::forgeguard_layer;
+pub use signing::SigningConfig;
