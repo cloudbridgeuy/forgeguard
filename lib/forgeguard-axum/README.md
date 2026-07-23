@@ -283,3 +283,5 @@ extractors in your handlers:
   `None` for anonymous/public requests.
 - **`ForgeGuardFlags(Option<ResolvedFlags>)`** -- evaluated feature flags, or
   `None` if no flag config is present.
+- **`ForgeGuardDecision(Option<DecisionRecord>)`** -- the embedded-engine
+  decision record, or `None` under static/VP engines or public routes.

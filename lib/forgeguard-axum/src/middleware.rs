@@ -11,14 +11,14 @@ use axum::{
 
 use forgeguard_proxy_core::{evaluate_pipeline, PipelineOutcome, RequestInput};
 
-use crate::{ForgeGuard, ForgeGuardFlags, ForgeGuardIdentity};
+use crate::{ForgeGuard, ForgeGuardDecision, ForgeGuardFlags, ForgeGuardIdentity};
 
 /// Axum middleware that runs the ForgeGuard auth pipeline on every request.
 ///
 /// Translates `axum::http::Request` → [`RequestInput`], calls
 /// [`evaluate_pipeline`], and maps the [`PipelineOutcome`] to an Axum response:
 ///
-/// - **Forward** — injects identity + flags into request extensions, calls `next`
+/// - **Forward** — injects identity + flags + decision record into request extensions, calls `next`
 /// - **Reject** — returns an error response with the pipeline's status and body
 /// - **Health** — returns the health-check response directly
 /// - **Debug** — returns the debug response directly
@@ -91,13 +91,19 @@ pub async fn forgeguard_layer(
 
     match outcome {
         PipelineOutcome::Forward {
-            identity, flags, ..
+            identity,
+            flags,
+            record,
+            ..
         } => {
             let mut request = request;
             request
                 .extensions_mut()
                 .insert(ForgeGuardIdentity(identity.map(|boxed| *boxed)));
             request.extensions_mut().insert(ForgeGuardFlags(flags));
+            request
+                .extensions_mut()
+                .insert(ForgeGuardDecision(record.map(|boxed| *boxed)));
             next.run(request).await
         }
         PipelineOutcome::Reject { status, body } => json_response(status, &body),
@@ -205,6 +211,35 @@ mod tests {
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let text = String::from_utf8_lossy(&body);
         assert_eq!(text, "downstream");
+    }
+
+    #[tokio::test]
+    async fn public_route_decision_extractor_returns_none() {
+        let public_routes = vec![PublicRoute::new(
+            HttpMethod::Get,
+            "/public".to_string(),
+            PublicAuthMode::Anonymous,
+        )];
+        let fg = Arc::new(test_forgeguard(false, DefaultPolicy::Deny, &public_routes));
+        let app = Router::new()
+            .route(
+                "/public",
+                get(
+                    |ForgeGuardDecision(record): ForgeGuardDecision| async move {
+                        assert!(record.is_none());
+                        "downstream"
+                    },
+                ),
+            )
+            .layer(axum::middleware::from_fn_with_state(fg, forgeguard_layer));
+
+        let request = Request::builder()
+            .uri("/public")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[tokio::test]

@@ -5,6 +5,6 @@ mod extractor;
 mod guard;
 mod middleware;
 
-pub use extractor::{ForgeGuardFlags, ForgeGuardIdentity};
+pub use extractor::{ForgeGuardDecision, ForgeGuardFlags, ForgeGuardIdentity};
 pub use guard::ForgeGuard;
 pub use middleware::forgeguard_layer;
