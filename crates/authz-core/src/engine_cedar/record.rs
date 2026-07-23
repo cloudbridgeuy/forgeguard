@@ -7,6 +7,8 @@ use forgeguard_core::{DelegationChain, Fgrn, Verb};
 use crate::snapshot::SnapshotVersion;
 use crate::store::Revision;
 
+use super::ScopePath;
+
 /// A single authorization question.
 #[derive(Debug, Clone)]
 pub struct DecisionQuery {
@@ -92,6 +94,8 @@ pub struct DecisionRecord {
     decision: Decision,
     snapshot_version: SnapshotVersion,
     revision: Revision,
+    scope_path: ScopePath,
+    entitlements: Vec<Verb>,
 }
 
 impl DecisionRecord {
@@ -99,11 +103,15 @@ impl DecisionRecord {
         decision: Decision,
         snapshot_version: SnapshotVersion,
         revision: Revision,
+        scope_path: ScopePath,
+        entitlements: Vec<Verb>,
     ) -> Self {
         Self {
             decision,
             snapshot_version,
             revision,
+            scope_path,
+            entitlements,
         }
     }
 
@@ -125,6 +133,16 @@ impl DecisionRecord {
     /// The store revision the entity slice was read at.
     pub fn revision(&self) -> Revision {
         self.revision
+    }
+
+    /// The principal's org-unit ancestry at decision time.
+    pub fn scope_path(&self) -> &ScopePath {
+        &self.scope_path
+    }
+
+    /// Verbs granted to the principal on the queried resource, sorted.
+    pub fn entitlements(&self) -> &[Verb] {
+        &self.entitlements
     }
 }
 
@@ -183,12 +201,18 @@ mod tests {
         assert!(matches!(err, crate::Error::ChainActorMismatch { .. }));
     }
 
+    fn root_scope_path() -> ScopePath {
+        ScopePath::try_new(vec![fgrn("fgrn:acme:orgunit:root")]).unwrap()
+    }
+
     #[test]
     fn record_reports_allow() {
         let record = DecisionRecord::new(
             Decision::Allow,
             SnapshotVersion::of("permit();"),
             Revision::new(1),
+            root_scope_path(),
+            vec![],
         );
         assert!(record.is_allow());
         assert_eq!(record.decision(), Decision::Allow);
@@ -201,6 +225,8 @@ mod tests {
             Decision::Deny,
             SnapshotVersion::of("forbid();"),
             Revision::new(1),
+            root_scope_path(),
+            vec![],
         );
         assert!(!record.is_allow());
     }

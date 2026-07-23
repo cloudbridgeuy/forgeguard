@@ -7,6 +7,7 @@ use cedar_policy::{Authorizer, Context, EntityId, EntityTypeName, EntityUid, Pol
 
 use forgeguard_core::{Fgrn, Verb};
 
+use crate::engine_cedar::enrich::{entitlements_of, scope_path_of};
 use crate::engine_cedar::record::{Decision, DecisionQuery, DecisionRecord};
 use crate::engine_cedar::translate::{
     cedar_principal_type, grant_policies, slice_to_entities, uid,
@@ -54,33 +55,55 @@ impl CedarEngine {
             None => vec![query.principal()],
         };
 
-        let mut decision = Decision::Allow;
-        for link in links {
+        // First link is the acting principal (chain actor == query
+        // principal, enforced by `DecisionQuery::with_chain`). Its slice is
+        // kept for enrichment (scope_path, entitlements) — no extra read.
+        let Some((first, rest)) = links.split_first() else {
+            return Err(Error::EvaluationFailed(
+                "delegation chain produced no links".to_string(),
+            ));
+        };
+        let first_query = LinkQuery {
+            principal: first,
+            action: query.action(),
+            resource: query.resource(),
+            revision,
+        };
+        let (mut decision, principal_slice) = self.evaluate_link(store, &first_query).await?;
+        for link in rest {
+            if decision == Decision::Deny {
+                break;
+            }
             let link_query = LinkQuery {
                 principal: link,
                 action: query.action(),
                 resource: query.resource(),
                 revision,
             };
-            decision = self.evaluate_link(store, &link_query).await?;
-            if decision == Decision::Deny {
-                break;
-            }
+            let (link_decision, _slice) = self.evaluate_link(store, &link_query).await?;
+            decision = link_decision;
         }
+
+        let scope_path = scope_path_of(&principal_slice);
+        let entitlements = entitlements_of(&principal_slice);
 
         Ok(DecisionRecord::new(
             decision,
             self.snapshot.version().clone(),
             revision,
+            scope_path,
+            entitlements,
         ))
     }
 
     /// Evaluate one principal's entity slice, read at `link.revision`.
+    /// Returns the slice alongside the decision — the caller keeps the first
+    /// link's slice for record enrichment.
     async fn evaluate_link(
         &self,
         store: &dyn AuthzStore,
         link: &LinkQuery<'_>,
-    ) -> Result<Decision> {
+    ) -> Result<(Decision, EntitySlice)> {
         let slice_query = SliceQuery::new(link.principal.clone(), link.resource.clone())
             .at_revision(link.revision);
         let slice = store.slice(&slice_query).await?;
@@ -94,10 +117,11 @@ impl CedarEngine {
 
         let request = build_request(&slice, link.action, link.resource)?;
         let answer = Authorizer::new().is_authorized(&request, &policies, &entities);
-        Ok(match answer.decision() {
+        let decision = match answer.decision() {
             cedar_policy::Decision::Allow => Decision::Allow,
             cedar_policy::Decision::Deny => Decision::Deny,
-        })
+        };
+        Ok((decision, slice))
     }
 }
 
@@ -335,5 +359,24 @@ mod tests {
         let record = engine.decide(&store, &query).await.unwrap();
 
         assert!(record.is_allow());
+    }
+
+    #[tokio::test]
+    async fn record_carries_scope_path_and_entitlements() {
+        let store = store_with_grant_at_revision_2().await;
+        let engine = engine();
+        let query = DecisionQuery::new(maria(), Verb::try_new("read").unwrap(), doc());
+
+        let record = engine.decide(&store, &query).await.unwrap();
+
+        assert_eq!(record.scope_path().to_string(), "root");
+        assert_eq!(
+            record
+                .entitlements()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            vec!["read"]
+        );
     }
 }
