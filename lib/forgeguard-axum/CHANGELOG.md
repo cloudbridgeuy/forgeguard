@@ -6,11 +6,11 @@ All notable changes to `forgeguard-axum` will be documented in this file.
 
 ### Changed
 
-- **Breaking:** injected header namespace converged from `X-ForgeGuard-*` to
-  `X-Fg-*` (e.g. `X-Fg-User-Id`, `X-Fg-Tenant-Id`, `X-Fg-Scope-Path`). Any
-  upstream or handler reading the old header names must update to the new
-  namespace. The signed canonical payload format is unchanged — only header
-  names moved.
+- **Breaking:** injected header namespace renamed to `X-Fg-*` (e.g.
+  `X-Fg-User-Id`, `X-Fg-Tenant-Id`, `X-Fg-Scope-Path`) — previously a longer,
+  now-retired `X-<ProjectName>-*` prefix. Any upstream or handler reading the
+  old header names must update to the new namespace. The signed canonical
+  payload format is unchanged — only header names moved.
 
 ### Added
 
