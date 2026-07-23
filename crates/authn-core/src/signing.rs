@@ -198,23 +198,23 @@ pub struct SignedPayload {
 }
 
 impl SignedPayload {
-    /// `X-ForgeGuard-Signature` header value: `v1:{base64}`.
+    /// `X-Fg-Signature` header value: `v1:{base64}`.
     pub fn signature_header_value(&self) -> String {
         let b64 = base64::engine::general_purpose::STANDARD.encode(self.signature.to_bytes());
         format!("v1:{b64}")
     }
 
-    /// `X-ForgeGuard-Timestamp` header value.
+    /// `X-Fg-Timestamp` header value.
     pub fn timestamp_header_value(&self) -> String {
         self.timestamp.to_string()
     }
 
-    /// `X-ForgeGuard-Key-Id` header value.
+    /// `X-Fg-Key-Id` header value.
     pub fn key_id_header_value(&self) -> String {
         self.key_id.as_str().to_string()
     }
 
-    /// `X-ForgeGuard-Trace-Id` header value.
+    /// `X-Fg-Trace-Id` header value.
     pub fn trace_id_header_value(&self) -> &str {
         &self.trace_id
     }
@@ -334,9 +334,9 @@ mod tests {
 
     fn sample_headers() -> Vec<(String, String)> {
         vec![
-            ("x-forgeguard-user-id".into(), "alice".into()),
-            ("x-forgeguard-tenant-id".into(), "acme-corp".into()),
-            ("x-forgeguard-auth-provider".into(), "jwt".into()),
+            ("x-fg-user-id".into(), "alice".into()),
+            ("x-fg-tenant-id".into(), "acme-corp".into()),
+            ("x-fg-auth-provider".into(), "jwt".into()),
         ]
     }
 
@@ -357,12 +357,12 @@ mod tests {
         let trace = "abc-123";
 
         let headers_a = vec![
-            ("x-forgeguard-user-id".into(), "alice".into()),
-            ("x-forgeguard-auth-provider".into(), "jwt".into()),
+            ("x-fg-user-id".into(), "alice".into()),
+            ("x-fg-auth-provider".into(), "jwt".into()),
         ];
         let headers_b = vec![
-            ("x-forgeguard-auth-provider".into(), "jwt".into()),
-            ("x-forgeguard-user-id".into(), "alice".into()),
+            ("x-fg-auth-provider".into(), "jwt".into()),
+            ("x-fg-user-id".into(), "alice".into()),
         ];
 
         let payload_a = CanonicalPayload::new(trace, ts, &headers_a);
@@ -376,8 +376,8 @@ mod tests {
         let ts = Timestamp::from_millis(1_700_000_000_000);
         let trace = "trace-xyz";
         let headers = vec![
-            ("x-forgeguard-user-id".into(), "alice".into()),
-            ("x-forgeguard-auth-provider".into(), "jwt".into()),
+            ("x-fg-user-id".into(), "alice".into()),
+            ("x-fg-auth-provider".into(), "jwt".into()),
         ];
 
         let payload = CanonicalPayload::new(trace, ts, &headers);
@@ -387,8 +387,8 @@ mod tests {
         assert!(text.contains("trace-id:trace-xyz\n"));
         assert!(text.contains("timestamp:1700000000000\n"));
         // auth-provider sorts before user-id
-        let auth_pos = text.find("x-forgeguard-auth-provider").unwrap();
-        let user_pos = text.find("x-forgeguard-user-id").unwrap();
+        let auth_pos = text.find("x-fg-auth-provider").unwrap();
+        let user_pos = text.find("x-fg-user-id").unwrap();
         assert!(auth_pos < user_pos);
     }
 
@@ -416,7 +416,7 @@ mod tests {
         let signed = sign(&sk, &key_id, &payload, ts, "trace-1".into());
 
         // Tamper: different headers
-        let tampered_headers = vec![("x-forgeguard-user-id".into(), "eve".into())];
+        let tampered_headers = vec![("x-fg-user-id".into(), "eve".into())];
         let tampered = CanonicalPayload::new("trace-1", ts, &tampered_headers);
 
         assert!(verify(&vk, &tampered, signed.signature()).is_err());

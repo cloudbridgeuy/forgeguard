@@ -22,9 +22,9 @@ Owns `Credential` (protocol-agnostic input), `Identity` (resolved, trusted outpu
 |---------|--------|-------------|
 | `Credential::Bearer(token)` | `Authorization: Bearer <token>` | `CognitoJwtResolver` |
 | `Credential::ApiKey(key)` | `X-API-Key: <key>` | `StaticApiKeyResolver` |
-| `Credential::SignedRequest { .. }` | Four `X-ForgeGuard-*` headers | `Ed25519SignatureResolver` |
+| `Credential::SignedRequest { .. }` | Four `X-Fg-*` headers | `Ed25519SignatureResolver` |
 
-`Credential::SignedRequest` carries: `key_id`, `timestamp` (Unix millis), `signature` (`v1:{base64}`), `trace_id`, and `identity_headers` (all remaining `X-ForgeGuard-*` headers, including `X-ForgeGuard-Org-Id`).
+`Credential::SignedRequest` carries: `key_id`, `timestamp` (Unix millis), `signature` (`v1:{base64}`), `trace_id`, and `identity_headers` (all remaining `X-Fg-*` headers, including `X-Fg-Org-Id`).
 
 ## SigningKeyStore Trait
 

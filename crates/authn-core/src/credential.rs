@@ -16,16 +16,16 @@ pub enum Credential {
     ApiKey(String),
     /// Ed25519 signed request — BYOC proxy authentication.
     SignedRequest {
-        /// From `X-ForgeGuard-Key-Id` header.
+        /// From `X-Fg-Key-Id` header.
         key_id: String,
-        /// From `X-ForgeGuard-Timestamp` header (Unix millis).
+        /// From `X-Fg-Timestamp` header (Unix millis).
         timestamp: u64,
-        /// Raw `X-ForgeGuard-Signature` header value (`v1:{base64}`).
+        /// Raw `X-Fg-Signature` header value (`v1:{base64}`).
         signature: String,
-        /// From `X-ForgeGuard-Trace-Id` header.
+        /// From `X-Fg-Trace-Id` header.
         trace_id: String,
-        /// All remaining `X-ForgeGuard-*` headers (excluding the 4 above).
-        /// Includes `X-ForgeGuard-Org-Id` for org-scoped key lookup.
+        /// All remaining `X-Fg-*` headers (excluding the 4 above).
+        /// Includes `X-Fg-Org-Id` for org-scoped key lookup.
         identity_headers: Vec<(String, String)>,
     },
 }
@@ -87,15 +87,15 @@ mod tests {
 
     #[test]
     fn type_name_signed_request() {
-        let cred = make_signed_request(vec![("X-ForgeGuard-Org-Id".into(), "org-123".into())]);
+        let cred = make_signed_request(vec![("X-Fg-Org-Id".into(), "org-123".into())]);
         assert_eq!(cred.type_name(), "signed-request");
     }
 
     #[test]
     fn serde_round_trip_signed_request() {
         let cred = make_signed_request(vec![
-            ("X-ForgeGuard-Org-Id".into(), "org-123".into()),
-            ("X-ForgeGuard-Custom".into(), "value".into()),
+            ("X-Fg-Org-Id".into(), "org-123".into()),
+            ("X-Fg-Custom".into(), "value".into()),
         ]);
         let json = serde_json::to_string(&cred).unwrap();
         let deserialized: Credential = serde_json::from_str(&json).unwrap();

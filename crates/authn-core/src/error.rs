@@ -39,8 +39,8 @@ pub enum Error {
     /// The key ID is empty.
     #[error("invalid key ID: must be non-empty")]
     InvalidKeyId,
-    /// The required X-ForgeGuard-Org-Id header is missing from the signed request.
-    #[error("missing X-ForgeGuard-Org-Id header in signed request")]
+    /// The required X-Fg-Org-Id header is missing from the signed request.
+    #[error("missing X-Fg-Org-Id header in signed request")]
     MissingOrgId,
     /// `CustomAttrName` failed the parse invariant.
     #[error("invalid custom attribute name {raw:?}: {reason}")]
@@ -119,7 +119,7 @@ mod tests {
         let err = Error::MissingOrgId;
         assert_eq!(
             err.to_string(),
-            "missing X-ForgeGuard-Org-Id header in signed request"
+            "missing X-Fg-Org-Id header in signed request"
         );
     }
 }
