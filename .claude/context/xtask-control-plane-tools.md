@@ -74,7 +74,7 @@ cargo xtask control-plane token --user acme-admin --verbose
 
 ## `curl` — Send an Ed25519-signed HTTP request
 
-Generates the machine-principal signature headers (`x-forgeguard-signature`, `x-forgeguard-timestamp`, `x-forgeguard-key-id`, `x-forgeguard-trace-id`) from a PEM private key and sends the request via `reqwest`. Useful for QA'ing the machine principal → embedded `cp:*` authorization flow without a real proxy.
+Generates the machine-principal signature headers (`x-fg-signature`, `x-fg-timestamp`, `x-fg-key-id`, `x-fg-trace-id`) from a PEM private key and sends the request via `reqwest`. Useful for QA'ing the machine principal → embedded `cp:*` authorization flow without a real proxy.
 
 ```bash
 cargo xtask control-plane curl \
@@ -85,7 +85,7 @@ cargo xtask control-plane curl \
     GET https://cp.forgeguard.dev/api/v1/organizations/org-acme/proxy-config
 ```
 
-The canonical payload that the server recomputes and verifies against matches exactly: the `CanonicalPayload::new(&trace_id, timestamp, &identity_headers)` constructor uses the lowercase `x-forgeguard-org-id` header to match what the `http` crate normalises on the server side.
+The canonical payload that the server recomputes and verifies against matches exactly: the `CanonicalPayload::new(&trace_id, timestamp, &identity_headers)` constructor uses the lowercase `x-fg-org-id` header to match what the `http` crate normalises on the server side.
 
 `--private-key` accepts either the PEM inline or a `@path` reference that is read from disk. The contents are `.trim()`-ed before handing to `SigningKey::from_pkcs8_pem`, so PEMs written by `jq -r .private_key > key.pem` (which appends a trailing newline that `pem-rfc7468` rejects as post-encapsulation whitespace) load cleanly.
 

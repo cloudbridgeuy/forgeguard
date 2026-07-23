@@ -9,7 +9,7 @@ forgeguard_core (pure)          forgeguard_http (pure)           forgeguard_prox
 ├── FlagName                    ├── ProxyConfig.features()       ├── ForgeGuardProxy.flag_config
 ├── FlagValue (Bool/String/Num) ├── RouteMapping.feature_gate    ├── request_filter steps 4-6
 ├── FlagType                    ├── check_feature_gates()        ├── debug endpoint (--debug)
-├── FlagOverride                ├── FlagDebugQuery::parse()      └── inject X-ForgeGuard-Features
+├── FlagOverride                ├── FlagDebugQuery::parse()      └── inject X-Fg-Features
 ├── FlagDefinition              └── evaluate_debug()
 ├── FlagConfig
 ├── ResolvedFlags
@@ -65,7 +65,7 @@ In `request_filter`, feature flags are evaluated at step 4 (after identity resol
 
 - Step 4: `evaluate_flags(config, tenant_id, user_id, groups)` → `ResolvedFlags`
 - Step 6: If route has `feature_gate` and flag is not enabled → 404 `{"error": "Not Found"}`
-- `upstream_request_filter`: `X-ForgeGuard-Features` header injected with JSON of all resolved flags
+- `upstream_request_filter`: `X-Fg-Features` header injected with JSON of all resolved flags
 
 ## TOML Configuration
 

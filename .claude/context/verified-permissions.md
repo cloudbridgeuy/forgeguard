@@ -48,7 +48,7 @@ Canonical source: the `[[policies]]` `allow` arrays in `forgeguard.toml` at the 
 
 The compiler emits one `permit(principal in forgeguard::Group::"<role>", ...)` per role with `when { principal.org_id == resource.org_id }` auto-appended for tenant scoping. No per-user VP instantiation runs at invitation time — group membership alone grants the permit.
 
-**Resource `org_id` provenance.** The resource entity's `org_id` attribute is the resource's *owning* org, resolved from `ResourceRef::org_source()`: control-plane org-scoped routes (`/organizations/{org_id}/...`) carry `ResourceOrgSource::OwnId`, so `org_id` is the `{org_id}` path param; proxy resources and CP collection endpoints use the `RequestTenant` default. This is what makes the tenant-scope clause meaningful — sourcing it from the `X-ForgeGuard-Org-Id` header instead (the pre-fix bug) made the clause a no-op and allowed cross-org access.
+**Resource `org_id` provenance.** The resource entity's `org_id` attribute is the resource's *owning* org, resolved from `ResourceRef::org_source()`: control-plane org-scoped routes (`/organizations/{org_id}/...`) carry `ResourceOrgSource::OwnId`, so `org_id` is the `{org_id}` path param; proxy resources and CP collection endpoints use the `RequestTenant` default. This is what makes the tenant-scope clause meaningful — sourcing it from the `X-Fg-Org-Id` header instead (the pre-fix bug) made the clause a no-op and allowed cross-org access.
 
 The single non-RBAC permit is `machine-proxy-config-read`, a raw Cedar policy that lets `Machine` principals (Ed25519-signed) read their own org's proxy config and nothing else.
 

@@ -8,13 +8,13 @@ Proves the proxy works end-to-end: JWT auth, API key auth, public routes, featur
 
 Two distinct feature flag mechanisms are demonstrated:
 - **Gate** (`todo:ai-suggestions`): proxy blocks the route entirely when the flag is disabled for a tenant
-- **Branch** (`todo:premium-ai`): app reads the flag value from `X-ForgeGuard-Features` to select the AI model per tenant
+- **Branch** (`todo:premium-ai`): app reads the flag value from `X-Fg-Features` to select the AI model per tenant
 
 ## Files
 
 | File | Purpose |
 |------|---------|
-| `app.py` | FastAPI TODO app — reads `X-ForgeGuard-*` headers only |
+| `app.py` | FastAPI TODO app — reads `X-Fg-*` headers only |
 | `forgeguard.toml` | Full demo config exercising every proxy feature |
 | `pyproject.toml` | Python dependencies (fastapi, uvicorn) via uv |
 | `README.md` | Setup and demo instructions |
@@ -72,7 +72,7 @@ Tests use a harness that spawns an axum echo upstream + proxy child process per 
 | `no_credential_returns_401` | Protected route rejects unauthenticated |
 | `invalid_api_key_returns_401` | Bad API key rejected |
 | `valid_credential_returns_200` | Valid key passes through |
-| `valid_credential_injects_headers` | Proxy injects `X-ForgeGuard-*` identity headers |
+| `valid_credential_injects_headers` | Proxy injects `X-Fg-*` identity headers |
 | `unmatched_route_returns_403` | Unmatched route denied by default policy |
 | `anonymous_public_route_returns_200` | Anonymous public route works |
 | `opportunistic_without_cred` | Opportunistic route works without creds |

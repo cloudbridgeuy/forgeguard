@@ -89,7 +89,7 @@ cargo xtask control-plane seed \
 TOKEN=$(cargo xtask control-plane token --user acme-admin)
 curl -i -X POST http://127.0.0.1:3001/api/v1/organizations/org-acme/keys \
   -H "Authorization: Bearer $TOKEN" \
-  -H "X-ForgeGuard-Org-Id: org-acme"
+  -H "X-Fg-Org-Id: org-acme"
 ```
 
 ## Flags

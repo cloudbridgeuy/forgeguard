@@ -1,13 +1,13 @@
 # Request Signing (Ed25519)
 
-Ed25519 asymmetric signatures over outbound `X-ForgeGuard-*` identity headers. Provides cryptographic proof that a request came from the proxy — upstreams can verify signatures using the proxy's public key.
+Ed25519 asymmetric signatures over outbound `X-Fg-*` identity headers. Provides cryptographic proof that a request came from the proxy — upstreams can verify signatures using the proxy's public key.
 
 ## Mechanism
 
 ```
 Proxy (private key)                          Upstream (public key)
 ─────────────────                            ────────────────────
-1. Resolve identity → X-ForgeGuard-* headers
+1. Resolve identity → X-Fg-* headers
 2. Generate trace-id (UUID v7)
 3. Build canonical payload (v1 format)
 4. Sign(private_key, canonical) → signature
@@ -31,10 +31,10 @@ Headers are sorted by name for determinism regardless of insertion order.
 
 | Header | Value | Purpose |
 |--------|-------|---------|
-| `X-ForgeGuard-Signature` | `v1:{base64(ed25519_sig)}` | The signature |
-| `X-ForgeGuard-Timestamp` | `{unix_millis}` | Replay detection |
-| `X-ForgeGuard-Trace-Id` | UUID v7 | Per-request uniqueness |
-| `X-ForgeGuard-Key-Id` | Configured key ID | Key rotation support |
+| `X-Fg-Signature` | `v1:{base64(ed25519_sig)}` | The signature |
+| `X-Fg-Timestamp` | `{unix_millis}` | Replay detection |
+| `X-Fg-Trace-Id` | UUID v7 | Per-request uniqueness |
+| `X-Fg-Key-Id` | Configured key ID | Key rotation support |
 
 ## Crate Placement (FCIS)
 
@@ -54,6 +54,19 @@ both copies in the same PR.
 | `inject_signed_headers()` | `http` (pure) | Extends `inject_headers()` with optional signing |
 | Private key loading from PEM file | `proxy` (I/O) | File I/O at startup |
 | `forgeguard keygen` subcommand | `cli` (I/O) | Key generation with `rand` |
+
+## forgeguard-axum (embedded middleware)
+
+The published `forgeguard-axum` crate (`lib/forgeguard-axum`) signs the `X-Fg-*` headers it injects, independent of the BYOC proxy's `[signing]` config above. `ForgeGuard::with_signing(SigningConfig)` attaches an org's Ed25519 key at construction (FCIS — key material is a plain input, no I/O in the signing path):
+
+```rust
+let signing = SigningConfig::from_pkcs8_pem(&pem, key_id)?;
+let fg = Arc::new(ForgeGuard::new(config, chain, engine).with_signing(signing));
+```
+
+`lib/forgeguard-axum/src/headers.rs`'s `build_fg_headers` (pure) projects identity (`X-Fg-User-Id`/`-Tenant-Id`/`-Groups`/`-Auth-Provider`) and, when a `DecisionRecord` is present, the V1 decision projection (`X-Fg-Scope-Path`, `X-Fg-Entitlements`, `X-Fg-Revision`) into the outbound header set. When `SigningConfig` is present and at least one header was projected, the same four signature headers as above (`X-Fg-Signature`/`-Timestamp`/`-Key-Id`/`-Trace-Id`) are appended, and the canonical payload covers every projected header — including scope/entitlements/revision, which the BYOC proxy's `inject_signed_headers` never sees. No signing occurs when `with_signing` was never called, or when there's no identity/record to project (e.g. an anonymous route).
+
+This is a separate implementation from `http::inject_signed_headers` by necessity: `forgeguard-axum` is a published crate and cannot take a real dependency on the unpublished `forgeguard_http` crate. Both call into the same `authn-core` primitives (`CanonicalPayload`, `sign()`), so the wire format is identical — verifiers on the receiving end don't need to know which shell produced the signature.
 
 ## Configuration
 

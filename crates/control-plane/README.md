@@ -360,7 +360,7 @@ organization ID:
 An **inverted GSI** (`SK` as partition key, `PK` as sort key) supports
 listing every user in a given organization (`ORG#{org_id}` → all `USER#*`).
 
-At request time the proxy's Phase 5b reads the `X-ForgeGuard-Org-Id` header,
+At request time the proxy's Phase 5b reads the `X-Fg-Org-Id` header,
 calls the `MembershipResolver` (`GetItem` on `PK=USER#{sub}, SK=ORG#{org_id}`),
 and either replaces the `Identity` with a tenant+groups-enriched copy or
 rejects the request (`403` when the user is not a member, `400` when the

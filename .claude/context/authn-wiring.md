@@ -18,7 +18,7 @@ issuer   = "https://cognito-idp.<region>.amazonaws.com/<pool>"
 
 JWT resolution is identity-only: the token proves `sub`. Org context
 (`tenant_id`) and group membership are resolved per-request from the
-`X-ForgeGuard-Org-Id` header + DynamoDB membership lookup, not from JWT claims.
+`X-Fg-Org-Id` header + DynamoDB membership lookup, not from JWT claims.
 
 Phase 5b pipeline outcomes: `Ok(Some(Membership))` → identity enriched and
 pipeline continues; `Ok(None)` → HTTP 403 "Not a member"; `Err(ResolveError)`

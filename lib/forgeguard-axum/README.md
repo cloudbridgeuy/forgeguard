@@ -285,3 +285,48 @@ extractors in your handlers:
   `None` if no flag config is present.
 - **`ForgeGuardDecision(Option<DecisionRecord>)`** -- the embedded-engine
   decision record, or `None` under static/VP engines or public routes.
+
+## Signed Header Injection
+
+On every `Forward` outcome, the middleware strips whatever the caller may
+have sent under these names, then injects `X-Fg-*` headers onto the
+*request* (visible to `next` -- your handler, or a further downstream proxy
+call):
+
+- **Identity** -- `X-Fg-User-Id`, `X-Fg-Tenant-Id`, `X-Fg-Groups`,
+  `X-Fg-Auth-Provider` (only the fields present on the resolved `Identity`).
+- **Decision** -- when a `DecisionRecord` is present (embedded Cedar engine),
+  `X-Fg-Scope-Path`, `X-Fg-Entitlements`, `X-Fg-Revision`.
+
+Call `ForgeGuard::with_signing` to also sign the injected set with an Ed25519
+key:
+
+```rust,no_run
+# use forgeguard_axum::{ForgeGuard, SigningConfig};
+# use forgeguard_authn_core::IdentityChain;
+# use forgeguard_authz_core::PolicyEngine;
+# use forgeguard_proxy_core::PipelineConfig;
+# use forgeguard_authn_core::signing::KeyId;
+# use std::sync::Arc;
+# fn example(config: PipelineConfig, chain: IdentityChain, engine: Arc<dyn PolicyEngine>) -> Result<(), Box<dyn std::error::Error>> {
+let pem = std::fs::read_to_string("keys/forgeguard.private.pem")?;
+let key_id = KeyId::try_from("org-acme-2026-07".to_string())?;
+let signing = SigningConfig::from_pkcs8_pem(&pem, key_id)?;
+
+let fg = Arc::new(ForgeGuard::new(config, chain, engine).with_signing(signing));
+# Ok(())
+# }
+```
+
+When signing is configured and at least one header was injected, four more
+headers are appended -- `X-Fg-Signature`, `X-Fg-Timestamp`, `X-Fg-Key-Id`,
+`X-Fg-Trace-Id` -- and the signature covers every header above (identity
+*and* decision, unlike the BYOC proxy's outbound signing, which only covers
+identity). No signature is added when `with_signing` was never called, or
+when the route has no identity/record to project (e.g. an anonymous route).
+
+**Spoofing guard:** every `X-Fg-*` name this middleware can inject is
+unconditionally stripped from the inbound request first, then whatever this
+request actually resolved to is reinserted. A client cannot smuggle a forged
+`X-Fg-User-Id` (or any other of these headers) through on a route where
+nothing gets injected.

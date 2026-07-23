@@ -1,7 +1,7 @@
 # ForgeGuard Demo — TODO App
 
 A multi-tenant TODO API (Python/FastAPI) running behind the ForgeGuard proxy.
-The app has **zero ForgeGuard imports** — it reads `X-ForgeGuard-*` headers
+The app has **zero ForgeGuard imports** — it reads `X-Fg-*` headers
 injected by the proxy to scope all data by tenant.
 
 ## Prerequisites
@@ -19,7 +19,7 @@ injected by the proxy to scope all data by tenant.
 
 ### Request Signing (optional)
 
-Enable Ed25519 signing of outbound `X-ForgeGuard-*` headers so the upstream
+Enable Ed25519 signing of outbound `X-Fg-*` headers so the upstream
 can cryptographically verify requests came from the proxy.
 
 1. Generate an Ed25519 keypair:
@@ -40,8 +40,8 @@ can cryptographically verify requests came from the proxy.
    ```
 
 3. Start the proxy normally. Requests to the upstream will now include four
-   extra headers: `X-ForgeGuard-Signature`, `X-ForgeGuard-Timestamp`,
-   `X-ForgeGuard-Trace-Id`, and `X-ForgeGuard-Key-Id`.
+   extra headers: `X-Fg-Signature`, `X-Fg-Timestamp`,
+   `X-Fg-Trace-Id`, and `X-Fg-Key-Id`.
 
 4. Verify by hitting the debug context endpoint:
 
@@ -144,7 +144,7 @@ curl -H "X-API-Key: sk-test-dave-admin" http://localhost:8080/api/lists
 ```
 
 The proxy asserts each user's tenant. The app scopes data by
-`X-ForgeGuard-Tenant-Id`. Alice never sees globex-corp data.
+`X-Fg-Tenant-Id`. Alice never sees globex-corp data.
 
 ### 3. RBAC within a tenant
 
@@ -193,10 +193,10 @@ curl -s -H "X-API-Key: sk-test-alice-admin" http://localhost:8080/debug/context 
 ```
 
 When signing is enabled you will see four additional headers:
-- `x-forgeguard-signature` — `v1:{base64}` Ed25519 signature over all identity headers
-- `x-forgeguard-timestamp` — Unix milliseconds when the request was signed
-- `x-forgeguard-trace-id` — UUID v7 unique to this request
-- `x-forgeguard-key-id` — Identifies which signing key was used
+- `x-fg-signature` — `v1:{base64}` Ed25519 signature over all identity headers
+- `x-fg-timestamp` — Unix milliseconds when the request was signed
+- `x-fg-trace-id` — UUID v7 unique to this request
+- `x-fg-key-id` — Identifies which signing key was used
 
 ### 7. Debug context
 
@@ -311,7 +311,7 @@ Client → proxy:8080 → app:3000
            ├─ Match route → action
            ├─ Check feature gate
            ├─ Evaluate policy (Verified Permissions)
-           ├─ Inject X-ForgeGuard-* headers (user, tenant, groups, features)
+           ├─ Inject X-Fg-* headers (user, tenant, groups, features)
            ├─ Sign headers with Ed25519 (if [signing] configured)
            └─ Proxy to upstream (app scopes data by tenant header)
 ```

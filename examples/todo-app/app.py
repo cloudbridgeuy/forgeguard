@@ -1,6 +1,6 @@
 """ForgeGuard Demo — TODO API.
 
-Zero ForgeGuard imports. Reads X-ForgeGuard-* headers injected by the proxy.
+Zero ForgeGuard imports. Reads X-Fg-* headers injected by the proxy.
 All data is in-memory (no database). Multi-tenant: data is scoped by tenant.
 """
 
@@ -34,30 +34,30 @@ if _PUBLIC_KEY_PATH:
 
 
 def verify_signature(request: Request) -> dict[str, Any] | None:
-    """Verify the Ed25519 signature on X-ForgeGuard-* headers.
+    """Verify the Ed25519 signature on X-Fg-* headers.
 
     Returns None if no signature headers are present or no public key is
     configured. Otherwise returns {"verified": bool, "error": str | None}.
     """
-    sig_header = request.headers.get("x-forgeguard-signature")
+    sig_header = request.headers.get("x-fg-signature")
     if not sig_header or not _VERIFYING_KEY:
         return None
 
     try:
-        trace_id = request.headers.get("x-forgeguard-trace-id", "")
-        timestamp = request.headers.get("x-forgeguard-timestamp", "")
+        trace_id = request.headers.get("x-fg-trace-id", "")
+        timestamp = request.headers.get("x-fg-timestamp", "")
 
         # Collect identity headers (exclude signature-related ones)
         skip = {
-            "x-forgeguard-signature",
-            "x-forgeguard-timestamp",
-            "x-forgeguard-trace-id",
-            "x-forgeguard-key-id",
+            "x-fg-signature",
+            "x-fg-timestamp",
+            "x-fg-trace-id",
+            "x-fg-key-id",
         }
         identity_headers = sorted(
             (k, v)
             for k, v in request.headers.items()
-            if k.startswith("x-forgeguard-") and k not in skip
+            if k.startswith("x-fg-") and k not in skip
         )
 
         # Reconstruct canonical payload (must match Rust CanonicalPayload::new)
@@ -125,14 +125,14 @@ STORE: dict[str, dict[str, dict[str, Any]]] = {
 
 def get_identity(request: Request) -> dict[str, Any]:
     """Extract ForgeGuard identity from proxy-injected headers."""
-    user_id = request.headers.get("x-forgeguard-user-id")
-    tenant_id = request.headers.get("x-forgeguard-tenant-id")
-    groups_raw = request.headers.get("x-forgeguard-groups", "")
+    user_id = request.headers.get("x-fg-user-id")
+    tenant_id = request.headers.get("x-fg-tenant-id")
+    groups_raw = request.headers.get("x-fg-groups", "")
     groups = [g.strip() for g in groups_raw.split(",") if g.strip()]
-    provider = request.headers.get("x-forgeguard-auth-provider")
-    features_raw = request.headers.get("x-forgeguard-features")
+    provider = request.headers.get("x-fg-auth-provider")
+    features_raw = request.headers.get("x-fg-features")
     features = json.loads(features_raw) if features_raw else {}
-    client_ip = request.headers.get("x-forgeguard-client-ip")
+    client_ip = request.headers.get("x-fg-client-ip")
 
     result = {
         "user_id": user_id,
@@ -291,8 +291,8 @@ def suggestions(list_id: str, request: Request):
 
 @app.get("/debug/context")
 def debug_context(request: Request):
-    """Dump all X-ForgeGuard-* headers for debugging."""
+    """Dump all X-Fg-* headers for debugging."""
     fg_headers = {
-        k: v for k, v in request.headers.items() if k.startswith("x-forgeguard-")
+        k: v for k, v in request.headers.items() if k.startswith("x-fg-")
     }
     return {"forgeguard_headers": fg_headers, "identity": get_identity(request)}

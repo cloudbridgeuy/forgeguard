@@ -213,7 +213,7 @@ Auth is handled by the `forgeguard-axum` middleware, which runs the ForgeGuard a
 
 When auth is enabled, the `IdentityChain` contains resolvers tried in order:
 
-1. `CognitoJwtResolver` — Cognito JWT via `Authorization: Bearer`. Identity-only mapping: `sub` → user_id. Org context (`tenant_id`) and roles (`groups`) are NOT read from the JWT — they are resolved per-request from the `X-ForgeGuard-Org-Id` header + a DynamoDB membership lookup (see Phase 5b). The optional `--audience` flag enables audience claim validation against the Cognito app client ID.
+1. `CognitoJwtResolver` — Cognito JWT via `Authorization: Bearer`. Identity-only mapping: `sub` → user_id. Org context (`tenant_id`) and roles (`groups`) are NOT read from the JWT — they are resolved per-request from the `X-Fg-Org-Id` header + a DynamoDB membership lookup (see Phase 5b). The optional `--audience` flag enables audience claim validation against the Cognito app client ID.
 2. `Ed25519SignatureResolver` — Ed25519 signed requests from BYOC proxies (see below).
 
 The `AuthConfig` struct (`app.rs`) validates the JWKS URL at construction time (Parse Don't Validate) and is `pub` so `fg-lambdas` can import it. The Lambda binary reads the same config from `FORGEGUARD_CP_JWKS_URL`, `FORGEGUARD_CP_ISSUER`, `FORGEGUARD_CP_AUDIENCE` env vars (injected by the CDK Lambda stack from Cognito stack outputs).
@@ -227,13 +227,13 @@ BYOC proxies authenticate to the control plane using Ed25519 signed requests. Th
 ```
 BYOC Proxy                              Control Plane
 ──────────                              ─────────────
-1. Build identity headers (X-ForgeGuard-*)
+1. Build identity headers (X-Fg-*)
 2. Sign canonical payload (Ed25519, private key)
-3. Inject 4 protocol headers + identity headers (e.g., `X-ForgeGuard-Org-Id`)
+3. Inject 4 protocol headers + identity headers (e.g., `X-Fg-Org-Id`)
                                         4. extract_credential (priority 3)
                                            → Credential::SignedRequest
                                         5. Ed25519SignatureResolver:
-                                           a. Extract org_id from X-ForgeGuard-Org-Id
+                                           a. Extract org_id from X-Fg-Org-Id
                                            b. Look up public key via DynamoSigningKeyStore
                                            c. Rebuild canonical payload, verify signature
                                            d. Check timestamp drift (≤ 5 min)
@@ -245,15 +245,15 @@ BYOC Proxy                              Control Plane
 
 | Header | Content |
 |--------|---------|
-| `X-ForgeGuard-Signature` | `v1:{base64(ed25519_sig)}` |
-| `X-ForgeGuard-Timestamp` | Unix milliseconds |
-| `X-ForgeGuard-Key-Id` | Key identifier (used for lookup and becomes user_id) |
-| `X-ForgeGuard-Trace-Id` | Per-request UUID v7 |
-| `X-ForgeGuard-Org-Id` | Organization identifier (identity header, becomes tenant_id) |
+| `X-Fg-Signature` | `v1:{base64(ed25519_sig)}` |
+| `X-Fg-Timestamp` | Unix milliseconds |
+| `X-Fg-Key-Id` | Key identifier (used for lookup and becomes user_id) |
+| `X-Fg-Trace-Id` | Per-request UUID v7 |
+| `X-Fg-Org-Id` | Organization identifier (identity header, becomes tenant_id) |
 
 **Wiring in `app.rs`:** `dynamodb_router()` creates a `DynamoSigningKeyStore` (backed by the same DynamoDB table), wraps it in `Ed25519SignatureResolver`, and appends it to the `IdentityChain` after `CognitoJwtResolver`. Memory mode never gets the Ed25519 resolver.
 
-**Embedded CP Authorization (#117 V1):** `cp:*` authorization decisions run in-process on an embedded Cedar engine — zero AWS Verified Permissions calls on the request path. `crates/control-plane/build.rs` compiles the repo-root `forgeguard.toml` (`[schema]`/`[tenant]`/`[[policies]]`) into Cedar policy text at build time via `forgeguard_authz_core::compile_cp_model` (a trimmed port of the xtask `cedar_core` compiler); a bad model fails the build. The compiled text is embedded via `include_str!(concat!(env!("OUT_DIR"), "/cp_policies.cedar"))` and parsed into a `Snapshot` at startup in `build_forgeguard`. When auth is enabled, the policy engine is `CpCedarEngine` (`forgeguard_authz_core`), which builds Cedar entities/requests per query (a local port of `crates/authz/src/translate.rs`'s VP entity shapes) and evaluates with `cedar_policy::Authorizer` against the embedded snapshot. The Cedar project namespace is `forgeguard` (from `ProjectId::new("forgeguard")`). The tenant is read per request from `PolicyContext::tenant_id()` — populated from the `X-ForgeGuard-Org-Id` header during pipeline Phase 5b (membership enrichment). `DefaultPolicy::Deny` is used — unmatched routes are denied. See the Authorization section below for the route-to-action mapping and PrincipalKind routing.
+**Embedded CP Authorization (#117 V1):** `cp:*` authorization decisions run in-process on an embedded Cedar engine — zero AWS Verified Permissions calls on the request path. `crates/control-plane/build.rs` compiles the repo-root `forgeguard.toml` (`[schema]`/`[tenant]`/`[[policies]]`) into Cedar policy text at build time via `forgeguard_authz_core::compile_cp_model` (a trimmed port of the xtask `cedar_core` compiler); a bad model fails the build. The compiled text is embedded via `include_str!(concat!(env!("OUT_DIR"), "/cp_policies.cedar"))` and parsed into a `Snapshot` at startup in `build_forgeguard`. When auth is enabled, the policy engine is `CpCedarEngine` (`forgeguard_authz_core`), which builds Cedar entities/requests per query (a local port of `crates/authz/src/translate.rs`'s VP entity shapes) and evaluates with `cedar_policy::Authorizer` against the embedded snapshot. The Cedar project namespace is `forgeguard` (from `ProjectId::new("forgeguard")`). The tenant is read per request from `PolicyContext::tenant_id()` — populated from the `X-Fg-Org-Id` header during pipeline Phase 5b (membership enrichment). `DefaultPolicy::Deny` is used — unmatched routes are denied. See the Authorization section below for the route-to-action mapping and PrincipalKind routing.
 
 There is no `--policy-store-id` flag — it was deleted in #117 V3 along with the rest of the CP-side Verified Permissions wiring (`forgeguard_authz`'s `VpPolicyEngine`, the `vp` Cargo feature, and `cargo xtask control-plane cedar {status,diff,sync}`). Auth is configured entirely via `--jwks-url`/`--issuer`/`--audience`.
 
@@ -267,7 +267,7 @@ There is no `--policy-store-id` flag — it was deleted in #117 V3 along with th
 | `--jwks-url` + `--store=memory` | `CpCedarEngine` (embedded) | `Deny` |
 | `--jwks-url` + `--store=dynamodb` | `CpCedarEngine` (embedded) | `Deny` |
 
-The Cedar namespace is `forgeguard` (from `ProjectId::new("forgeguard")`). The tenant is resolved per request from `PolicyContext::tenant_id()` (populated from `X-ForgeGuard-Org-Id` via pipeline Phase 5b), not fixed at engine construction. The engine itself is embedded (compiled from `forgeguard.toml` at build time) — there is no VP client and no policy-store flag anywhere in the control plane.
+The Cedar namespace is `forgeguard` (from `ProjectId::new("forgeguard")`). The tenant is resolved per request from `PolicyContext::tenant_id()` (populated from `X-Fg-Org-Id` via pipeline Phase 5b), not fixed at engine construction. The engine itself is embedded (compiled from `forgeguard.toml` at build time) — there is no VP client and no policy-store flag anywhere in the control plane.
 
 ### Route-to-Action Mapping
 
