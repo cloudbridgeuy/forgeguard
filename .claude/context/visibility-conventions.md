@@ -158,6 +158,7 @@ Any `Foo { field: value, ... }` literal outside the owning module's `impl` is a 
 | `Identity` | `new(IdentityParams)` | `user_id()`, `tenant_id()`, `groups()`, etc. | n/a |
 | `ProxyParams` | (Params struct, `pub(crate)` fields) | n/a — consumed by `ForgeGuardProxy::new` | n/a |
 | `ForgeGuardIdentity` | tuple-struct, `pub` field | n/a — destructured | n/a |
+| `ForgeGuardDecision` | tuple-struct, `pub` field | n/a — destructured | n/a |
 
 ## Related
 
