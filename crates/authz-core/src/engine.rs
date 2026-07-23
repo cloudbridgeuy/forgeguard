@@ -75,6 +75,10 @@ impl CacheStats {
 /// Defined in this pure crate, implemented in I/O crates.
 pub trait PolicyEngine: Send + Sync {
     /// Evaluate a policy query and return a decision.
+    ///
+    /// The returned `EvaluatedDecision` carries a `DecisionRecord` iff this
+    /// engine reads a versioned entity slice to decide (embedded Cedar);
+    /// otherwise it's `bare` — see the trait-level doc.
     fn evaluate(
         &self,
         query: &PolicyQuery,
