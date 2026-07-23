@@ -4,7 +4,9 @@ use std::future::Future;
 use std::pin::Pin;
 
 use aws_sdk_verifiedpermissions::types::EntitiesDefinition;
-use forgeguard_authz_core::{CacheStats, DenyReason, PolicyDecision, PolicyEngine, PolicyQuery};
+use forgeguard_authz_core::{
+    CacheStats, DenyReason, EvaluatedDecision, PolicyDecision, PolicyEngine, PolicyQuery,
+};
 use forgeguard_core::ProjectId;
 
 use crate::cache::{build_cache_key, CacheKey};
@@ -30,14 +32,17 @@ pub struct VpPolicyEngine {
 /// Return an immediately-resolved deny future carrying an `EvaluationError`.
 ///
 /// Used by `evaluate()` to consolidate the three early-return arms that all
-/// produce the same shape: `Ok(Deny { EvaluationError(msg) })`.
+/// produce the same shape: `Ok(bare(Deny { EvaluationError(msg) }))`. VP has
+/// no snapshot/revision to back a record, so this — like every other VP
+/// decision — stays `bare`.
 fn deny_eval_error(
     msg: impl Into<String>,
-) -> Pin<Box<dyn Future<Output = forgeguard_authz_core::Result<PolicyDecision>> + Send + 'static>> {
+) -> Pin<Box<dyn Future<Output = forgeguard_authz_core::Result<EvaluatedDecision>> + Send + 'static>>
+{
     let decision = PolicyDecision::Deny {
         reason: DenyReason::EvaluationError(msg.into()),
     };
-    Box::pin(std::future::ready(Ok(decision)))
+    Box::pin(std::future::ready(Ok(EvaluatedDecision::bare(decision))))
 }
 
 impl VpPolicyEngine {
@@ -117,7 +122,7 @@ impl PolicyEngine for VpPolicyEngine {
     fn evaluate(
         &self,
         query: &PolicyQuery,
-    ) -> Pin<Box<dyn Future<Output = forgeguard_authz_core::Result<PolicyDecision>> + Send + '_>>
+    ) -> Pin<Box<dyn Future<Output = forgeguard_authz_core::Result<EvaluatedDecision>> + Send + '_>>
     {
         let groups: Vec<&str> = query
             .context()
@@ -163,12 +168,14 @@ impl PolicyEngine for VpPolicyEngine {
 
         Box::pin(async move {
             // Check cache (async — may hit L2/Redis)
-            if let Some(cached) = self.cache.get(&cache_key).await {
-                tracing::debug!("cache hit");
-                return Ok(cached);
-            }
-
-            Ok(self.call_vp(cache_key, components, entities).await)
+            let decision = match self.cache.get(&cache_key).await {
+                Some(cached) => {
+                    tracing::debug!("cache hit");
+                    cached
+                }
+                None => self.call_vp(cache_key, components, entities).await,
+            };
+            Ok(EvaluatedDecision::bare(decision))
         })
     }
 
