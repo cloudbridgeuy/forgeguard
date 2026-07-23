@@ -58,6 +58,10 @@ pub enum Error {
         /// Why the event cannot be folded.
         reason: String,
     },
+
+    /// A scope path violated its construction invariants.
+    #[error("invalid scope path: {0}")]
+    InvalidScopePath(String),
 }
 
 /// Convenience alias used throughout this crate.

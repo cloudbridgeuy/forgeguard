@@ -21,7 +21,7 @@ pub use cp_model::compile_cp_model;
 pub use decision::{DenyReason, PolicyDecision};
 pub use engine::{CacheStats, PolicyEngine};
 pub use engine_cedar::{
-    CedarEngine, Decision, DecisionQuery, DecisionRecord, EmbeddedPolicyEngine,
+    CedarEngine, Decision, DecisionQuery, DecisionRecord, EmbeddedPolicyEngine, ScopePath,
 };
 pub use engine_cp::CpCedarEngine;
 pub use error::{Error, Result};
