@@ -14,6 +14,8 @@ use std::net::TcpListener;
 use std::process::{Child, Command};
 use std::time::Duration;
 
+use forgeguard_core::headers as hn;
+
 use axum::extract::Request;
 use axum::response::Json;
 use axum::routing::any;
@@ -28,7 +30,7 @@ use ed25519_dalek::SigningKey as DalekSigningKey;
 // Echo upstream
 // ---------------------------------------------------------------------------
 
-/// Starts an axum server that echoes back all `X-ForgeGuard-*` headers as JSON.
+/// Starts an axum server that echoes back all `X-Fg-*` headers as JSON.
 /// Returns the port it bound to.
 async fn start_echo_upstream() -> u16 {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -49,7 +51,7 @@ async fn echo_handler(req: Request) -> Json<Value> {
     let mut fg_headers: HashMap<String, String> = HashMap::new();
     for (name, value) in req.headers() {
         let name_str = name.as_str();
-        if name_str.starts_with("x-forgeguard-") {
+        if name_str.starts_with(hn::X_FG_PREFIX) {
             if let Ok(v) = value.to_str() {
                 fg_headers.insert(name_str.to_string(), v.to_string());
             }
@@ -342,8 +344,8 @@ async fn valid_credential_injects_headers() {
     assert_eq!(resp.status(), 200);
     let body: Value = resp.json().await.unwrap();
     let headers = &body["forgeguard_headers"];
-    assert_eq!(headers["x-forgeguard-user-id"], "alice");
-    assert_eq!(headers["x-forgeguard-tenant-id"], "acme-corp");
+    assert_eq!(headers[hn::X_FG_USER_ID], "alice");
+    assert_eq!(headers[hn::X_FG_TENANT_ID], "acme-corp");
 }
 
 #[tokio::test]
@@ -384,7 +386,7 @@ async fn opportunistic_with_cred() {
     assert_eq!(resp.status(), 200);
     let body: Value = resp.json().await.unwrap();
     let headers = &body["forgeguard_headers"];
-    assert_eq!(headers["x-forgeguard-user-id"], "alice");
+    assert_eq!(headers[hn::X_FG_USER_ID], "alice");
 }
 
 #[tokio::test]
@@ -427,17 +429,17 @@ async fn signing_injects_signature_headers() {
 
     // All four signature headers must be present and non-empty
     for header_name in [
-        "x-forgeguard-signature",
-        "x-forgeguard-timestamp",
-        "x-forgeguard-trace-id",
-        "x-forgeguard-key-id",
+        hn::X_FG_SIGNATURE,
+        hn::X_FG_TIMESTAMP,
+        hn::X_FG_TRACE_ID,
+        hn::X_FG_KEY_ID,
     ] {
         let val = headers[header_name].as_str().unwrap_or("");
         assert!(!val.is_empty(), "{header_name} should be non-empty");
     }
 
-    assert_eq!(headers["x-forgeguard-key-id"], "test-key-001");
-    assert!(headers["x-forgeguard-signature"]
+    assert_eq!(headers[hn::X_FG_KEY_ID], "test-key-001");
+    assert!(headers[hn::X_FG_SIGNATURE]
         .as_str()
         .unwrap()
         .starts_with("v1:"));
@@ -454,9 +456,9 @@ async fn signing_signature_verifies() {
     let headers = &body["forgeguard_headers"];
 
     // Extract signature components from the echo response
-    let sig_header = headers["x-forgeguard-signature"].as_str().unwrap();
-    let timestamp_str = headers["x-forgeguard-timestamp"].as_str().unwrap();
-    let trace_id = headers["x-forgeguard-trace-id"].as_str().unwrap();
+    let sig_header = headers[hn::X_FG_SIGNATURE].as_str().unwrap();
+    let timestamp_str = headers[hn::X_FG_TIMESTAMP].as_str().unwrap();
+    let trace_id = headers[hn::X_FG_TRACE_ID].as_str().unwrap();
 
     // Collect the identity headers (excluding signature-related ones)
     let identity_headers: Vec<(String, String)> = headers
@@ -464,11 +466,11 @@ async fn signing_signature_verifies() {
         .unwrap()
         .iter()
         .filter(|(k, _)| {
-            k.starts_with("x-forgeguard-")
-                && *k != "x-forgeguard-signature"
-                && *k != "x-forgeguard-timestamp"
-                && *k != "x-forgeguard-trace-id"
-                && *k != "x-forgeguard-key-id"
+            k.starts_with(hn::X_FG_PREFIX)
+                && *k != hn::X_FG_SIGNATURE
+                && *k != hn::X_FG_TIMESTAMP
+                && *k != hn::X_FG_TRACE_ID
+                && *k != hn::X_FG_KEY_ID
         })
         .map(|(k, v)| (k.clone(), v.as_str().unwrap().to_string()))
         .collect();

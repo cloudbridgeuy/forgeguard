@@ -40,7 +40,7 @@ Feature gate check --disabled--> 404
   v
 Evaluate policy (PolicyEngine)
   |
-  allowed --> proxy to upstream with X-ForgeGuard-* headers
+  allowed --> proxy to upstream with X-Fg-* headers
   denied  --> 403
 ```
 
