@@ -21,7 +21,7 @@ pub(crate) struct CurlArgs {
     #[arg(long)]
     private_key: String,
 
-    /// Organization ID for the X-ForgeGuard-Org-Id header.
+    /// Organization ID for the X-Fg-Org-Id header.
     #[arg(long)]
     org_id: String,
 
@@ -49,7 +49,7 @@ pub(crate) async fn run(args: &CurlArgs) -> Result<()> {
         SigningKey::from_pkcs8_pem(pem.trim()).context("failed to parse Ed25519 private key")?;
 
     let key_id = KeyId::try_from(args.key_id.clone()).context("invalid key ID")?;
-    let identity_headers = vec![("x-forgeguard-org-id".to_string(), args.org_id.clone())];
+    let identity_headers = vec![("x-fg-org-id".to_string(), args.org_id.clone())];
     let trace_id = uuid::Uuid::now_v7().to_string();
     let timestamp = Timestamp::from_system_time(SystemTime::now());
     let payload = CanonicalPayload::new(&trace_id, timestamp, &identity_headers);
@@ -61,11 +61,11 @@ pub(crate) async fn run(args: &CurlArgs) -> Result<()> {
     let client = reqwest::Client::new();
     let request = client
         .request(method, &args.url)
-        .header("x-forgeguard-signature", signed.signature_header_value())
-        .header("x-forgeguard-timestamp", signed.timestamp_header_value())
-        .header("x-forgeguard-key-id", signed.key_id_header_value())
-        .header("x-forgeguard-trace-id", signed.trace_id_header_value())
-        .header("x-forgeguard-org-id", &args.org_id)
+        .header("x-fg-signature", signed.signature_header_value())
+        .header("x-fg-timestamp", signed.timestamp_header_value())
+        .header("x-fg-key-id", signed.key_id_header_value())
+        .header("x-fg-trace-id", signed.trace_id_header_value())
+        .header("x-fg-org-id", &args.org_id)
         .build()
         .context("failed to build HTTP request")?;
 
@@ -154,7 +154,7 @@ mod tests {
         let timestamp = Timestamp::from_millis(1_700_000_000_000);
 
         // This mirrors exactly what run() does:
-        let identity_headers = vec![("x-forgeguard-org-id".to_string(), org_id.to_string())];
+        let identity_headers = vec![("x-fg-org-id".to_string(), org_id.to_string())];
         let payload = CanonicalPayload::new(trace_id, timestamp, &identity_headers);
         let signed = sign(&sk, &key_id, &payload, timestamp, trace_id.into());
 
@@ -172,7 +172,7 @@ mod tests {
         // what the server receives — the `http` crate normalises to lowercase).
         let payload_bytes = std::str::from_utf8(payload.as_bytes()).unwrap();
         assert!(
-            payload_bytes.contains("x-forgeguard-org-id:org-acme"),
+            payload_bytes.contains("x-fg-org-id:org-acme"),
             "canonical payload must use lowercase header names"
         );
     }

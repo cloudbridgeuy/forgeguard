@@ -14,7 +14,7 @@ fn inlined_signature_verifies_via_authn_core() {
         inlined::SigningKey::from_pkcs8_pem(&ed25519_pem_from_seed(&seed)).expect("valid PEM");
     let inlined_key_id = inlined::KeyId::try_from("k-1".to_string()).expect("non-empty");
     let inlined_ts = inlined::Timestamp::from_system_time(SystemTime::UNIX_EPOCH);
-    let inlined_headers = vec![("x-forgeguard-org-id".to_string(), "o".to_string())];
+    let inlined_headers = vec![("x-fg-org-id".to_string(), "o".to_string())];
     let inlined_payload = inlined::CanonicalPayload::new("t-1", inlined_ts, &inlined_headers);
     let inlined_signed = inlined::sign(
         &inlined_key,

@@ -300,13 +300,13 @@ mod canonical_payload_tests {
     #[test]
     fn layout_matches_spec() {
         let ts = Timestamp::from_millis(1_700_000_000_000);
-        let headers = vec![("x-forgeguard-org-id".to_string(), "org-123".to_string())];
+        let headers = vec![("x-fg-org-id".to_string(), "org-123".to_string())];
         let payload = CanonicalPayload::new("trace-abc", ts, &headers);
         let expected = concat!(
             "forgeguard-sig-v1\n",
             "trace-id:trace-abc\n",
             "timestamp:1700000000000\n",
-            "x-forgeguard-org-id:org-123\n",
+            "x-fg-org-id:org-123\n",
         );
         assert_eq!(payload.as_bytes(), expected.as_bytes());
     }
@@ -347,7 +347,7 @@ mod sign_tests {
         let key = SigningKey::from_bytes(&TEST_SEED);
         let key_id = KeyId::try_from("k-1".to_string()).unwrap();
         let ts = Timestamp::from_millis(1_700_000_000_000);
-        let headers = vec![("x-forgeguard-org-id".to_string(), "o".to_string())];
+        let headers = vec![("x-fg-org-id".to_string(), "o".to_string())];
         let payload = CanonicalPayload::new("t-1", ts, &headers);
         (key, key_id, ts, payload, "t-1".to_string())
     }
