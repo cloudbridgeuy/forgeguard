@@ -3,6 +3,7 @@
 
 pub mod adapter;
 pub mod engine;
+mod enrich;
 pub mod record;
 mod scope_path;
 pub mod translate;
