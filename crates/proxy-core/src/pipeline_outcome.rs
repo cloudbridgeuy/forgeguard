@@ -1,6 +1,7 @@
 //! Pipeline outcome types — the result of running the auth pipeline.
 
 use forgeguard_authn_core::Identity;
+use forgeguard_authz_core::DecisionRecord;
 use forgeguard_core::ResolvedFlags;
 use forgeguard_http::MatchedRoute;
 use http::StatusCode;
@@ -37,6 +38,10 @@ pub enum PipelineOutcome {
         /// The matched route with action/resource, if a route matched.
         /// Boxed to reduce enum variant size disparity.
         matched_route: Option<Box<MatchedRoute>>,
+        /// Embedded-engine decision record, when the policy engine produced
+        /// one. `None` for anonymous requests and for engines that don't
+        /// read a versioned entity slice (static, VP, CP).
+        record: Option<Box<DecisionRecord>>,
     },
 }
 
@@ -59,12 +64,14 @@ impl PipelineOutcome {
         }
     }
 
-    /// Create a `Forward` outcome with no identity, flags, or matched route.
+    /// Create a `Forward` outcome with no identity, flags, matched route, or
+    /// decision record.
     pub fn forward_anonymous() -> Self {
         Self::Forward {
             identity: None,
             flags: None,
             matched_route: None,
+            record: None,
         }
     }
 
@@ -126,10 +133,12 @@ mod tests {
                 identity,
                 flags,
                 matched_route,
+                record,
             } => {
                 assert!(identity.is_none());
                 assert!(flags.is_none());
                 assert!(matched_route.is_none());
+                assert!(record.is_none());
             }
             _ => panic!("expected Forward variant"),
         }

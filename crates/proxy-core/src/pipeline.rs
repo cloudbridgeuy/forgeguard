@@ -195,12 +195,17 @@ pub async fn evaluate_pipeline(
 
         // Phase 9: Policy evaluation — only for authenticated requests.
         // Fail-safe: both explicit deny and evaluation errors result in rejection.
+        let mut decision_record = None;
         if let Some(id) = &identity {
             let query = build_query(id, &matched_route, config.project_id(), input.client_ip());
-            let allowed = policy_engine
-                .evaluate(&query)
-                .await
-                .is_ok_and(|d| !d.is_denied());
+            let allowed = match policy_engine.evaluate(&query).await {
+                Ok(evaluated) => {
+                    let allowed = !evaluated.is_denied();
+                    decision_record = evaluated.into_record().map(Box::new);
+                    allowed
+                }
+                Err(_) => false,
+            };
 
             if !allowed {
                 return reject_forbidden_with_action(&matched_route.action().to_string());
@@ -211,6 +216,7 @@ pub async fn evaluate_pipeline(
             identity: identity.map(Box::new),
             flags,
             matched_route: Some(Box::new(matched_route)),
+            record: decision_record,
         }
     } else if public_match.is_public() {
         // Public route with no [[routes]] entry — passthrough to upstream
@@ -218,6 +224,7 @@ pub async fn evaluate_pipeline(
             identity: identity.map(Box::new),
             flags,
             matched_route: None,
+            record: None,
         }
     } else {
         // Phase 10: No route matched and not a public route
@@ -233,6 +240,7 @@ pub async fn evaluate_pipeline(
                 identity: identity.map(Box::new),
                 flags,
                 matched_route: None,
+                record: None,
             },
         }
     }

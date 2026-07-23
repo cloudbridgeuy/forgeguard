@@ -9,7 +9,8 @@ use forgeguard_authn_core::{
     Credential, Identity, IdentityBuilder, IdentityChain, IdentityResolver,
 };
 use forgeguard_authz_core::{
-    CacheStats, DenyReason, PolicyDecision, PolicyEngine, PolicyQuery, StaticPolicyEngine,
+    CacheStats, DenyReason, EvaluatedDecision, PolicyDecision, PolicyEngine, PolicyQuery,
+    StaticPolicyEngine,
 };
 use forgeguard_core::{
     features::testing::make_flag_config, FlagConfig, FlagDefinition, FlagDefinitionParams,
@@ -83,7 +84,7 @@ impl PolicyEngine for ErrorPolicyEngine {
     fn evaluate(
         &self,
         _query: &PolicyQuery,
-    ) -> Pin<Box<dyn Future<Output = forgeguard_authz_core::Result<PolicyDecision>> + Send + '_>>
+    ) -> Pin<Box<dyn Future<Output = forgeguard_authz_core::Result<EvaluatedDecision>> + Send + '_>>
     {
         Box::pin(std::future::ready(Err(
             forgeguard_authz_core::Error::EvaluationFailed("mock error".to_string()),
@@ -101,7 +102,7 @@ impl PolicyEngine for CachingPolicyEngine {
     fn evaluate(
         &self,
         query: &PolicyQuery,
-    ) -> Pin<Box<dyn Future<Output = forgeguard_authz_core::Result<PolicyDecision>> + Send + '_>>
+    ) -> Pin<Box<dyn Future<Output = forgeguard_authz_core::Result<EvaluatedDecision>> + Send + '_>>
     {
         self.inner.evaluate(query)
     }
@@ -233,6 +234,45 @@ fn input_with_bearer_and_org(method: &str, path: &str, token: &str, org: &str) -
     RequestInput::new(method, path, headers, None).unwrap()
 }
 
+/// An `EmbeddedPolicyEngine` over a `MemoryStore` where principal "alice" in
+/// org "acme" is granted `verb` on the app resource. Mirrors the
+/// `store_with_grant` fixture in `engine_cedar::adapter`'s own tests.
+async fn embedded_engine_granting(verb: &str) -> forgeguard_authz_core::EmbeddedPolicyEngine {
+    use forgeguard_authz_core::{
+        AuthzStore, CedarEngine, EmbeddedPolicyEngine, MemoryStore, ModelState, Snapshot,
+        StoreWrite,
+    };
+    use forgeguard_core::principal::PrincipalKind;
+    use forgeguard_core::{Fgrn, Grant, NativeId, OrgUnit, Principal, Segment, Spine, Verb};
+
+    let org = Segment::try_new("acme").unwrap();
+    let alice = Fgrn::principal(&org, &NativeId::try_new("alice").unwrap());
+    let app_resource = Fgrn::resource(
+        &org,
+        &Segment::try_new("app").unwrap(),
+        &NativeId::try_new("app").unwrap(),
+    );
+    let root = Fgrn::org_unit(&org, &NativeId::try_new("root").unwrap());
+    let spine = Spine::try_new(vec![OrgUnit::try_new(root.clone(), None).unwrap()]).unwrap();
+    let mut model = ModelState::new(spine);
+    model.upsert_principal(Principal::try_new(alice.clone(), PrincipalKind::Human, root).unwrap());
+    let store = MemoryStore::new(model);
+    store
+        .apply(StoreWrite::PutGrant(
+            Grant::try_new(app_resource, vec![Verb::try_new(verb).unwrap()], alice).unwrap(),
+        ))
+        .await
+        .unwrap();
+
+    let cedar_engine = CedarEngine::new(
+        Snapshot::from_policy_text(
+            r#"permit(principal, action == Action::"unrelated-action", resource);"#,
+        )
+        .unwrap(),
+    );
+    EmbeddedPolicyEngine::new(cedar_engine, Arc::new(store), org)
+}
+
 // -----------------------------------------------------------------------
 // Test 1: Health check path
 // -----------------------------------------------------------------------
@@ -358,6 +398,7 @@ async fn public_anonymous_route_forwards_without_identity() {
             identity,
             flags,
             matched_route,
+            ..
         } => {
             assert!(identity.is_none());
             assert!(flags.is_none());
@@ -529,6 +570,7 @@ async fn required_auth_valid_credential_allowed_forwards() {
             identity,
             flags,
             matched_route,
+            record,
         } => {
             assert!(identity.is_some());
             assert_eq!(identity.as_ref().unwrap().user_id().as_str(), "alice");
@@ -538,8 +580,39 @@ async fn required_auth_valid_credential_allowed_forwards() {
                 matched_route.unwrap().action().to_string(),
                 "todo:list:user"
             );
+            // `allow_engine()` is a StaticPolicyEngine — bare, no record.
+            assert!(record.is_none());
         }
         other => panic!("expected Forward, got {other:?}"),
+    }
+}
+
+// -----------------------------------------------------------------------
+// Test 10b: Embedded Cedar engine populates Forward.record
+// -----------------------------------------------------------------------
+
+#[tokio::test]
+async fn embedded_engine_forward_carries_decision_record() {
+    let routes = vec![RouteMapping::new(
+        "GET".parse().unwrap(),
+        "/users".to_string(),
+        QualifiedAction::parse("todo:list:user").unwrap(),
+        None,
+        None,
+    )];
+    let config = make_config(&routes, &[], DefaultPolicy::Deny, false);
+    let chain = make_chain_succeeding();
+    let engine = embedded_engine_granting("todo--list--user").await;
+    let req = input_with_bearer("GET", "/users", "valid-token");
+
+    let outcome = evaluate_pipeline(&config, &req, &chain, &engine).await;
+
+    match outcome {
+        PipelineOutcome::Forward { record, .. } => {
+            let record = record.expect("embedded engine should produce a record");
+            assert!(!record.scope_path().to_string().is_empty());
+        }
+        other => panic!("expected Forward with record, got {other:?}"),
     }
 }
 
@@ -723,10 +796,12 @@ async fn no_route_default_passthrough_forwards() {
         PipelineOutcome::Forward {
             identity,
             matched_route,
+            record,
             ..
         } => {
             assert!(identity.is_some());
             assert!(matched_route.is_none());
+            assert!(record.is_none());
         }
         other => panic!("expected Forward, got {other:?}"),
     }
