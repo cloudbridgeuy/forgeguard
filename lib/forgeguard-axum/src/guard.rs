@@ -70,7 +70,7 @@ impl ForgeGuard {
     }
 
     /// Set the enforcement mode routes run under when no per-route
-    /// `ModeOverride` stamp is present. Defaults to `Enforce`.
+    /// [`crate::ModeOverride`] stamp is present. Defaults to `Enforce`.
     pub fn with_default_mode(mut self, mode: EnforcementMode) -> Self {
         self.default_mode = mode;
         self
@@ -81,5 +81,10 @@ impl ForgeGuard {
     pub fn with_decision_sink(mut self, sink: Arc<dyn DecisionSink>) -> Self {
         self.sink = sink;
         self
+    }
+
+    /// Convenience alias for [`crate::observe`], reading as `fg.observe()`.
+    pub fn observe(&self) -> axum::Extension<crate::ModeOverride> {
+        crate::observe()
     }
 }
