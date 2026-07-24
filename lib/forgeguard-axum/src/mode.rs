@@ -40,7 +40,8 @@
 //!
 //! Misordering fails SAFE: the stamp is simply unseen and the route runs
 //! in the guard's default mode (`Enforce` unless overridden). This is
-//! confirmed by [`crate::middleware::tests::misordered_observe_stamp_fails_safe_to_enforce`].
+//! confirmed by `misordered_observe_stamp_fails_safe_to_enforce` in
+//! `middleware`'s test module.
 //!
 //! # `.nest()` is not a scope boundary for `.layer()`
 //!
@@ -68,7 +69,8 @@
 //!
 //! The sub-router shape above (`beta_routes` carrying both layers before
 //! nesting) is the only one of these three that scopes correctly, confirmed
-//! by [`crate::middleware::tests::nested_observe_scopes_to_subrouter_not_siblings`]
+//! by `nested_observe_scopes_to_subrouter_not_siblings` in `middleware`'s
+//! test module
 //! — the layers travel with the sub-router's own service and merging it into a
 //! parent can't widen or narrow what they wrap.
 
