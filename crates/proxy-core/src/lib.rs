@@ -1,5 +1,6 @@
 #![deny(clippy::unwrap_used, clippy::expect_used)]
 
+pub(crate) mod enforcement;
 pub(crate) mod error;
 pub(crate) mod membership;
 pub(crate) mod pipeline;
@@ -9,6 +10,7 @@ pub(crate) mod request_input;
 pub(crate) mod source;
 pub(crate) mod tenant;
 
+pub use enforcement::{EnforcementMode, PolicyEffect};
 pub use error::{Error, Result};
 pub use membership::{Membership, MembershipResolver, ResolveError};
 pub use pipeline::evaluate_pipeline;
