@@ -51,6 +51,8 @@ allow = [
     "CC0-1.0",
     # webpki-root-certs bundles Mozilla's CA list under CDLA-Permissive-2.0
     "CDLA-Permissive-2.0",
+    # ar_archive_writer (LLVM-derived archive writer) uses the LLVM exception
+    "Apache-2.0 WITH LLVM-exception",
 ]
 confidence-threshold = 0.8
 
