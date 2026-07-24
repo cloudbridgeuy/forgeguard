@@ -7,7 +7,7 @@ mod headers;
 mod middleware;
 mod mode;
 mod outcome;
-mod rls;
+pub mod rls;
 mod signing;
 mod sink;
 

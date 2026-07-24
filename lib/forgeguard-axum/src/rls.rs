@@ -168,6 +168,20 @@ where
     }
 }
 
+/// Reference Postgres RLS policy templates, one per visibility mode.
+/// Also available as files under `templates/rls/postgres/` in the repo.
+pub mod templates {
+    /// Mode `scope`: rows at/under the principal's scope path.
+    pub const SCOPE: &str = include_str!("../templates/rls/postgres/scope.sql");
+    /// Mode `scope-with-grants`: scope OR directly-granted resource ids.
+    pub const SCOPE_WITH_GRANTS: &str =
+        include_str!("../templates/rls/postgres/scope-with-grants.sql");
+    /// Mode `grants-only`: directly-granted resource ids only.
+    pub const GRANTS_ONLY: &str = include_str!("../templates/rls/postgres/grants-only.sql");
+    /// Mode `owner`: rows owned by the principal.
+    pub const OWNER: &str = include_str!("../templates/rls/postgres/owner.sql");
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -369,5 +383,47 @@ mod tests {
         };
         let stmts = session_statements_for(&hostile, Dialect::Postgres);
         assert!(stmts.iter().all(|s| !s.sql().contains("DROP TABLE")));
+    }
+
+    #[test]
+    fn all_templates_are_nonempty_rls_and_reference_table_placeholder() {
+        for tpl in [
+            templates::SCOPE,
+            templates::SCOPE_WITH_GRANTS,
+            templates::GRANTS_ONLY,
+            templates::OWNER,
+        ] {
+            assert!(!tpl.is_empty());
+            assert!(tpl.contains("ROW LEVEL SECURITY"));
+            assert!(tpl.contains("{{table}}"));
+        }
+    }
+
+    #[test]
+    fn scope_template_reads_only_scope_path() {
+        assert!(templates::SCOPE.contains("fg.scope_path"));
+        assert!(!templates::SCOPE.contains("fg.granted_ids"));
+        assert!(!templates::SCOPE.contains("fg.principal_id"));
+    }
+
+    #[test]
+    fn scope_with_grants_template_reads_scope_and_grants() {
+        assert!(templates::SCOPE_WITH_GRANTS.contains("fg.scope_path"));
+        assert!(templates::SCOPE_WITH_GRANTS.contains("fg.granted_ids"));
+        assert!(!templates::SCOPE_WITH_GRANTS.contains("fg.principal_id"));
+    }
+
+    #[test]
+    fn grants_only_template_reads_only_granted_ids() {
+        assert!(templates::GRANTS_ONLY.contains("fg.granted_ids"));
+        assert!(!templates::GRANTS_ONLY.contains("fg.scope_path"));
+        assert!(!templates::GRANTS_ONLY.contains("fg.principal_id"));
+    }
+
+    #[test]
+    fn owner_template_reads_only_principal_id() {
+        assert!(templates::OWNER.contains("fg.principal_id"));
+        assert!(!templates::OWNER.contains("fg.scope_path"));
+        assert!(!templates::OWNER.contains("fg.granted_ids"));
     }
 }
