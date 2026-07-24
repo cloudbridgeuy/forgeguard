@@ -46,9 +46,6 @@ use axum::Extension;
 use forgeguard_proxy_core::EnforcementMode;
 
 /// Request-extension marker carrying a per-route mode override.
-// Read by the middleware once mode resolution lands (#111 V3 Task 6);
-// allow(dead_code) drops when that call site does.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub struct ModeOverride(pub(crate) EnforcementMode);
 

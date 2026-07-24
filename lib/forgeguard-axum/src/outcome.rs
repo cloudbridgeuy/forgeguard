@@ -32,9 +32,6 @@ pub struct EnforcementOutcome {
 }
 
 impl EnforcementOutcome {
-    // Constructed by the middleware once mode resolution + sink calls land
-    // (#111 V3 Task 6); allow(dead_code) drops when that call site does.
-    #[allow(dead_code)]
     pub(crate) fn new(
         record: Option<DecisionRecord>,
         mode: EnforcementMode,
@@ -65,9 +62,6 @@ impl EnforcementOutcome {
 
 /// Map the pipeline's forward-side effect into a sink-facing one.
 /// `NotEvaluated` maps to `None` — nothing to report.
-// Called by the middleware once mode resolution + sink calls land (#111 V3
-// Task 6); allow(dead_code) drops when that call site does.
-#[allow(dead_code)]
 pub(crate) fn effect_from_forward(effect: PolicyEffect) -> Option<Effect> {
     match effect {
         PolicyEffect::NotEvaluated => None,

@@ -9,7 +9,7 @@ use axum::{
     middleware::Next,
 };
 
-use forgeguard_proxy_core::{evaluate_pipeline, EnforcementMode, PipelineOutcome, RequestInput};
+use forgeguard_proxy_core::{evaluate_pipeline, PipelineOutcome, RequestInput};
 
 use crate::{ForgeGuard, ForgeGuardDecision, ForgeGuardFlags, ForgeGuardIdentity};
 
@@ -42,6 +42,24 @@ const PROTECTED_FG_HEADERS: [&str; 8] = [
 /// - **Reject** — returns an error response with the pipeline's status and body
 /// - **Health** — returns the health-check response directly
 /// - **Debug** — returns the debug response directly
+///
+/// # Enforcement mode
+///
+/// The mode passed to [`evaluate_pipeline`] is resolved from the request's
+/// [`crate::ModeOverride`] extension (stamped by [`crate::observe`]), falling
+/// back to `fg.default_mode` when absent. The stamp must run BEFORE this
+/// middleware to be seen — see the `crate::mode` module docs for the
+/// ordering rules and working router shapes; getting it wrong fails safe to
+/// `fg.default_mode`.
+///
+/// # Decision sink
+///
+/// Every evaluated outcome — `Forward` with an effect (`Allowed`,
+/// `WouldAllow`, `WouldDeny`) and policy-denying `Reject` (`Denied`) — is
+/// recorded via `fg.sink` ([`crate::DecisionSink`]). Authn/routing rejects
+/// (never reached policy evaluation) and forwards where policy never ran
+/// (`PolicyEffect::NotEvaluated`, e.g. unmatched or public routes) record
+/// nothing.
 ///
 /// # Example
 ///
@@ -101,14 +119,18 @@ pub async fn forgeguard_layer(
         }
     };
 
-    // TODO(#111 V3 Task 6): resolve mode from request extensions
-    // (Extension<ModeOverride>) with fallback to fg.default_mode.
+    let mode = request
+        .extensions()
+        .get::<crate::ModeOverride>()
+        .map(|m| m.0)
+        .unwrap_or(fg.default_mode);
+
     let outcome = evaluate_pipeline(
         &fg.config,
         &input,
         &fg.identity_chain,
         fg.policy_engine.as_ref(),
-        EnforcementMode::Enforce,
+        mode,
     )
     .await;
 
@@ -117,10 +139,19 @@ pub async fn forgeguard_layer(
             identity,
             flags,
             record,
+            effect,
             ..
         } => {
             let identity = identity.map(|boxed| *boxed);
             let record = record.map(|boxed| *boxed);
+
+            if let Some(effect) = crate::outcome::effect_from_forward(effect) {
+                fg.sink.record(&crate::EnforcementOutcome::new(
+                    record.clone(),
+                    mode,
+                    effect,
+                ));
+            }
 
             let trace_id = uuid::Uuid::now_v7().to_string();
             let now = forgeguard_authn_core::signing::Timestamp::from_system_time(
@@ -162,7 +193,21 @@ pub async fn forgeguard_layer(
             request.extensions_mut().insert(ForgeGuardDecision(record));
             next.run(request).await
         }
-        PipelineOutcome::Reject { status, body, .. } => json_response(status, &body),
+        PipelineOutcome::Reject {
+            status,
+            body,
+            policy_denied,
+            record,
+        } => {
+            if policy_denied {
+                fg.sink.record(&crate::EnforcementOutcome::new(
+                    record.map(|boxed| *boxed),
+                    mode,
+                    crate::Effect::Denied,
+                ));
+            }
+            json_response(status, &body)
+        }
         PipelineOutcome::Health(body) => json_response(StatusCode::OK, &body),
         PipelineOutcome::Debug(body) => json_response(StatusCode::OK, &body),
     }
@@ -197,17 +242,18 @@ mod tests {
     };
     use forgeguard_authn_core::static_api_key::ApiKeyEntry;
     use forgeguard_authn_core::{IdentityChain, IdentityResolver, StaticApiKeyResolver};
-    use forgeguard_authz_core::{PolicyDecision, StaticPolicyEngine};
+    use forgeguard_authz_core::{DenyReason, PolicyDecision, StaticPolicyEngine};
     use forgeguard_core::{FlagConfig, ProjectId, QualifiedAction, UserId};
     use forgeguard_http::{
         DefaultPolicy, HttpMethod, PublicAuthMode, PublicRoute, PublicRouteMatcher, RouteMapping,
         RouteMatcher,
     };
-    use forgeguard_proxy_core::{PipelineConfig, PipelineConfigParams};
+    use forgeguard_proxy_core::{EnforcementMode, PipelineConfig, PipelineConfigParams};
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
-    use crate::SigningConfig;
+    use crate::sink::test_support::TestSink;
+    use crate::{Effect, SigningConfig};
 
     use super::*;
 
@@ -267,6 +313,43 @@ mod tests {
         let resolver: Arc<dyn IdentityResolver> = Arc::new(StaticApiKeyResolver::new(keys));
         let chain = IdentityChain::new(vec![resolver]);
         let engine = Arc::new(StaticPolicyEngine::new(PolicyDecision::Allow));
+        ForgeGuard::new(config, chain, engine)
+    }
+
+    /// Same fixture as [`test_forgeguard_authenticated`], but the policy
+    /// engine denies every request — for Enforce|Observe tests that need a
+    /// real `WouldDeny`/`Denied` effect rather than `Allowed`.
+    fn test_forgeguard_authenticated_deny() -> ForgeGuard {
+        let routes = vec![RouteMapping::new(
+            "GET".parse().unwrap(),
+            "/items".to_string(),
+            QualifiedAction::parse("todo:list:user").unwrap(),
+            None,
+            None,
+        )];
+        let route_matcher = RouteMatcher::new(&routes).unwrap();
+        let public_route_matcher = PublicRouteMatcher::new(&[]).unwrap();
+        let config = PipelineConfig::new(PipelineConfigParams {
+            route_matcher,
+            public_route_matcher,
+            flag_config: FlagConfig::default(),
+            project_id: ProjectId::new("test").unwrap(),
+            default_policy: DefaultPolicy::Deny,
+            debug_mode: false,
+            auth_providers: vec![],
+            membership_resolver: None,
+        });
+
+        let mut keys = HashMap::new();
+        keys.insert(
+            "valid-key".to_string(),
+            ApiKeyEntry::new(UserId::new("alice").unwrap(), None, vec![]),
+        );
+        let resolver: Arc<dyn IdentityResolver> = Arc::new(StaticApiKeyResolver::new(keys));
+        let chain = IdentityChain::new(vec![resolver]);
+        let engine = Arc::new(StaticPolicyEngine::new(PolicyDecision::Deny {
+            reason: DenyReason::NoMatchingPolicy,
+        }));
         ForgeGuard::new(config, chain, engine)
     }
 
@@ -539,5 +622,143 @@ mod tests {
 
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn observe_route_forwards_denied_request_and_records_would_deny() {
+        let sink = Arc::new(TestSink::default());
+        let fg = Arc::new(test_forgeguard_authenticated_deny().with_decision_sink(sink.clone()));
+        let app = Router::new()
+            .route("/items", get(|| async { "downstream" }))
+            .route_layer(axum::middleware::from_fn_with_state(
+                fg.clone(),
+                forgeguard_layer,
+            ))
+            .route_layer(fg.observe());
+
+        let request = Request::builder()
+            .uri("/items")
+            .header("x-api-key", "valid-key")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(*sink.0.lock().unwrap(), vec![Effect::WouldDeny]);
+    }
+
+    #[tokio::test]
+    async fn enforce_route_rejects_denied_request_and_records_denied() {
+        let sink = Arc::new(TestSink::default());
+        let fg = Arc::new(test_forgeguard_authenticated_deny().with_decision_sink(sink.clone()));
+        let app = Router::new()
+            .route("/items", get(|| async { "downstream" }))
+            .route_layer(axum::middleware::from_fn_with_state(fg, forgeguard_layer));
+
+        let request = Request::builder()
+            .uri("/items")
+            .header("x-api-key", "valid-key")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(*sink.0.lock().unwrap(), vec![Effect::Denied]);
+    }
+
+    #[tokio::test]
+    async fn default_mode_observe_applies_without_stamp() {
+        let sink = Arc::new(TestSink::default());
+        let fg = Arc::new(
+            test_forgeguard_authenticated_deny()
+                .with_default_mode(EnforcementMode::Observe)
+                .with_decision_sink(sink.clone()),
+        );
+        let app = Router::new()
+            .route("/items", get(|| async { "downstream" }))
+            .layer(axum::middleware::from_fn_with_state(fg, forgeguard_layer));
+
+        let request = Request::builder()
+            .uri("/items")
+            .header("x-api-key", "valid-key")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(*sink.0.lock().unwrap(), vec![Effect::WouldDeny]);
+    }
+
+    /// Pins the ordering trap documented in [`crate::mode`]: the stamp is
+    /// added via `route_layer` UNDER a router-level `forgeguard_layer`
+    /// `.layer(...)`, so `forgeguard_layer` runs first and never sees it.
+    /// This must fail safe to the guard's default mode (`Enforce`), not
+    /// silently apply observe semantics.
+    #[tokio::test]
+    async fn misordered_observe_stamp_fails_safe_to_enforce() {
+        let sink = Arc::new(TestSink::default());
+        let fg = Arc::new(test_forgeguard_authenticated_deny().with_decision_sink(sink.clone()));
+        let app = Router::new()
+            .route("/items", get(|| async { "downstream" }))
+            .route_layer(fg.observe())
+            .layer(axum::middleware::from_fn_with_state(
+                fg.clone(),
+                forgeguard_layer,
+            ));
+
+        let request = Request::builder()
+            .uri("/items")
+            .header("x-api-key", "valid-key")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(*sink.0.lock().unwrap(), vec![Effect::Denied]);
+    }
+
+    #[tokio::test]
+    async fn allowed_enforce_records_allowed() {
+        let sink = Arc::new(TestSink::default());
+        let fg = Arc::new(test_forgeguard_authenticated().with_decision_sink(sink.clone()));
+        let app = Router::new()
+            .route("/items", get(|| async { "downstream" }))
+            .layer(axum::middleware::from_fn_with_state(fg, forgeguard_layer));
+
+        let request = Request::builder()
+            .uri("/items")
+            .header("x-api-key", "valid-key")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(*sink.0.lock().unwrap(), vec![Effect::Allowed]);
+    }
+
+    #[tokio::test]
+    async fn public_route_records_nothing() {
+        let sink = Arc::new(TestSink::default());
+        let public_routes = vec![PublicRoute::new(
+            HttpMethod::Get,
+            "/public".to_string(),
+            PublicAuthMode::Anonymous,
+        )];
+        let fg = Arc::new(
+            test_forgeguard(false, DefaultPolicy::Deny, &public_routes)
+                .with_decision_sink(sink.clone()),
+        );
+        let app = Router::new()
+            .route("/public", get(|| async { "downstream" }))
+            .layer(axum::middleware::from_fn_with_state(fg, forgeguard_layer));
+
+        let request = Request::builder()
+            .uri("/public")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(sink.0.lock().unwrap().is_empty());
     }
 }
