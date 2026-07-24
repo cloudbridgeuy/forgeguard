@@ -4,7 +4,9 @@ use std::sync::Arc;
 
 use forgeguard_authn_core::IdentityChain;
 use forgeguard_authz_core::PolicyEngine;
-use forgeguard_proxy_core::PipelineConfig;
+use forgeguard_proxy_core::{EnforcementMode, PipelineConfig};
+
+use crate::DecisionSink;
 
 /// Runtime state for the ForgeGuard middleware.
 ///
@@ -40,6 +42,8 @@ pub struct ForgeGuard {
     pub(crate) identity_chain: IdentityChain,
     pub(crate) policy_engine: Arc<dyn PolicyEngine>,
     pub(crate) signing: Option<crate::SigningConfig>,
+    pub(crate) default_mode: EnforcementMode,
+    pub(crate) sink: Arc<dyn DecisionSink>,
 }
 
 impl ForgeGuard {
@@ -54,12 +58,28 @@ impl ForgeGuard {
             identity_chain,
             policy_engine,
             signing: None,
+            default_mode: EnforcementMode::default(),
+            sink: Arc::new(crate::TracingDecisionSink),
         }
     }
 
     /// Sign injected `X-Fg-*` headers with the org's Ed25519 key.
     pub fn with_signing(mut self, signing: crate::SigningConfig) -> Self {
         self.signing = Some(signing);
+        self
+    }
+
+    /// Set the enforcement mode routes run under when no per-route
+    /// `ModeOverride` stamp is present. Defaults to `Enforce`.
+    pub fn with_default_mode(mut self, mode: EnforcementMode) -> Self {
+        self.default_mode = mode;
+        self
+    }
+
+    /// Set where enforcement outcomes are recorded. Defaults to
+    /// [`crate::TracingDecisionSink`].
+    pub fn with_decision_sink(mut self, sink: Arc<dyn DecisionSink>) -> Self {
+        self.sink = sink;
         self
     }
 }

@@ -7,9 +7,11 @@ mod headers;
 mod middleware;
 mod outcome;
 mod signing;
+mod sink;
 
 pub use extractor::{ForgeGuardDecision, ForgeGuardFlags, ForgeGuardIdentity};
 pub use guard::ForgeGuard;
 pub use middleware::forgeguard_layer;
 pub use outcome::{Effect, EnforcementOutcome};
 pub use signing::SigningConfig;
+pub use sink::{DecisionSink, TracingDecisionSink};
