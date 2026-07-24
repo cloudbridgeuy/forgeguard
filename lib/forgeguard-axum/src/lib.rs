@@ -7,6 +7,7 @@ mod headers;
 mod middleware;
 mod mode;
 mod outcome;
+mod rls;
 mod signing;
 mod sink;
 
@@ -16,5 +17,6 @@ pub use guard::ForgeGuard;
 pub use middleware::forgeguard_layer;
 pub use mode::{observe, ModeOverride};
 pub use outcome::{Effect, EnforcementOutcome};
+pub use rls::{Dialect, Statement};
 pub use signing::SigningConfig;
 pub use sink::{DecisionSink, TracingDecisionSink};
