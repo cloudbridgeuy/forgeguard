@@ -330,3 +330,119 @@ unconditionally stripped from the inbound request first, then whatever this
 request actually resolved to is reinserted. A client cannot smuggle a forged
 `X-Fg-User-Id` (or any other of these headers) through on a route where
 nothing gets injected.
+
+## Enforce vs Observe
+
+Every route runs under an `EnforcementMode`: `Enforce` (default) rejects a
+policy deny with 403; `Observe` never blocks -- it evaluates policy, forwards
+the request regardless, and reports what *would* have happened.
+
+Call `ForgeGuard::with_default_mode` to set the guard-wide default:
+
+```rust,no_run
+# use forgeguard_axum::{ForgeGuard, EnforcementMode};
+# use forgeguard_authn_core::IdentityChain;
+# use forgeguard_authz_core::PolicyEngine;
+# use forgeguard_proxy_core::PipelineConfig;
+# use std::sync::Arc;
+# fn example(config: PipelineConfig, chain: IdentityChain, engine: Arc<dyn PolicyEngine>) {
+let fg = Arc::new(
+    ForgeGuard::new(config, chain, engine).with_default_mode(EnforcementMode::Observe),
+);
+# }
+```
+
+Override per route (or per group of routes) with `fg.observe()`, a plain
+`axum::Extension<ModeOverride>` layer.
+
+**Ordering matters.** Axum applies layers on a single router in
+last-added-wraps-outermost order -- this holds for both `.layer(...)` and
+`.route_layer(...)`. The `observe()` stamp must be added AFTER
+`forgeguard_layer` (i.e. end up as the outer layer) to be seen. Working
+shapes:
+
+```rust,no_run
+# use std::sync::Arc;
+# use axum::{Router, routing::get, middleware::from_fn_with_state};
+# use forgeguard_axum::{ForgeGuard, forgeguard_layer};
+# fn example(fg: Arc<ForgeGuard>) -> Router {
+// Per-route: both as route_layer, forgeguard added first.
+let per_route = Router::new()
+    .route("/beta-feature", get(handler))
+    .route_layer(from_fn_with_state(fg.clone(), forgeguard_layer))
+    .route_layer(fg.observe());
+
+// Per-scope: observe a whole sub-router. Both layers go on the sub-router
+// itself, forgeguard first, BEFORE nesting it into the parent -- this is
+// the only shape that scopes to just that subtree.
+let beta_routes = Router::new()
+    .route("/x", get(handler))
+    .layer(from_fn_with_state(fg.clone(), forgeguard_layer))
+    .layer(fg.observe());
+
+Router::new().nest("/beta", beta_routes).merge(per_route)
+# }
+# async fn handler() -> &'static str { "ok" }
+```
+
+Misordering fails **safe**: an unseen stamp just leaves the route at the
+guard's default mode (`Enforce` unless overridden).
+
+**`.nest()` is not a scope boundary for `.layer()`.** Axum's
+last-added-wraps-outermost rule applies to a router's entire current route
+table at the point `.layer()`/`.route_layer()` is called -- `.nest(...)`ing a
+child merges its routes into that table, it doesn't fence them off. Adding
+`fg.observe()` to the *parent* after `.nest(...)` IS seen by the nested
+routes (unlike the misordering case above), but it also leaks onto every
+sibling route already registered on that parent -- not scoped to the
+subtree. Adding it to the parent *before* `.nest(...)` fails safe instead,
+for the same reason as the single-router misordering case. The sub-router
+shape above is the only one of the three that scopes correctly. See
+`forgeguard_axum::mode` module docs (source) for the full rationale, traps,
+and a regression test pinning this.
+
+### DecisionSink
+
+Every evaluated outcome -- enforce and observe alike -- is delivered to a
+`DecisionSink`:
+
+```rust,no_run
+# use forgeguard_axum::{DecisionSink, EnforcementOutcome};
+struct AuditLogSink;
+
+impl DecisionSink for AuditLogSink {
+    fn record(&self, outcome: &EnforcementOutcome) {
+        // outcome.effect(), outcome.mode(), outcome.record() -- ship
+        // wherever your audit trail lives. Called synchronously on the
+        // request path, so keep this cheap or hand off to your own
+        // channel/task.
+    }
+}
+```
+
+Call `ForgeGuard::with_decision_sink` to plug it in:
+
+```rust,no_run
+# use forgeguard_axum::{ForgeGuard, DecisionSink, EnforcementOutcome};
+# use forgeguard_authn_core::IdentityChain;
+# use forgeguard_authz_core::PolicyEngine;
+# use forgeguard_proxy_core::PipelineConfig;
+# use std::sync::Arc;
+# struct AuditLogSink;
+# impl DecisionSink for AuditLogSink {
+#     fn record(&self, _outcome: &EnforcementOutcome) {}
+# }
+# fn example(config: PipelineConfig, chain: IdentityChain, engine: Arc<dyn PolicyEngine>) {
+let fg = Arc::new(
+    ForgeGuard::new(config, chain, engine)
+        .with_decision_sink(Arc::new(AuditLogSink) as Arc<dyn DecisionSink>),
+);
+# }
+```
+
+The default is `TracingDecisionSink`: one structured `tracing::info!` event
+per outcome at target `forgeguard::decision`, with fields `effect`
+(`allowed`/`denied`/`would_allow`/`would_deny`), `mode`, `revision`, and
+`scope_path` (the latter two `None` when no embedded-engine `DecisionRecord`
+is present). Public routes and forwards where policy never ran record
+nothing -- there's no outcome to report.

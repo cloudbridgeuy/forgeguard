@@ -717,6 +717,53 @@ mod tests {
         assert_eq!(*sink.0.lock().unwrap(), vec![Effect::Denied]);
     }
 
+    /// Pins the `.nest()` scoping trap documented in [`crate::mode`]: the
+    /// only shape that scopes `observe()` to just a nested subtree is
+    /// putting both layers on the sub-router itself, before nesting. A
+    /// sibling route registered directly on the parent must keep enforcing.
+    #[tokio::test]
+    async fn nested_observe_scopes_to_subrouter_not_siblings() {
+        let sink = Arc::new(TestSink::default());
+        let fg = Arc::new(test_forgeguard_authenticated_deny().with_decision_sink(sink.clone()));
+
+        let beta_routes = Router::new()
+            .route("/items", get(|| async { "downstream" }))
+            .layer(axum::middleware::from_fn_with_state(
+                fg.clone(),
+                forgeguard_layer,
+            ))
+            .layer(fg.observe());
+
+        let app = Router::new()
+            .route("/items", get(|| async { "downstream" }))
+            .layer(axum::middleware::from_fn_with_state(
+                fg.clone(),
+                forgeguard_layer,
+            ))
+            .nest("/beta", beta_routes);
+
+        let sibling_request = Request::builder()
+            .uri("/items")
+            .header("x-api-key", "valid-key")
+            .body(Body::empty())
+            .unwrap();
+        let sibling_response = app.clone().oneshot(sibling_request).await.unwrap();
+        assert_eq!(sibling_response.status(), StatusCode::FORBIDDEN);
+
+        let nested_request = Request::builder()
+            .uri("/beta/items")
+            .header("x-api-key", "valid-key")
+            .body(Body::empty())
+            .unwrap();
+        let nested_response = app.oneshot(nested_request).await.unwrap();
+        assert_eq!(nested_response.status(), StatusCode::OK);
+
+        assert_eq!(
+            *sink.0.lock().unwrap(),
+            vec![Effect::Denied, Effect::WouldDeny]
+        );
+    }
+
     #[tokio::test]
     async fn allowed_enforce_records_allowed() {
         let sink = Arc::new(TestSink::default());

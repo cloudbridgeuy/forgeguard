@@ -11,6 +11,7 @@ mod signing;
 mod sink;
 
 pub use extractor::{ForgeGuardDecision, ForgeGuardFlags, ForgeGuardIdentity};
+pub use forgeguard_proxy_core::EnforcementMode;
 pub use guard::ForgeGuard;
 pub use middleware::forgeguard_layer;
 pub use mode::{observe, ModeOverride};

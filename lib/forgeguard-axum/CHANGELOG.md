@@ -6,6 +6,16 @@ All notable changes to `forgeguard-axum` will be documented in this file.
 
 ### Changed
 
+- **Non-breaking for this crate's consumers:** `forgeguard_proxy_core::evaluate_pipeline`
+  (a separate, lock-step-versioned published crate) gained a breaking 5th
+  `EnforcementMode` parameter, `PipelineOutcome::Forward` gained an `effect`
+  field, and `PipelineOutcome::Reject` gained `policy_denied` and `record`
+  fields, to carry the mode/effect decision. None of this is re-exported
+  through `forgeguard-axum`'s own public API, so this crate's surface only
+  changed additively (see Added below) — `forgeguard_layer`'s behavior is
+  backward compatible: with no `observe()` stamp and no `with_default_mode`
+  call, every route still enforces exactly as before.
+
 - **Breaking:** injected header namespace renamed to `X-Fg-*` (e.g.
   `X-Fg-User-Id`, `X-Fg-Tenant-Id`, `X-Fg-Scope-Path`) — previously a longer,
   now-retired `X-<ProjectName>-*` prefix. Any upstream or handler reading the
@@ -14,6 +24,27 @@ All notable changes to `forgeguard-axum` will be documented in this file.
 
 ### Added
 
+- **Enforce|Observe per-route mode (#111 V3):** `EnforcementMode` (re-exported
+  from `forgeguard_proxy_core`) — `Enforce` (default) rejects a policy deny
+  with 403; `Observe` never blocks, forwards regardless, and reports what
+  would have happened.
+  - `ForgeGuard::with_default_mode(EnforcementMode)` — guard-wide default.
+  - `observe()` / `ForgeGuard::observe()` — `axum::Extension<ModeOverride>`
+    layer that switches the routes it wraps to observe mode. Ordering
+    matters: it must be added after (outer to) `forgeguard_layer` to be
+    seen — misordering fails safe to the guard's default mode. See the
+    README's "Enforce vs Observe" section for working router shapes,
+    including the `.nest()` scoping traps.
+  - `Effect` — `Allowed` / `Denied` / `WouldAllow` / `WouldDeny`, the
+    enforcement outcome of one evaluated request.
+  - `EnforcementOutcome` — `record()` / `mode()` / `effect()` accessors;
+    what gets delivered to a `DecisionSink`.
+  - `DecisionSink` trait + `ForgeGuard::with_decision_sink(Arc<dyn
+    DecisionSink>)` — pluggable outcome recording, called synchronously on
+    the request path for every evaluated outcome (nothing recorded for
+    public routes or forwards where policy never ran).
+  - `TracingDecisionSink` — the default sink; emits one `tracing::info!`
+    event per outcome at target `forgeguard::decision`.
 - `SigningConfig` — holds an org's Ed25519 key + `KeyId`; construct via
   `SigningConfig::new` or `SigningConfig::from_pkcs8_pem`.
 - `ForgeGuard::with_signing(SigningConfig)` — opt in to signing injected
