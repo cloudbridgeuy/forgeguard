@@ -24,6 +24,31 @@ All notable changes to `forgeguard-axum` will be documented in this file.
 
 ### Added
 
+- **RLS session bridge + reference policy templates (#111 V4):** `RlsContext`
+  — an infallible `FromRequestParts` extractor projecting the request's
+  `DecisionRecord`/`Identity` into three RLS session variables
+  (`fg.scope_path`, `fg.granted_ids`, `fg.principal_id`), degrading to empty
+  fields when no decision was made. `RlsContext::session_statements(Dialect)`
+  builds parameterized `set_config(..., true)` statements (transaction-local,
+  `SET LOCAL` semantics) — pure data-in/data-out, running them is the
+  embedding app's job.
+  - `Dialect` — `#[non_exhaustive]`; `Postgres` is the only variant today.
+  - `Statement` — `sql()` / `params()` accessors for one parameterized
+    statement.
+  - `forgeguard_axum::rls::templates` — four reference Postgres RLS policies
+    (`SCOPE`, `SCOPE_WITH_GRANTS`, `GRANTS_ONLY`, `OWNER`) shipped as
+    `include_str!` consts, with matching `.sql` files under
+    `templates/rls/postgres/` for direct `psql` application. See the
+    README's "RLS Session Bridge" section and
+    `templates/rls/postgres/README.md`.
+  - `DecisionRecord::granted_ids()` (from `forgeguard_authz_core`) — native
+    ids of resources directly granted to the principal on the queried
+    resource; feeds `fg.granted_ids` above.
+- **Extractor semantics:** `ForgeGuardIdentity`, `ForgeGuardFlags`, and
+  `ForgeGuardDecision` now read their request extension with `.get().cloned()`
+  instead of `.remove()`, so multiple extractors (including the new
+  `RlsContext`) can coexist in the same handler without one clearing the
+  extension for the others. Removal was never a documented contract.
 - **Enforce|Observe per-route mode (#111 V3):** `EnforcementMode` (re-exported
   from `forgeguard_proxy_core`) — `Enforce` (default) rejects a policy deny
   with 403; `Observe` never blocks, forwards regardless, and reports what

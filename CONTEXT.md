@@ -61,6 +61,7 @@ The measured cedar-policy spike (seven conformance assertions S1–S5, toolchain
 | [Cluster Mode](./.claude/context/cluster.md) | TieredCache, Redis wiring, config, health stats, and future slices. |
 | [Dependency Constraints](./.claude/context/dependency-constraints.md) | Pingora version pins, `jsonwebtoken` crypto, and `reqwest` TLS constraints. |
 | [CI](./.claude/context/ci.md) | GitHub Actions jobs, toolchain pinning rules, typos, cargo-deny, and cargo-rail allowlists. |
+| [RLS Session Bridge](./.claude/context/rls-bridge.md) | `RlsContext` extractor, `Dialect`/`Statement` statement builder, session variables, `granted_ids` scope limitation + escape hatch, and the four reference Postgres RLS policy templates (#111 V4). |
 
 ## Local-Only Documents
 

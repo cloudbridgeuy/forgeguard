@@ -286,6 +286,72 @@ extractors in your handlers:
 - **`ForgeGuardDecision(Option<DecisionRecord>)`** -- the embedded-engine
   decision record, or `None` under static/VP engines or public routes.
 
+## RLS Session Bridge
+
+`RlsContext` bridges the request's decision context to downstream Postgres
+row-level security. It's an infallible extractor built from the same
+`ForgeGuardDecision`/`ForgeGuardIdentity` extensions as above -- when the
+middleware didn't run, produced no record, or the route is public, every
+field degrades to empty rather than failing.
+
+```rust,no_run
+# use forgeguard_axum::{RlsContext, Dialect};
+async fn my_handler(ctx: RlsContext) {
+    let statements = ctx.session_statements(Dialect::Postgres);
+    // Run every statement inside the SAME transaction as your queries --
+    // set_config(..., true) is transaction-local (SET LOCAL semantics)
+    // and resets at COMMIT/ROLLBACK:
+    //
+    // let mut txn = pool.begin().await?;
+    // for stmt in &statements {
+    //     sqlx::query(stmt.sql()).bind(&stmt.params()[0]).execute(&mut *txn).await?;
+    // }
+    // // ... your queries, now filtered by your RLS policies ...
+    // txn.commit().await?;
+    let _ = statements;
+}
+```
+
+Three session variables are always set (empty string when absent, so
+session state is deterministic):
+
+| Variable | Source | Format |
+| --- | --- | --- |
+| `fg.scope_path` | `DecisionRecord::scope_path()` | `root/unit/subunit`, or empty |
+| `fg.granted_ids` | `DecisionRecord::granted_ids()` | comma-joined native ids, or empty |
+| `fg.principal_id` | `Identity::user_id()` | the app's own user id, or empty |
+
+Values are always bound as `$1` parameters, never spliced into SQL text --
+injection-safe by construction.
+
+**`granted_ids` scope note:** this list reflects only grants on the resource
+actually queried by the request that produced the `DecisionRecord`, not a
+cross-table exception list -- a principal can hold a direct grant on a
+resource this request never touched, and that grant won't appear here. A
+true cross-resource list would need a dedicated store query with no current
+consumer (YAGNI); see `.claude/context/rls-bridge.md` for the full rationale
+and the future escape hatch.
+
+### Reference policy templates
+
+Four Postgres RLS templates ship as both files
+(`templates/rls/postgres/*.sql` in the repository) and `include_str!`
+consts (`forgeguard_axum::rls::templates`, guaranteed to publish with the
+crate):
+
+| Mode | Const | Predicate | When to use |
+| --- | --- | --- | --- |
+| `scope` | `templates::SCOPE` | row's `scope_path` at/under `fg.scope_path` | default -- org-unit-scoped visibility |
+| `scope-with-grants` | `templates::SCOPE_WITH_GRANTS` | scope predicate OR `id` in `fg.granted_ids` | scope, plus occasional direct grants outside it |
+| `grants-only` | `templates::GRANTS_ONLY` | `id` in `fg.granted_ids` | rows visible only via explicit grant, no scope fallback |
+| `owner` | `templates::OWNER` | `owner_id` equals `fg.principal_id` | per-user ownership, no org-unit scoping |
+
+Every template is fail-closed: `current_setting(..., true)` returns `NULL`
+when a variable is unset, and each predicate is written so `NULL`/empty
+never matches a row. See `templates/rls/postgres/README.md` for the full
+catalog, application instructions, and the `FORCE ROW LEVEL SECURITY` note
+for table-owner connections.
+
 ## Signed Header Injection
 
 On every `Forward` outcome, the middleware strips whatever the caller may
