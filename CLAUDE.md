@@ -148,7 +148,7 @@ Each crate's `README.md` describes what it owns and its pure/I/O classification.
 
 ### Publishing Rules
 
-- **`lib/` crates** — independent semver, own CHANGELOG.md, comprehensive rustdocs, separate GitHub release tags (`forgeguard-axum-v{version}`). Released via `cargo xtask release-lib`.
+- **`lib/` crates** — independent semver, own CHANGELOG.md, comprehensive rustdocs, separate GitHub release tags (`forgeguard-axum-v{version}`). Released via `cargo xtask lib release <crate> --bump <level>` (`--yes` for unattended).
 - **Published `crates/` deps** (`core`, `authn-core`, `authz-core`, `http`, `proxy-core`) — lock-step versioning (all share the same version). Published only when a `lib/` crate releases. Not promoted as standalone products.
 - **Unpublished `crates/`** — `publish = false`, `version = "0.0.0"`. Everything else.
 
