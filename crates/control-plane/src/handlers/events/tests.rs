@@ -214,7 +214,7 @@ async fn min_revision_at_current_serves_the_page() {
 }
 
 #[tokio::test]
-async fn unparseable_min_revision_returns_400() {
+async fn unparsable_min_revision_returns_400() {
     let app = test_app(build_test_store());
     seed_three_events(&app).await;
 
