@@ -96,22 +96,30 @@ pub struct DecisionRecord {
     revision: Revision,
     scope_path: ScopePath,
     entitlements: Vec<Verb>,
+    granted_ids: Vec<forgeguard_core::NativeId>,
+}
+
+/// Constructor arguments for [`DecisionRecord::new`] — six fields tripped
+/// the workspace's `too-many-arguments` threshold (5), see
+/// `.claude/context/params-struct-rule.md`.
+pub(crate) struct RecordParts {
+    pub(crate) decision: Decision,
+    pub(crate) snapshot_version: SnapshotVersion,
+    pub(crate) revision: Revision,
+    pub(crate) scope_path: ScopePath,
+    pub(crate) entitlements: Vec<Verb>,
+    pub(crate) granted_ids: Vec<forgeguard_core::NativeId>,
 }
 
 impl DecisionRecord {
-    pub(crate) fn new(
-        decision: Decision,
-        snapshot_version: SnapshotVersion,
-        revision: Revision,
-        scope_path: ScopePath,
-        entitlements: Vec<Verb>,
-    ) -> Self {
+    pub(crate) fn new(parts: RecordParts) -> Self {
         Self {
-            decision,
-            snapshot_version,
-            revision,
-            scope_path,
-            entitlements,
+            decision: parts.decision,
+            snapshot_version: parts.snapshot_version,
+            revision: parts.revision,
+            scope_path: parts.scope_path,
+            entitlements: parts.entitlements,
+            granted_ids: parts.granted_ids,
         }
     }
 
@@ -143,6 +151,12 @@ impl DecisionRecord {
     /// Verbs granted to the principal on the queried resource, sorted.
     pub fn entitlements(&self) -> &[Verb] {
         &self.entitlements
+    }
+
+    /// Resource IDs directly granted to the principal on the queried
+    /// resource — the RLS exception list (`fg.granted_ids`). Usually empty.
+    pub fn granted_ids(&self) -> &[forgeguard_core::NativeId] {
+        &self.granted_ids
     }
 }
 
@@ -207,13 +221,14 @@ mod tests {
 
     #[test]
     fn record_reports_allow() {
-        let record = DecisionRecord::new(
-            Decision::Allow,
-            SnapshotVersion::of("permit();"),
-            Revision::new(1),
-            root_scope_path(),
-            vec![],
-        );
+        let record = DecisionRecord::new(RecordParts {
+            decision: Decision::Allow,
+            snapshot_version: SnapshotVersion::of("permit();"),
+            revision: Revision::new(1),
+            scope_path: root_scope_path(),
+            entitlements: vec![],
+            granted_ids: vec![],
+        });
         assert!(record.is_allow());
         assert_eq!(record.decision(), Decision::Allow);
         assert_eq!(record.revision(), Revision::new(1));
@@ -221,13 +236,14 @@ mod tests {
 
     #[test]
     fn record_reports_deny() {
-        let record = DecisionRecord::new(
-            Decision::Deny,
-            SnapshotVersion::of("forbid();"),
-            Revision::new(1),
-            root_scope_path(),
-            vec![],
-        );
+        let record = DecisionRecord::new(RecordParts {
+            decision: Decision::Deny,
+            snapshot_version: SnapshotVersion::of("forbid();"),
+            revision: Revision::new(1),
+            scope_path: root_scope_path(),
+            entitlements: vec![],
+            granted_ids: vec![],
+        });
         assert!(!record.is_allow());
     }
 }

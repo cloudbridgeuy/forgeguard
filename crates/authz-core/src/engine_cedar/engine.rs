@@ -7,8 +7,8 @@ use cedar_policy::{Authorizer, Context, EntityId, EntityTypeName, EntityUid, Pol
 
 use forgeguard_core::{Fgrn, Verb};
 
-use crate::engine_cedar::enrich::{entitlements_of, scope_path_of};
-use crate::engine_cedar::record::{Decision, DecisionQuery, DecisionRecord};
+use crate::engine_cedar::enrich::{entitlements_of, granted_ids_of, scope_path_of};
+use crate::engine_cedar::record::{Decision, DecisionQuery, DecisionRecord, RecordParts};
 use crate::engine_cedar::translate::{
     cedar_principal_type, grant_policies, slice_to_entities, uid,
 };
@@ -86,14 +86,16 @@ impl CedarEngine {
 
         let scope_path = scope_path_of(&principal_slice);
         let entitlements = entitlements_of(&principal_slice);
+        let granted_ids = granted_ids_of(&principal_slice);
 
-        Ok(DecisionRecord::new(
+        Ok(DecisionRecord::new(RecordParts {
             decision,
-            self.snapshot.version().clone(),
+            snapshot_version: self.snapshot.version().clone(),
             revision,
             scope_path,
             entitlements,
-        ))
+            granted_ids,
+        }))
     }
 
     /// Evaluate one principal's entity slice, read at `link.revision`.
@@ -378,5 +380,21 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["read"]
         );
+    }
+
+    #[tokio::test]
+    async fn record_carries_granted_ids_for_direct_grant() {
+        let store = store_with_grant_at_revision_2().await;
+        let engine = engine();
+        let query = DecisionQuery::new(maria(), Verb::try_new("read").unwrap(), doc());
+
+        let record = engine.decide(&store, &query).await.unwrap();
+
+        let ids: Vec<String> = record
+            .granted_ids()
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(ids, vec!["doc_1"]);
     }
 }

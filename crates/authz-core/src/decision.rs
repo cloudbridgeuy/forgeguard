@@ -180,19 +180,21 @@ mod tests {
     }
 
     fn record() -> DecisionRecord {
+        use crate::engine_cedar::record::RecordParts;
         use crate::engine_cedar::Decision;
         use crate::snapshot::SnapshotVersion;
         use crate::store::Revision;
         use crate::ScopePath;
 
         let root: forgeguard_core::Fgrn = "fgrn:acme:orgunit:root".parse().unwrap();
-        DecisionRecord::new(
-            Decision::Allow,
-            SnapshotVersion::of("permit();"),
-            Revision::new(1),
-            ScopePath::try_new(vec![root]).unwrap(),
-            vec![],
-        )
+        DecisionRecord::new(RecordParts {
+            decision: Decision::Allow,
+            snapshot_version: SnapshotVersion::of("permit();"),
+            revision: Revision::new(1),
+            scope_path: ScopePath::try_new(vec![root]).unwrap(),
+            entitlements: vec![],
+            granted_ids: vec![],
+        })
     }
 
     #[test]

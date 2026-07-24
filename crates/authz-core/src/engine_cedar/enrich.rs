@@ -62,6 +62,26 @@ pub(crate) fn entitlements_of(slice: &EntitySlice) -> Vec<Verb> {
     verbs.into_iter().collect()
 }
 
+/// Resource IDs directly granted to the principal — the RLS exception list
+/// (#111 V4). Only grants naming the principal's OWN fgrn count (grants via
+/// principal sets or org units are scope-shaped, not exceptions). The slice
+/// holds grants on the queried resource only, so this is 0 or 1 ids today;
+/// a cross-resource exception list would need a dedicated store query and
+/// waits for a real consumer. Sorted for stable projection.
+pub(crate) fn granted_ids_of(slice: &EntitySlice) -> Vec<forgeguard_core::NativeId> {
+    let principal = slice.principal().fgrn();
+    let mut ids: Vec<forgeguard_core::NativeId> = slice
+        .grants()
+        .iter()
+        .filter(|g| g.to() == principal)
+        .filter_map(|g| g.resource().resource_parts())
+        .map(|(_, native_id)| native_id.clone())
+        .collect();
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -149,5 +169,16 @@ mod tests {
             .map(ToString::to_string)
             .collect();
         assert_eq!(verbs, vec!["audit", "read"]); // sorted; bob's write excluded
+    }
+
+    #[tokio::test]
+    async fn granted_ids_contains_only_directly_granted_resource() {
+        let ids: Vec<String> = granted_ids_of(&slice().await)
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        // maria's direct grant on doc-1 counts; eng's org-unit grant and
+        // bob's grant do not.
+        assert_eq!(ids, vec!["doc-1"]);
     }
 }
