@@ -17,6 +17,6 @@ pub use guard::ForgeGuard;
 pub use middleware::forgeguard_layer;
 pub use mode::{observe, ModeOverride};
 pub use outcome::{Effect, EnforcementOutcome};
-pub use rls::{Dialect, Statement};
+pub use rls::{Dialect, RlsContext, Statement};
 pub use signing::SigningConfig;
 pub use sink::{DecisionSink, TracingDecisionSink};

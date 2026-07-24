@@ -98,7 +98,8 @@ where
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
         Ok(parts
             .extensions
-            .remove::<ForgeGuardIdentity>()
+            .get::<ForgeGuardIdentity>()
+            .cloned()
             .unwrap_or(ForgeGuardIdentity(None)))
     }
 }
@@ -112,7 +113,8 @@ where
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
         Ok(parts
             .extensions
-            .remove::<ForgeGuardFlags>()
+            .get::<ForgeGuardFlags>()
+            .cloned()
             .unwrap_or(ForgeGuardFlags(None)))
     }
 }
@@ -126,7 +128,8 @@ where
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
         Ok(parts
             .extensions
-            .remove::<ForgeGuardDecision>()
+            .get::<ForgeGuardDecision>()
+            .cloned()
             .unwrap_or(ForgeGuardDecision(None)))
     }
 }
