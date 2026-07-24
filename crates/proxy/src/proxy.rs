@@ -19,7 +19,9 @@ use forgeguard_http::{
     inject_signed_headers, ClientIpSource, CorsConfig, IdentityProjection, MatchedRoute,
     UpstreamTarget,
 };
-use forgeguard_proxy_core::{evaluate_pipeline, PipelineConfig, PipelineOutcome, RequestInput};
+use forgeguard_proxy_core::{
+    evaluate_pipeline, EnforcementMode, PipelineConfig, PipelineOutcome, RequestInput,
+};
 
 // ---------------------------------------------------------------------------
 // Prometheus metrics — registered globally, collected by Pingora's PrometheusServer
@@ -178,6 +180,7 @@ impl ProxyHttp for ForgeGuardProxy {
             &input,
             &self.identity_chain,
             self.policy_engine.as_ref(),
+            EnforcementMode::Enforce,
         )
         .await;
 
@@ -189,7 +192,7 @@ impl ProxyHttp for ForgeGuardProxy {
                 let _ = send_json_response(session, 200, body.as_bytes(), &cors_hdrs).await;
                 Ok(true)
             }
-            PipelineOutcome::Reject { status, body } => {
+            PipelineOutcome::Reject { status, body, .. } => {
                 record_outcome_metrics(status.as_u16());
                 let _ =
                     send_json_response(session, status.as_u16(), body.as_bytes(), &cors_hdrs).await;

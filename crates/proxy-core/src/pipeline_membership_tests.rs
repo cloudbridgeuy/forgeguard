@@ -16,7 +16,7 @@ use super::{
 };
 
 use crate::membership::{Membership, MembershipResolver, ResolveError};
-use crate::PipelineOutcome;
+use crate::{EnforcementMode, PipelineOutcome};
 
 // -----------------------------------------------------------------------
 // Mock membership resolvers (Phase 5b)
@@ -91,7 +91,8 @@ async fn membership_enrichment_sets_tenant_and_groups() {
     let engine = allow_engine();
     let req = input_with_bearer_and_org("GET", "/anything", "valid-token", "acme-corp");
 
-    let outcome = super::evaluate_pipeline(&config, &req, &chain, &engine).await;
+    let outcome =
+        super::evaluate_pipeline(&config, &req, &chain, &engine, EnforcementMode::Enforce).await;
 
     match outcome {
         PipelineOutcome::Forward {
@@ -114,10 +115,11 @@ async fn membership_not_found_rejects_403() {
     let engine = allow_engine();
     let req = input_with_bearer_and_org("GET", "/anything", "valid-token", "acme-corp");
 
-    let outcome = super::evaluate_pipeline(&config, &req, &chain, &engine).await;
+    let outcome =
+        super::evaluate_pipeline(&config, &req, &chain, &engine, EnforcementMode::Enforce).await;
 
     match outcome {
-        PipelineOutcome::Reject { status, body } => {
+        PipelineOutcome::Reject { status, body, .. } => {
             assert_eq!(status, 403);
             let v: serde_json::Value = serde_json::from_str(&body).unwrap();
             assert_eq!(v["error"], "Not a member of this organization");
@@ -135,10 +137,11 @@ async fn membership_resolver_error_returns_500() {
     let engine = allow_engine();
     let req = input_with_bearer_and_org("GET", "/anything", "valid-token", "acme-corp");
 
-    let outcome = super::evaluate_pipeline(&config, &req, &chain, &engine).await;
+    let outcome =
+        super::evaluate_pipeline(&config, &req, &chain, &engine, EnforcementMode::Enforce).await;
 
     match outcome {
-        PipelineOutcome::Reject { status, body } => {
+        PipelineOutcome::Reject { status, body, .. } => {
             assert_eq!(status, 500);
             let v: serde_json::Value = serde_json::from_str(&body).unwrap();
             assert_eq!(v["error"], "Internal Server Error");
@@ -158,10 +161,11 @@ async fn missing_org_header_on_required_route_rejects_400() {
     // No X-Fg-Org-Id header; non-public route (require_credential = true).
     let req = input_with_bearer("GET", "/protected", "valid-token");
 
-    let outcome = super::evaluate_pipeline(&config, &req, &chain, &engine).await;
+    let outcome =
+        super::evaluate_pipeline(&config, &req, &chain, &engine, EnforcementMode::Enforce).await;
 
     match outcome {
-        PipelineOutcome::Reject { status, body } => {
+        PipelineOutcome::Reject { status, body, .. } => {
             assert_eq!(status, 400);
             let v: serde_json::Value = serde_json::from_str(&body).unwrap();
             assert_eq!(v["error"], "Missing X-Fg-Org-Id header");
@@ -181,10 +185,11 @@ async fn invalid_org_header_rejects_400() {
     // "NOT VALID!" contains spaces and special chars — fails OrganizationId::new.
     let req = input_with_bearer_and_org("GET", "/anything", "valid-token", "NOT VALID!");
 
-    let outcome = super::evaluate_pipeline(&config, &req, &chain, &engine).await;
+    let outcome =
+        super::evaluate_pipeline(&config, &req, &chain, &engine, EnforcementMode::Enforce).await;
 
     match outcome {
-        PipelineOutcome::Reject { status, body } => {
+        PipelineOutcome::Reject { status, body, .. } => {
             assert_eq!(status, 400);
             let v: serde_json::Value = serde_json::from_str(&body).unwrap();
             assert_eq!(v["error"], "Invalid X-Fg-Org-Id header");
@@ -212,7 +217,8 @@ async fn machine_auth_skips_membership_enrichment() {
     let engine = allow_engine();
     let req = input_with_bearer_and_org("GET", "/anything", "valid-token", "acme-corp");
 
-    let outcome = super::evaluate_pipeline(&config, &req, &chain, &engine).await;
+    let outcome =
+        super::evaluate_pipeline(&config, &req, &chain, &engine, EnforcementMode::Enforce).await;
 
     // Should forward — Phase 5b skipped because tenant_id is already set.
     match outcome {
@@ -234,7 +240,8 @@ async fn no_membership_resolver_skips_phase_5b() {
     let engine = allow_engine();
     let req = input_with_bearer("GET", "/anything", "valid-token");
 
-    let outcome = super::evaluate_pipeline(&config, &req, &chain, &engine).await;
+    let outcome =
+        super::evaluate_pipeline(&config, &req, &chain, &engine, EnforcementMode::Enforce).await;
 
     match outcome {
         PipelineOutcome::Forward {
@@ -274,7 +281,8 @@ async fn no_org_header_on_opportunistic_route_preserves_identity() {
     // Valid bearer token, but NO X-Fg-Org-Id header.
     let req = input_with_bearer("GET", "/opt", "valid-token");
 
-    let outcome = super::evaluate_pipeline(&config, &req, &chain, &engine).await;
+    let outcome =
+        super::evaluate_pipeline(&config, &req, &chain, &engine, EnforcementMode::Enforce).await;
 
     match outcome {
         PipelineOutcome::Forward {

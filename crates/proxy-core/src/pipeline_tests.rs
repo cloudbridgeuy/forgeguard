@@ -284,7 +284,7 @@ async fn health_check_returns_health_outcome() {
     let engine = allow_engine();
     let req = input("GET", "/.well-known/forgeguard/health");
 
-    let outcome = evaluate_pipeline(&config, &req, &chain, &engine).await;
+    let outcome = evaluate_pipeline(&config, &req, &chain, &engine, EnforcementMode::Enforce).await;
 
     match outcome {
         PipelineOutcome::Health(body) => {
@@ -312,7 +312,7 @@ async fn health_check_includes_cache_stats() {
     };
     let req = input("GET", "/.well-known/forgeguard/health");
 
-    let outcome = evaluate_pipeline(&config, &req, &chain, &engine).await;
+    let outcome = evaluate_pipeline(&config, &req, &chain, &engine, EnforcementMode::Enforce).await;
 
     match outcome {
         PipelineOutcome::Health(body) => {
@@ -340,7 +340,7 @@ async fn debug_endpoint_enabled_returns_debug_outcome() {
         .unwrap()
         .with_query_string("user_id=alice");
 
-    let outcome = evaluate_pipeline(&config, &req, &chain, &engine).await;
+    let outcome = evaluate_pipeline(&config, &req, &chain, &engine, EnforcementMode::Enforce).await;
 
     match outcome {
         PipelineOutcome::Debug(body) => {
@@ -364,7 +364,7 @@ async fn debug_endpoint_disabled_falls_through() {
     let engine = allow_engine();
     let req = input_with_bearer("GET", "/.well-known/forgeguard/flags", "tok_abc");
 
-    let outcome = evaluate_pipeline(&config, &req, &chain, &engine).await;
+    let outcome = evaluate_pipeline(&config, &req, &chain, &engine, EnforcementMode::Enforce).await;
 
     // Falls through to the normal pipeline — no route matches, not public, default deny
     match outcome {
@@ -391,18 +391,20 @@ async fn public_anonymous_route_forwards_without_identity() {
     let engine = allow_engine();
     let req = input("GET", "/public");
 
-    let outcome = evaluate_pipeline(&config, &req, &chain, &engine).await;
+    let outcome = evaluate_pipeline(&config, &req, &chain, &engine, EnforcementMode::Enforce).await;
 
     match outcome {
         PipelineOutcome::Forward {
             identity,
             flags,
             matched_route,
+            effect,
             ..
         } => {
             assert!(identity.is_none());
             assert!(flags.is_none());
             assert!(matched_route.is_none());
+            assert_eq!(effect, PolicyEffect::NotEvaluated);
         }
         other => panic!("expected Forward(anon), got {other:?}"),
     }
@@ -424,7 +426,7 @@ async fn public_opportunistic_with_valid_credential_forwards_with_identity() {
     let engine = allow_engine();
     let req = input_with_bearer("GET", "/docs", "valid-token");
 
-    let outcome = evaluate_pipeline(&config, &req, &chain, &engine).await;
+    let outcome = evaluate_pipeline(&config, &req, &chain, &engine, EnforcementMode::Enforce).await;
 
     match outcome {
         PipelineOutcome::Forward {
@@ -455,7 +457,7 @@ async fn public_opportunistic_with_invalid_credential_forwards_without_identity(
     let engine = allow_engine();
     let req = input_with_bearer("GET", "/docs", "bad-token");
 
-    let outcome = evaluate_pipeline(&config, &req, &chain, &engine).await;
+    let outcome = evaluate_pipeline(&config, &req, &chain, &engine, EnforcementMode::Enforce).await;
 
     match outcome {
         PipelineOutcome::Forward {
@@ -485,7 +487,7 @@ async fn public_opportunistic_no_credential_forwards_without_identity() {
     // No Authorization header — opportunistic should forward without identity
     let req = input("GET", "/docs");
 
-    let outcome = evaluate_pipeline(&config, &req, &chain, &engine).await;
+    let outcome = evaluate_pipeline(&config, &req, &chain, &engine, EnforcementMode::Enforce).await;
 
     match outcome {
         PipelineOutcome::Forward {
@@ -510,13 +512,19 @@ async fn required_auth_no_credential_rejects_401() {
     // No Authorization header
     let req = input("GET", "/protected");
 
-    let outcome = evaluate_pipeline(&config, &req, &chain, &engine).await;
+    let outcome = evaluate_pipeline(&config, &req, &chain, &engine, EnforcementMode::Enforce).await;
 
     match outcome {
-        PipelineOutcome::Reject { status, body } => {
+        PipelineOutcome::Reject {
+            status,
+            body,
+            policy_denied,
+            ..
+        } => {
             assert_eq!(status, 401);
             let v: serde_json::Value = serde_json::from_str(&body).unwrap();
             assert_eq!(v["error"], "Unauthorized");
+            assert!(!policy_denied);
         }
         other => panic!("expected Reject(401), got {other:?}"),
     }
@@ -533,10 +541,10 @@ async fn required_auth_invalid_credential_rejects_401() {
     let engine = allow_engine();
     let req = input_with_bearer("GET", "/protected", "bad-token");
 
-    let outcome = evaluate_pipeline(&config, &req, &chain, &engine).await;
+    let outcome = evaluate_pipeline(&config, &req, &chain, &engine, EnforcementMode::Enforce).await;
 
     match outcome {
-        PipelineOutcome::Reject { status, body } => {
+        PipelineOutcome::Reject { status, body, .. } => {
             assert_eq!(status, 401);
             let v: serde_json::Value = serde_json::from_str(&body).unwrap();
             assert_eq!(v["error"], "Unauthorized");
@@ -563,7 +571,7 @@ async fn required_auth_valid_credential_allowed_forwards() {
     let engine = allow_engine();
     let req = input_with_bearer("GET", "/users", "valid-token");
 
-    let outcome = evaluate_pipeline(&config, &req, &chain, &engine).await;
+    let outcome = evaluate_pipeline(&config, &req, &chain, &engine, EnforcementMode::Enforce).await;
 
     match outcome {
         PipelineOutcome::Forward {
@@ -571,6 +579,7 @@ async fn required_auth_valid_credential_allowed_forwards() {
             flags,
             matched_route,
             record,
+            ..
         } => {
             assert!(identity.is_some());
             assert_eq!(identity.as_ref().unwrap().user_id().as_str(), "alice");
@@ -605,7 +614,7 @@ async fn embedded_engine_forward_carries_decision_record() {
     let engine = embedded_engine_granting("todo--list--user").await;
     let req = input_with_bearer("GET", "/users", "valid-token");
 
-    let outcome = evaluate_pipeline(&config, &req, &chain, &engine).await;
+    let outcome = evaluate_pipeline(&config, &req, &chain, &engine, EnforcementMode::Enforce).await;
 
     match outcome {
         PipelineOutcome::Forward { record, .. } => {
@@ -635,10 +644,10 @@ async fn feature_gate_disabled_rejects_404() {
     let engine = allow_engine();
     let req = input_with_bearer("GET", "/beta", "valid-token");
 
-    let outcome = evaluate_pipeline(&config, &req, &chain, &engine).await;
+    let outcome = evaluate_pipeline(&config, &req, &chain, &engine, EnforcementMode::Enforce).await;
 
     match outcome {
-        PipelineOutcome::Reject { status, body } => {
+        PipelineOutcome::Reject { status, body, .. } => {
             assert_eq!(status, 404);
             let v: serde_json::Value = serde_json::from_str(&body).unwrap();
             assert_eq!(v["error"], "Not Found");
@@ -678,7 +687,7 @@ async fn feature_gate_enabled_forwards() {
     let engine = allow_engine();
     let req = input_with_bearer("GET", "/beta", "valid-token");
 
-    let outcome = evaluate_pipeline(&config, &req, &chain, &engine).await;
+    let outcome = evaluate_pipeline(&config, &req, &chain, &engine, EnforcementMode::Enforce).await;
 
     match outcome {
         PipelineOutcome::Forward {
@@ -711,14 +720,20 @@ async fn policy_deny_rejects_403() {
     let engine = deny_engine();
     let req = input_with_bearer("GET", "/users", "valid-token");
 
-    let outcome = evaluate_pipeline(&config, &req, &chain, &engine).await;
+    let outcome = evaluate_pipeline(&config, &req, &chain, &engine, EnforcementMode::Enforce).await;
 
     match outcome {
-        PipelineOutcome::Reject { status, body } => {
+        PipelineOutcome::Reject {
+            status,
+            body,
+            policy_denied,
+            ..
+        } => {
             assert_eq!(status, 403);
             let v: serde_json::Value = serde_json::from_str(&body).unwrap();
             assert_eq!(v["error"], "Forbidden");
             assert_eq!(v["action"], "todo:list:user");
+            assert!(policy_denied);
         }
         other => panic!("expected Reject(403), got {other:?}"),
     }
@@ -742,14 +757,20 @@ async fn policy_error_fail_safe_rejects_403() {
     let engine = ErrorPolicyEngine;
     let req = input_with_bearer("GET", "/users", "valid-token");
 
-    let outcome = evaluate_pipeline(&config, &req, &chain, &engine).await;
+    let outcome = evaluate_pipeline(&config, &req, &chain, &engine, EnforcementMode::Enforce).await;
 
     match outcome {
-        PipelineOutcome::Reject { status, body } => {
+        PipelineOutcome::Reject {
+            status,
+            body,
+            policy_denied,
+            ..
+        } => {
             assert_eq!(status, 403);
             let v: serde_json::Value = serde_json::from_str(&body).unwrap();
             assert_eq!(v["error"], "Forbidden");
             assert_eq!(v["action"], "todo:list:user");
+            assert!(policy_denied);
         }
         other => panic!("expected Reject(403), got {other:?}"),
     }
@@ -766,10 +787,10 @@ async fn no_route_default_deny_rejects_403() {
     let engine = allow_engine();
     let req = input_with_bearer("GET", "/unknown", "valid-token");
 
-    let outcome = evaluate_pipeline(&config, &req, &chain, &engine).await;
+    let outcome = evaluate_pipeline(&config, &req, &chain, &engine, EnforcementMode::Enforce).await;
 
     match outcome {
-        PipelineOutcome::Reject { status, body } => {
+        PipelineOutcome::Reject { status, body, .. } => {
             assert_eq!(status, 403);
             let v: serde_json::Value = serde_json::from_str(&body).unwrap();
             assert_eq!(v["error"], "Forbidden");
@@ -790,7 +811,7 @@ async fn no_route_default_passthrough_forwards() {
     let engine = allow_engine();
     let req = input_with_bearer("GET", "/anything", "valid-token");
 
-    let outcome = evaluate_pipeline(&config, &req, &chain, &engine).await;
+    let outcome = evaluate_pipeline(&config, &req, &chain, &engine, EnforcementMode::Enforce).await;
 
     match outcome {
         PipelineOutcome::Forward {
@@ -806,6 +827,13 @@ async fn no_route_default_passthrough_forwards() {
         other => panic!("expected Forward, got {other:?}"),
     }
 }
+
+// -----------------------------------------------------------------------
+// Enforce|Observe mode tests (#111 V3)
+// -----------------------------------------------------------------------
+
+#[path = "pipeline_enforcement_tests.rs"]
+mod enforcement_tests;
 
 // -----------------------------------------------------------------------
 // Phase 5b tests: org membership enrichment

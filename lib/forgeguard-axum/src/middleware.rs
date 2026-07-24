@@ -9,7 +9,7 @@ use axum::{
     middleware::Next,
 };
 
-use forgeguard_proxy_core::{evaluate_pipeline, PipelineOutcome, RequestInput};
+use forgeguard_proxy_core::{evaluate_pipeline, EnforcementMode, PipelineOutcome, RequestInput};
 
 use crate::{ForgeGuard, ForgeGuardDecision, ForgeGuardFlags, ForgeGuardIdentity};
 
@@ -101,11 +101,14 @@ pub async fn forgeguard_layer(
         }
     };
 
+    // TODO(#111 V3 Task 6): resolve mode from request extensions
+    // (Extension<ModeOverride>) with fallback to fg.default_mode.
     let outcome = evaluate_pipeline(
         &fg.config,
         &input,
         &fg.identity_chain,
         fg.policy_engine.as_ref(),
+        EnforcementMode::Enforce,
     )
     .await;
 
@@ -113,8 +116,8 @@ pub async fn forgeguard_layer(
         PipelineOutcome::Forward {
             identity,
             flags,
-            matched_route: _,
             record,
+            ..
         } => {
             let identity = identity.map(|boxed| *boxed);
             let record = record.map(|boxed| *boxed);
@@ -159,7 +162,7 @@ pub async fn forgeguard_layer(
             request.extensions_mut().insert(ForgeGuardDecision(record));
             next.run(request).await
         }
-        PipelineOutcome::Reject { status, body } => json_response(status, &body),
+        PipelineOutcome::Reject { status, body, .. } => json_response(status, &body),
         PipelineOutcome::Health(body) => json_response(StatusCode::OK, &body),
         PipelineOutcome::Debug(body) => json_response(StatusCode::OK, &body),
     }

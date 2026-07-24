@@ -12,7 +12,7 @@ use forgeguard_http::{
 };
 use http::StatusCode;
 
-use crate::{PipelineConfig, PipelineOutcome, RequestInput};
+use crate::{EnforcementMode, PipelineConfig, PipelineOutcome, PolicyEffect, RequestInput};
 
 /// Health check path served before any auth logic.
 const HEALTH_PATH: &str = "/.well-known/forgeguard/health";
@@ -47,6 +47,7 @@ pub async fn evaluate_pipeline(
     input: &RequestInput,
     identity_chain: &IdentityChain,
     policy_engine: &dyn PolicyEngine,
+    mode: EnforcementMode,
 ) -> PipelineOutcome {
     let method = input.method().to_string();
     let path = input.path();
@@ -188,8 +189,11 @@ pub async fn evaluate_pipeline(
         }
 
         // Phase 9: Policy evaluation — only for authenticated requests.
-        // Fail-safe: both explicit deny and evaluation errors result in rejection.
+        // Fail-safe: explicit deny and evaluation errors both count as deny.
+        // Enforce rejects on deny; Observe records the would-be outcome and
+        // forwards regardless (#111 V3).
         let mut decision_record = None;
+        let mut effect = PolicyEffect::NotEvaluated;
         if let Some(id) = &identity {
             let query = build_query(id, &matched_route, config.project_id(), input.client_ip());
             let allowed = match policy_engine.evaluate(&query).await {
@@ -201,9 +205,17 @@ pub async fn evaluate_pipeline(
                 Err(_) => false,
             };
 
-            if !allowed {
-                return reject_forbidden_with_action(&matched_route.action().to_string());
-            }
+            effect = match (mode, allowed) {
+                (EnforcementMode::Enforce, true) => PolicyEffect::Allowed,
+                (EnforcementMode::Observe, true) => PolicyEffect::WouldAllow,
+                (EnforcementMode::Observe, false) => PolicyEffect::WouldDeny,
+                (EnforcementMode::Enforce, false) => {
+                    return reject_forbidden_with_action_and_record(
+                        &matched_route.action().to_string(),
+                        decision_record,
+                    );
+                }
+            };
         }
 
         PipelineOutcome::Forward {
@@ -211,6 +223,7 @@ pub async fn evaluate_pipeline(
             flags,
             matched_route: Some(Box::new(matched_route)),
             record: decision_record,
+            effect,
         }
     } else if public_match.is_public() {
         // Public route with no [[routes]] entry — passthrough to upstream
@@ -219,6 +232,7 @@ pub async fn evaluate_pipeline(
             flags,
             matched_route: None,
             record: None,
+            effect: PolicyEffect::NotEvaluated,
         }
     } else {
         // Phase 10: No route matched and not a public route
@@ -228,6 +242,8 @@ pub async fn evaluate_pipeline(
                 PipelineOutcome::Reject {
                     status: StatusCode::FORBIDDEN,
                     body: body.to_string(),
+                    policy_denied: false,
+                    record: None,
                 }
             }
             DefaultPolicy::Passthrough => PipelineOutcome::Forward {
@@ -235,6 +251,7 @@ pub async fn evaluate_pipeline(
                 flags,
                 matched_route: None,
                 record: None,
+                effect: PolicyEffect::NotEvaluated,
             },
         }
     }
@@ -280,17 +297,24 @@ fn debug_response(config: &PipelineConfig, input: &RequestInput) -> PipelineOutc
     }
 }
 
-/// Build a JSON `{"error": <msg>}` reject outcome.
+/// Build a JSON `{"error": <msg>}` reject outcome. Never a policy deny.
 fn reject_json(status: StatusCode, error: &str) -> PipelineOutcome {
     let body = serde_json::json!({"error": error});
     PipelineOutcome::Reject {
         status,
         body: body.to_string(),
+        policy_denied: false,
+        record: None,
     }
 }
 
-/// Convenience: build a Forbidden reject with action context.
-fn reject_forbidden_with_action(action: &str) -> PipelineOutcome {
+/// Convenience: build a Forbidden reject with action context for an
+/// enforce-mode policy deny, carrying the decision record when the engine
+/// produced one.
+fn reject_forbidden_with_action_and_record(
+    action: &str,
+    record: Option<Box<forgeguard_authz_core::DecisionRecord>>,
+) -> PipelineOutcome {
     let body = serde_json::json!({
         "error": "Forbidden",
         "action": action,
@@ -298,6 +322,8 @@ fn reject_forbidden_with_action(action: &str) -> PipelineOutcome {
     PipelineOutcome::Reject {
         status: StatusCode::FORBIDDEN,
         body: body.to_string(),
+        policy_denied: true,
+        record,
     }
 }
 

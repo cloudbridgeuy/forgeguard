@@ -6,6 +6,8 @@ use forgeguard_core::ResolvedFlags;
 use forgeguard_http::MatchedRoute;
 use http::StatusCode;
 
+use crate::PolicyEffect;
+
 // ---------------------------------------------------------------------------
 // PipelineOutcome
 // ---------------------------------------------------------------------------
@@ -26,6 +28,12 @@ pub enum PipelineOutcome {
         status: StatusCode,
         /// Response body (error message or JSON).
         body: String,
+        /// `true` exactly when Phase 9 enforce-denied. `false` for every
+        /// other reject (authn, routing, feature gate) — the sink trigger.
+        policy_denied: bool,
+        /// The decision record behind an enforce-mode policy deny, when the
+        /// engine produced one. `None` for authn/routing rejects.
+        record: Option<Box<DecisionRecord>>,
     },
     /// The pipeline approved the request for forwarding to upstream.
     Forward {
@@ -42,6 +50,9 @@ pub enum PipelineOutcome {
         /// one. `None` for anonymous requests and for engines that don't
         /// read a versioned entity slice (static, VP, CP).
         record: Option<Box<DecisionRecord>>,
+        /// Policy evaluation's conclusion for this forwarded request.
+        /// `NotEvaluated` for public/passthrough/no-identity forwards.
+        effect: PolicyEffect,
     },
 }
 
@@ -56,22 +67,26 @@ impl PipelineOutcome {
         Self::Debug(body.into())
     }
 
-    /// Create a `Reject` outcome.
+    /// Create a `Reject` outcome. Not a policy deny — `policy_denied: false`,
+    /// `record: None`.
     pub fn reject(status: StatusCode, body: impl Into<String>) -> Self {
         Self::Reject {
             status,
             body: body.into(),
+            policy_denied: false,
+            record: None,
         }
     }
 
     /// Create a `Forward` outcome with no identity, flags, matched route, or
-    /// decision record.
+    /// decision record. `effect: NotEvaluated`.
     pub fn forward_anonymous() -> Self {
         Self::Forward {
             identity: None,
             flags: None,
             matched_route: None,
             record: None,
+            effect: PolicyEffect::NotEvaluated,
         }
     }
 
@@ -117,9 +132,16 @@ mod tests {
     fn reject_constructor_takes_typed_status() {
         let outcome = PipelineOutcome::reject(StatusCode::FORBIDDEN, "denied");
         match outcome {
-            PipelineOutcome::Reject { status, body } => {
+            PipelineOutcome::Reject {
+                status,
+                body,
+                policy_denied,
+                record,
+            } => {
                 assert_eq!(status, StatusCode::FORBIDDEN);
                 assert_eq!(body, "denied");
+                assert!(!policy_denied);
+                assert!(record.is_none());
             }
             _ => panic!("expected Reject"),
         }
@@ -134,11 +156,13 @@ mod tests {
                 flags,
                 matched_route,
                 record,
+                effect,
             } => {
                 assert!(identity.is_none());
                 assert!(flags.is_none());
                 assert!(matched_route.is_none());
                 assert!(record.is_none());
+                assert_eq!(effect, crate::PolicyEffect::NotEvaluated);
             }
             _ => panic!("expected Forward variant"),
         }
