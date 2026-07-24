@@ -85,26 +85,26 @@ dotenvy = "0.15"
 ed25519-dalek = { version = "2", features = ["pkcs8", "pem"] }
 
 # Published lib crates
-forgeguard-axum = { version = "0.1.0", path = "lib/forgeguard-axum" }
+forgeguard-axum = { version = "0.2.0", path = "lib/forgeguard-axum" }
 
 forgeguard_audit = { version = "0.0.0", path = "crates/audit" }
 forgeguard_audit_core = { version = "0.0.0", path = "crates/audit-core" }
 
 # Internal crates — I/O
 forgeguard_authn = { version = "0.0.0", path = "crates/authn" }
-forgeguard_authn_core = { path = "crates/authn-core", version = "^0.1.0", features = [
+forgeguard_authn_core = { path = "crates/authn-core", version = "^0.2.0", features = [
   "test-support",
 ] } #unified
 forgeguard_authz = { version = "0.0.0", path = "crates/authz" }
-forgeguard_authz_core = { path = "crates/authz-core", version = "^0.1.0", features = [
+forgeguard_authz_core = { path = "crates/authz-core", version = "^0.2.0", features = [
   "test-support",
 ] } #unified
 forgeguard_control_plane = { path = "crates/control-plane", version = "^0.0.0" } #unified
 
 # Internal crates — pure
-forgeguard_core = { version = "0.1.0", path = "crates/core" }
+forgeguard_core = { version = "0.2.0", path = "crates/core" }
 forgeguard_http = { version = "0.0.0", path = "crates/http" }
-forgeguard_proxy_core = { version = "0.1.0", path = "crates/proxy-core" }
+forgeguard_proxy_core = { version = "0.2.0", path = "crates/proxy-core" }
 forgeguard_sdk = { version = "0.0.0", path = "crates/sdk" }
 
 # Hex encoding

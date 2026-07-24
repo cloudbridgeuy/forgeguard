@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.2.0] - 2026-07-24
+
+- Release 0.2.0
+
+
 All notable changes to `forgeguard-axum` will be documented in this file.
 
 ## [Unreleased]
