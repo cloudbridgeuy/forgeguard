@@ -24,6 +24,10 @@ pub struct ReleaseArgs {
     /// Run all steps except the actual publish
     #[arg(long)]
     pub dry_run: bool,
+
+    /// Skip the interactive confirmation prompt (for unattended runs)
+    #[arg(long)]
+    pub yes: bool,
 }
 
 /// A shared dependency crate that gets lock-step version bumped alongside lib releases.
@@ -385,7 +389,12 @@ fn print_summary(changes: &[VersionChange]) {
     println!();
 }
 
-fn confirm_release() -> Result<bool> {
+fn confirm_release(skip_prompt: bool) -> Result<bool> {
+    if skip_prompt {
+        println!("Proceeding without confirmation (--yes).");
+        return Ok(true);
+    }
+
     print!("Proceed with release? [y/N] ");
     std::io::stdout().flush()?;
 
@@ -489,7 +498,7 @@ pub fn run(args: &ReleaseArgs) -> Result<()> {
     println!("Running publish verification...");
     dry_run_publish(&args.crate_name)?;
 
-    if !confirm_release()? {
+    if !confirm_release(args.yes)? {
         println!(
             "Release aborted. Version bumps are still applied — use `git checkout -- .` to revert."
         );
