@@ -2049,7 +2049,7 @@ dependencies = [
 
 [[package]]
 name = "forgeguard_http"
-version = "0.0.0"
+version = "0.2.0"
 dependencies = [
  "forgeguard_authn_core",
  "forgeguard_authz_core",

@@ -46,6 +46,12 @@ const SHARED_DEPS: &[SharedDep] = &[
         crate_name: "forgeguard_authz_core",
         dir: "crates/authz-core",
     },
+    // http sits between authz-core and proxy-core in dependency order:
+    // proxy-core hard-depends on it, so it must be published (and first).
+    SharedDep {
+        crate_name: "forgeguard_http",
+        dir: "crates/http",
+    },
     SharedDep {
         crate_name: "forgeguard_proxy_core",
         dir: "crates/proxy-core",
@@ -182,7 +188,7 @@ fn update_workspace_dep_version(
     Ok(())
 }
 
-/// Compute all version changes: the lib crate + 4 shared deps.
+/// Compute all version changes: the lib crate + 5 shared deps.
 fn compute_version_changes(args: &ReleaseArgs) -> Result<Vec<VersionChange>> {
     let root = workspace_root();
     let mut changes = Vec::new();
@@ -516,7 +522,8 @@ mod tests {
         assert_eq!(order[0], "forgeguard_core");
         assert_eq!(order[1], "forgeguard_authn_core");
         assert_eq!(order[2], "forgeguard_authz_core");
-        assert_eq!(order[3], "forgeguard_proxy_core");
+        assert_eq!(order[3], "forgeguard_http");
+        assert_eq!(order[4], "forgeguard_proxy_core");
     }
 
     #[test]

@@ -119,13 +119,13 @@ crates/
 ├── authn-core/        forgeguard_authn_core — identity resolution types and traits
 ├── authz-core/        forgeguard_authz_core — Cedar policy types, permission types
 ├── proxy-core/        forgeguard_proxy_core — auth pipeline, PipelineConfig, PipelineSource
+├── http/              forgeguard_http — route matching, config, HTTP adapter types (no I/O deps)
 │  Pure (no I/O) — not published (publish = false)
 ├── audit-core/        forgeguard_audit_core — event log types, audit trail schema
 ├── sdk/               forgeguard_sdk — Guard, WebhookHandler (WASM-compatible)
 │  I/O — not published (publish = false)
 ├── authn/             forgeguard_authn — Cognito JWT resolver, JWKS caching
 ├── authz/             forgeguard_authz — Verified Permissions client, decision caching
-├── http/              forgeguard_http — route matching, config, HTTP adapter (no Pingora)
 ├── audit/             forgeguard_audit — DynamoDB/S3 event log, CloudTrail
 ├── ffi-python/        forgeguard_ffi_python — PyO3 bindings
 ├── ffi-wasm/          forgeguard_ffi_wasm — wasm-bindgen bindings
@@ -149,7 +149,7 @@ Each crate's `README.md` describes what it owns and its pure/I/O classification.
 ### Publishing Rules
 
 - **`lib/` crates** — independent semver, own CHANGELOG.md, comprehensive rustdocs, separate GitHub release tags (`forgeguard-axum-v{version}`). Released via `cargo xtask release-lib`.
-- **Published `crates/` deps** (`core`, `authn-core`, `authz-core`, `proxy-core`) — lock-step versioning (all share the same version). Published only when a `lib/` crate releases. Not promoted as standalone products.
+- **Published `crates/` deps** (`core`, `authn-core`, `authz-core`, `http`, `proxy-core`) — lock-step versioning (all share the same version). Published only when a `lib/` crate releases. Not promoted as standalone products.
 - **Unpublished `crates/`** — `publish = false`, `version = "0.0.0"`. Everything else.
 
 ## Context Documents
